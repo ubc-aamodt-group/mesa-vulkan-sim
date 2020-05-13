@@ -54,6 +54,7 @@ MAX_API_VERSION = None # Computed later
 EXTENSIONS = [
     Extension('VK_KHR_8bit_storage',                      1, 'device->info.gen >= 8'),
     Extension('VK_KHR_16bit_storage',                     1, 'device->info.gen >= 8'),
+    Extension('VK_KHR_acceleration_structure',            1, False),
     Extension('VK_KHR_bind_memory2',                      1, True),
     Extension('VK_KHR_buffer_device_address',             1, 'device->has_a64_buffer_access'),
     Extension('VK_KHR_copy_commands2',                    1, True),
