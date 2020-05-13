@@ -1100,6 +1100,16 @@ void anv_GetPhysicalDeviceFeatures2(
          break;
       }
 
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR: {
+         VkPhysicalDeviceAccelerationStructureFeaturesKHR *features = (void *)ext;
+         features->accelerationStructure = false;
+         features->accelerationStructureCaptureReplay = false;
+         features->accelerationStructureIndirectBuild = false;
+         features->accelerationStructureHostCommands = false;
+         features->descriptorBindingAccelerationStructureUpdateAfterBind = false;
+         break;
+      }
+
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_EXT: {
          VkPhysicalDeviceBufferDeviceAddressFeaturesEXT *features = (void *)ext;
          features->bufferDeviceAddress = pdevice->has_a64_buffer_access;
@@ -1843,6 +1853,19 @@ void anv_GetPhysicalDeviceProperties2(
 
    vk_foreach_struct(ext, pProperties->pNext) {
       switch (ext->sType) {
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR: {
+         VkPhysicalDeviceAccelerationStructurePropertiesKHR *props = (void *)ext;
+         props->maxGeometryCount = (1u << 24) - 1;
+         props->maxInstanceCount = (1u << 24) - 1;
+         props->maxPrimitiveCount = (1u << 29) - 1;
+         props->maxPerStageDescriptorAccelerationStructures = 0;
+         props->maxPerStageDescriptorUpdateAfterBindAccelerationStructures = 0;
+         props->maxDescriptorSetAccelerationStructures = 0;
+         props->maxDescriptorSetUpdateAfterBindAccelerationStructures = 0;
+         props->minAccelerationStructureScratchOffsetAlignment = 64;
+         break;
+      }
+
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_PROPERTIES_EXT: {
          VkPhysicalDeviceCustomBorderColorPropertiesEXT *properties =
             (VkPhysicalDeviceCustomBorderColorPropertiesEXT *)ext;

@@ -4453,6 +4453,13 @@ static inline uint32_t khr_perf_query_preamble_offset(struct anv_query_pool *poo
    return pass * ANV_KHR_PERF_QUERY_SIZE + 8;
 }
 
+struct anv_acceleration_structure {
+   struct vk_object_base                        base;
+
+   VkDeviceSize                                 size;
+   struct anv_address                           address;
+};
+
 int anv_get_instance_entrypoint_index(const char *name);
 int anv_get_device_entrypoint_index(const char *name);
 int anv_get_physical_device_entrypoint_index(const char *name);
@@ -4538,6 +4545,9 @@ VK_DEFINE_HANDLE_CASTS(anv_physical_device, base, VkPhysicalDevice,
                        VK_OBJECT_TYPE_PHYSICAL_DEVICE)
 VK_DEFINE_HANDLE_CASTS(anv_queue, base, VkQueue, VK_OBJECT_TYPE_QUEUE)
 
+VK_DEFINE_NONDISP_HANDLE_CASTS(anv_acceleration_structure, base,
+                               VkAccelerationStructureKHR,
+                               VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_cmd_pool, base, VkCommandPool,
                                VK_OBJECT_TYPE_COMMAND_POOL)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_buffer, base, VkBuffer,
