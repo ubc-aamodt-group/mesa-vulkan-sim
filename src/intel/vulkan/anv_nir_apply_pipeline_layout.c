@@ -37,7 +37,6 @@
 struct apply_pipeline_layout_state {
    const struct anv_physical_device *pdevice;
 
-   nir_shader *shader;
    nir_builder builder;
 
    const struct anv_pipeline_layout *layout;
@@ -1183,7 +1182,6 @@ anv_nir_apply_pipeline_layout(const struct anv_physical_device *pdevice,
 
    struct apply_pipeline_layout_state state = {
       .pdevice = pdevice,
-      .shader = shader,
       .layout = layout,
       .add_bounds_checks = robust_buffer_access,
       .ssbo_addr_format = anv_nir_ssbo_addr_format(pdevice, robust_buffer_access),
