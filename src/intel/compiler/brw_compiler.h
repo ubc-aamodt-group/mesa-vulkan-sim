@@ -1019,6 +1019,7 @@ struct brw_cs_prog_data {
 
    bool uses_barrier;
    bool uses_num_work_groups;
+   bool uses_inline_data;
    bool uses_btd_stack_ids;
 
    struct {
