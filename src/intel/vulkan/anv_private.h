@@ -1346,7 +1346,7 @@ anv_device_upload_nir(struct anv_device *device,
 
 struct anv_address {
    struct anv_bo *bo;
-   uint32_t offset;
+   uint64_t offset;
 };
 
 struct anv_device {
@@ -1742,6 +1742,16 @@ anv_batch_has_error(struct anv_batch *batch)
 
 #define ANV_NULL_ADDRESS ((struct anv_address) { NULL, 0 })
 
+static inline struct anv_address
+anv_address_from_u64(uint64_t addr_u64)
+{
+   assert(addr_u64 == gen_canonical_address(addr_u64));
+   return (struct anv_address) {
+      .bo = NULL,
+      .offset = addr_u64,
+   };
+}
+
 static inline bool
 anv_address_is_null(struct anv_address addr)
 {
@@ -1791,7 +1801,7 @@ _anv_combine_address(struct anv_batch *batch, void *location,
       return anv_address_physical(anv_address_add(address, delta));
    } else {
       assert(batch->start <= location && location < batch->end);
-
+      assert(address.offset < INT32_MAX);
       return anv_batch_emit_reloc(batch, location, address.bo, address.offset + delta);
    }
 }
