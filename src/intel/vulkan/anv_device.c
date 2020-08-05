@@ -1104,7 +1104,8 @@ void anv_GetPhysicalDeviceFeatures2(
          features->accelerationStructure = false;
          features->accelerationStructureCaptureReplay = false;
          features->accelerationStructureIndirectBuild = false;
-         features->accelerationStructureHostCommands = false;
+         features->accelerationStructureHostCommands =
+            pdevice->info.has_ray_tracing && sizeof(void *) >= 8;
          features->descriptorBindingAccelerationStructureUpdateAfterBind = true;
          break;
       }

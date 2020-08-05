@@ -18,6 +18,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+dep_embree = dependency('embree', cmake_package_version :'3.0')
+
 anv_extensions_py = files('anv_extensions.py')
 
 anv_entrypoints = custom_target(
@@ -130,6 +132,7 @@ libanv_files = files(
 )
 
 anv_deps = [
+  dep_embree,
   dep_libdrm,
   dep_valgrind,
   idep_genxml,
