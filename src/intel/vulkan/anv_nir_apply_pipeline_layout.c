@@ -388,6 +388,9 @@ desc_addr_format(VkDescriptorType desc_type,
       else
          return nir_address_format_32bit_index_offset;
 
+   case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+      return nir_address_format_64bit_global;
+
    default:
       unreachable("Unsupported descriptor type");
    }
@@ -444,6 +447,7 @@ lower_res_index_intrinsic(nir_intrinsic_instr *intrin,
       }
    } else {
       switch (addr_format) {
+      case nir_address_format_64bit_global:
       case nir_address_format_64bit_global_32bit_offset:
       case nir_address_format_64bit_bounded_global: {
          /* We store the descriptor offset as 16.8.8 where the top 16 bits are
@@ -514,6 +518,7 @@ lower_res_reindex_intrinsic(nir_intrinsic_instr *intrin,
                                           offset));
    } else {
       switch (desc_addr_format(desc_type, state)) {
+      case nir_address_format_64bit_global:
       case nir_address_format_64bit_global_32bit_offset:
       case nir_address_format_64bit_bounded_global:
          /* See also lower_res_index_intrinsic() */
@@ -546,9 +551,8 @@ build_buffer_descriptor_load(const VkDescriptorType desc_type,
 {
    nir_builder *b = &state->builder;
 
-   ASSERTED nir_address_format addr_format = desc_addr_format(desc_type, state);
-   assert(addr_format == nir_address_format_64bit_global_32bit_offset ||
-          addr_format == nir_address_format_64bit_bounded_global);
+   assert(index->num_components == 4);
+   assert(index->bit_size == 32);
 
    nir_ssa_def *desc, *array_index, *dyn_offset_base;
    if (state->use_a64_desc_access) {
@@ -679,6 +683,21 @@ lower_load_vulkan_descriptor(nir_intrinsic_instr *intrin,
    nir_ssa_def *desc;
    nir_address_format addr_format = desc_addr_format(desc_type, state);
    switch (addr_format) {
+   case nir_address_format_64bit_global: {
+      /* Acceleration structures have an address format of 64bit_global.  This
+       * means that all the descriptor dereferences were uint64_t and we've
+       * been replacing them all with uvec4's.  This is safe for acceleration
+       * structures because there are no variable pointers and so every
+       * element in the chain will be a resource_index or reindex instruction
+       * and we will have replaced them all.  We just have to make sure that,
+       * at the final step, we return the right type.
+       */
+      assert(desc_type == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
+      desc = build_buffer_descriptor_load(desc_type, index, state);
+      desc = nir_pack_64_2x32(b, nir_channels(b, desc, 0x3));
+      break;
+   }
+
    case nir_address_format_64bit_global_32bit_offset:
    case nir_address_format_64bit_bounded_global:
       desc = build_buffer_descriptor_load(desc_type, index, state);
