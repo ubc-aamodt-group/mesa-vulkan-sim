@@ -96,6 +96,7 @@ EXTENSIONS = [
               'device->use_call_secondary'),
     Extension('VK_KHR_pipeline_executable_properties',    1, True),
     Extension('VK_KHR_push_descriptor',                   2, True),
+    Extension('VK_KHR_ray_tracing_pipeline',              1, False),
     Extension('VK_KHR_relaxed_block_layout',              1, True),
     Extension('VK_KHR_sampler_mirror_clamp_to_edge',      3, True),
     Extension('VK_KHR_sampler_ycbcr_conversion',         14, True),
