@@ -345,6 +345,9 @@ static nir_address_format
 desc_addr_format(VkDescriptorType desc_type,
                  struct apply_pipeline_layout_state *state)
 {
+   if (desc_type == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+      return nir_address_format_64bit_global;
+
    return (desc_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ||
            desc_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC) ?
            state->ssbo_addr_format : nir_address_format_32bit_index_offset;
@@ -375,7 +378,8 @@ lower_res_index_intrinsic(nir_intrinsic_instr *intrin,
    nir_ssa_def *index;
    if (state->pdevice->has_a64_buffer_access &&
        (desc_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ||
-        desc_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC)) {
+        desc_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC ||
+        desc_type == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)) {
       /* We store the descriptor offset as 16.8.8 where the top 16 bits are
        * the offset into the descriptor set, the next 8 are the binding table
        * index of the descriptor buffer, and the bottom 8 bits are the offset
@@ -394,7 +398,8 @@ lower_res_index_intrinsic(nir_intrinsic_instr *intrin,
          (uint32_t)state->set[set].desc_offset << 8 |
          dynamic_offset_index;
 
-      if (state->add_bounds_checks) {
+      if (state->add_bounds_checks &&
+          desc_type != VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR) {
          assert(desc_addr_format(desc_type, state) ==
                 nir_address_format_64bit_bounded_global);
          assert(intrin->dest.ssa.num_components == 4);
@@ -500,7 +505,7 @@ build_ssbo_descriptor_load(const VkDescriptorType desc_type,
    nir_builder *b = &state->builder;
 
    nir_ssa_def *desc_offset, *array_index;
-   switch (state->ssbo_addr_format) {
+   switch (desc_addr_format(desc_type, state)) {
    case nir_address_format_64bit_bounded_global:
       /* See also lower_res_index_intrinsic() */
       desc_offset = nir_channel(b, index, 0);
@@ -585,14 +590,17 @@ lower_load_vulkan_descriptor(nir_intrinsic_instr *intrin,
    nir_ssa_def *desc;
    if (state->pdevice->has_a64_buffer_access &&
        (desc_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ||
-        desc_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC)) {
+        desc_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC ||
+        desc_type == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)) {
       desc = build_ssbo_descriptor_load(desc_type, index, state);
 
       /* We want nir_address_format_64bit_global */
-      if (!state->add_bounds_checks)
+      nir_address_format addr_format = desc_addr_format(desc_type, state);
+      if (addr_format == nir_address_format_64bit_global)
          desc = nir_pack_64_2x32(b, nir_channels(b, desc, 0x3));
 
-      if (state->has_dynamic_buffers) {
+      if (state->has_dynamic_buffers &&
+          desc_type != VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR) {
          /* This shader has dynamic offsets and we have no way of knowing
           * (save from the dynamic offset base index) if this buffer has a
           * dynamic offset.
