@@ -174,6 +174,19 @@ anv_reloc_list_grow_deps(struct anv_reloc_list *list,
 
 #define READ_ONCE(x) (*(volatile __typeof__(x) *)&(x))
 
+void
+anv_reloc_list_add_bo(struct anv_reloc_list *list,
+                      const VkAllocationCallbacks *alloc,
+                      struct anv_bo *target_bo)
+{
+   struct anv_bo *unwrapped_target_bo = anv_bo_unwrap(target_bo);
+   assert(unwrapped_target_bo->flags & EXEC_OBJECT_PINNED);
+   assert(!target_bo->is_wrapper);
+   uint32_t idx = unwrapped_target_bo->gem_handle;
+   anv_reloc_list_grow_deps(list, alloc, (idx / BITSET_WORDBITS) + 1);
+   BITSET_SET(list->deps, unwrapped_target_bo->gem_handle);
+}
+
 VkResult
 anv_reloc_list_add(struct anv_reloc_list *list,
                    const VkAllocationCallbacks *alloc,
