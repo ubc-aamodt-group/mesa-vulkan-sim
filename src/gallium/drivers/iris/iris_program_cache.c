@@ -236,11 +236,11 @@ iris_upload_shader(struct iris_context *ice,
 
       struct brw_shader_reloc_value reloc_values[] = {
          {
-            .id = IRIS_SHADER_RELOC_CONST_DATA_ADDR_LOW,
+            .id = BRW_SHADER_RELOC_CONST_DATA_ADDR_LOW,
             .value = shader_data_addr,
          },
          {
-            .id = IRIS_SHADER_RELOC_CONST_DATA_ADDR_HIGH,
+            .id = BRW_SHADER_RELOC_CONST_DATA_ADDR_HIGH,
             .value = shader_data_addr >> 32,
          },
       };
