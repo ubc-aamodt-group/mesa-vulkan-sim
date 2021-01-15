@@ -590,7 +590,11 @@ build_ssbo_descriptor_load(const VkDescriptorType desc_type,
                    .range_base = 0,
                    .range = ~0);
 
-   return desc_load;
+   /* The last element of the vec4 is always zero */
+   return nir_vec4(b, nir_channel(b, desc_load, 0),
+                      nir_channel(b, desc_load, 1),
+                      nir_channel(b, desc_load, 2),
+                      nir_imm_int(b, 0));
 }
 
 static void
