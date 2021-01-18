@@ -42,6 +42,7 @@ struct apply_pipeline_layout_state {
 
    const struct anv_pipeline_layout *layout;
    bool add_bounds_checks;
+   bool use_a64_desc_access;
    nir_address_format ssbo_addr_format;
    nir_address_format ubo_addr_format;
 
@@ -383,7 +384,10 @@ desc_addr_format(VkDescriptorType desc_type,
       return state->ubo_addr_format;
 
    case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT:
-      return nir_address_format_32bit_index_offset;
+      if (state->use_a64_desc_access)
+         return state->ubo_addr_format;
+      else
+         return nir_address_format_32bit_index_offset;
 
    default:
       unreachable("Unsupported descriptor type");
@@ -408,62 +412,84 @@ lower_res_index_intrinsic(nir_intrinsic_instr *intrin,
    uint32_t surface_index = state->set[set].surface_offsets[binding];
    uint32_t array_size = bind_layout->array_size;
 
+   assert(bind_layout->dynamic_offset_index < MAX_DYNAMIC_BUFFERS);
+   uint32_t dynamic_offset_index = 0xff; /* No dynamic offset */
+   if (bind_layout->dynamic_offset_index >= 0) {
+      dynamic_offset_index =
+         state->layout->set[set].dynamic_offset_start +
+         bind_layout->dynamic_offset_index;
+   }
+
    nir_ssa_def *array_index = nir_ssa_for_src(b, intrin->src[0], 1);
    if (nir_src_is_const(intrin->src[0]) || state->add_bounds_checks)
       array_index = nir_umin(b, array_index, nir_imm_int(b, array_size - 1));
 
    nir_ssa_def *index;
    nir_address_format addr_format = desc_addr_format(desc_type, state);
-   switch (addr_format) {
-   case nir_address_format_64bit_global_32bit_offset:
-   case nir_address_format_64bit_bounded_global: {
+   if (state->use_a64_desc_access) {
       assert(intrin->dest.ssa.num_components == 4);
       assert(intrin->dest.ssa.bit_size == 32);
 
-      /* We store the descriptor offset as 16.8.8 where the top 16 bits are
-       * the offset into the descriptor set, the next 8 are the binding table
-       * index of the descriptor buffer, and the bottom 8 bits are the offset
-       * (in bytes) into the dynamic offset table.
-       */
-      assert(bind_layout->dynamic_offset_index < MAX_DYNAMIC_BUFFERS);
-      uint32_t dynamic_offset_index = 0xff; /* No dynamic offset */
-      if (bind_layout->dynamic_offset_index >= 0) {
-         dynamic_offset_index =
-            state->layout->set[set].dynamic_offset_start +
-            bind_layout->dynamic_offset_index;
-      }
-
-      const uint32_t desc_offset =
-         bind_layout->descriptor_offset << 16 |
-         (uint32_t)state->set[set].desc_offset << 8 |
-         dynamic_offset_index;
-
-      index = nir_vec4(b, nir_imm_int(b, desc_offset),
-                          nir_ssa_for_src(b, intrin->src[0], 1),
-                          nir_imm_int(b, array_size - 1),
-                          nir_ssa_undef(b, 1, 32));
-      break;
-   }
-
-   case nir_address_format_32bit_index_offset:
       if (bind_layout->data & ANV_DESCRIPTOR_INLINE_UNIFORM) {
-         /* This is an inline uniform block.  Just reference the descriptor set
-          * and use the descriptor offset as the base.
+         /* This is an inline uniform block.  Just reference the descriptor
+          * set and use the descriptor offset as the base.
           */
-         assert(intrin->dest.ssa.num_components == 2);
-         assert(intrin->dest.ssa.bit_size == 32);
-         index = nir_imm_ivec2(b, state->set[set].desc_offset,
-                                  bind_layout->descriptor_offset);
-      } else {
-         assert(intrin->dest.ssa.num_components == 2);
-         assert(intrin->dest.ssa.bit_size == 32);
-         index = nir_vec2(b, nir_iadd_imm(b, array_index, surface_index),
+         nir_ssa_def *addr =
+            nir_load_desc_set_address_intel(b, nir_imm_int(b, set));
+         index = nir_vec4(b, nir_unpack_64_2x32_split_x(b, addr),
+                             nir_unpack_64_2x32_split_y(b, addr),
+                             nir_imm_int(b, array_size),
                              nir_imm_int(b, 0));
+      } else {
+         index = nir_vec4(b, nir_imm_int(b, set | (dynamic_offset_index << 16)),
+                             nir_imm_int(b, bind_layout->descriptor_offset),
+                             nir_imm_int(b, array_size - 1),
+                             nir_ssa_for_src(b, intrin->src[0], 1));
       }
-      break;
+   } else {
+      switch (addr_format) {
+      case nir_address_format_64bit_global_32bit_offset:
+      case nir_address_format_64bit_bounded_global: {
+         assert(intrin->dest.ssa.num_components == 4);
+         assert(intrin->dest.ssa.bit_size == 32);
 
-   default:
-      unreachable("Unsupported address format");
+         /* We store the descriptor offset as 16.8.8 where the top 16 bits are
+          * the offset into the descriptor set, the next 8 are the binding
+          * table index of the descriptor buffer, and the bottom 8 bits are
+          * the offset (in bytes) into the dynamic offset table.
+          */
+         const uint32_t desc_offset =
+            bind_layout->descriptor_offset << 16 |
+            (uint32_t)state->set[set].desc_offset << 8 |
+            dynamic_offset_index;
+
+         index = nir_vec4(b, nir_imm_int(b, desc_offset),
+                             nir_ssa_for_src(b, intrin->src[0], 1),
+                             nir_imm_int(b, array_size - 1),
+                             nir_ssa_undef(b, 1, 32));
+         break;
+      }
+
+      case nir_address_format_32bit_index_offset:
+         if (bind_layout->data & ANV_DESCRIPTOR_INLINE_UNIFORM) {
+            /* This is an inline uniform block.  Just reference the descriptor
+             * set and use the descriptor offset as the base.
+             */
+            assert(intrin->dest.ssa.num_components == 2);
+            assert(intrin->dest.ssa.bit_size == 32);
+            index = nir_imm_ivec2(b, state->set[set].desc_offset,
+                                     bind_layout->descriptor_offset);
+         } else {
+            assert(intrin->dest.ssa.num_components == 2);
+            assert(intrin->dest.ssa.bit_size == 32);
+            index = nir_vec2(b, nir_iadd_imm(b, array_index, surface_index),
+                                nir_imm_int(b, 0));
+         }
+         break;
+
+      default:
+         unreachable("Unsupported address format");
+      }
    }
 
    assert(intrin->dest.is_ssa);
@@ -490,28 +516,39 @@ lower_res_reindex_intrinsic(nir_intrinsic_instr *intrin,
    nir_ssa_def *offset = intrin->src[1].ssa;
 
    nir_ssa_def *new_index;
-   switch (desc_addr_format(desc_type, state)) {
-   case nir_address_format_64bit_global_32bit_offset:
-   case nir_address_format_64bit_bounded_global:
+   if (state->use_a64_desc_access) {
       /* See also lower_res_index_intrinsic() */
       assert(intrin->dest.ssa.num_components == 4);
       assert(intrin->dest.ssa.bit_size == 32);
       new_index = nir_vec4(b, nir_channel(b, old_index, 0),
-                              nir_iadd(b, nir_channel(b, old_index, 1),
-                                          offset),
+                              nir_channel(b, old_index, 1),
                               nir_channel(b, old_index, 2),
-                              nir_ssa_undef(b, 1, 32));
-      break;
+                              nir_iadd(b, nir_channel(b, old_index, 3),
+                                          offset));
+   } else {
+      switch (desc_addr_format(desc_type, state)) {
+      case nir_address_format_64bit_global_32bit_offset:
+      case nir_address_format_64bit_bounded_global:
+         /* See also lower_res_index_intrinsic() */
+         assert(intrin->dest.ssa.num_components == 4);
+         assert(intrin->dest.ssa.bit_size == 32);
+         new_index = nir_vec4(b, nir_channel(b, old_index, 0),
+                                 nir_iadd(b, nir_channel(b, old_index, 1),
+                                             offset),
+                                 nir_channel(b, old_index, 2),
+                                 nir_ssa_undef(b, 1, 32));
+         break;
 
-   case nir_address_format_32bit_index_offset:
-      assert(intrin->dest.ssa.num_components == 2);
-      assert(intrin->dest.ssa.bit_size == 32);
-      new_index = nir_vec2(b, nir_iadd(b, nir_channel(b, old_index, 0), offset),
-                              nir_channel(b, old_index, 1));
-      break;
+      case nir_address_format_32bit_index_offset:
+         assert(intrin->dest.ssa.num_components == 2);
+         assert(intrin->dest.ssa.bit_size == 32);
+         new_index = nir_vec2(b, nir_iadd(b, nir_channel(b, old_index, 0), offset),
+                                 nir_channel(b, old_index, 1));
+         break;
 
-   default:
-      unreachable("Uhandled address format");
+      default:
+         unreachable("Uhandled address format");
+      }
    }
 
    assert(intrin->dest.is_ssa);
@@ -530,30 +567,54 @@ build_buffer_descriptor_load(const VkDescriptorType desc_type,
    assert(addr_format == nir_address_format_64bit_global_32bit_offset ||
           addr_format == nir_address_format_64bit_bounded_global);
 
-   nir_ssa_def *desc_offset = nir_channel(b, index, 0);
-   nir_ssa_def *array_index = nir_umin(b, nir_channel(b, index, 1),
-                                          nir_channel(b, index, 2));
+   nir_ssa_def *desc, *array_index, *dyn_offset_base;
+   if (state->use_a64_desc_access) {
+      nir_ssa_def *x = nir_channel(b, index, 0);
+      nir_ssa_def *set = nir_extract_u16(b, x, nir_imm_int(b, 0));
+      dyn_offset_base = nir_extract_u16(b, x, nir_imm_int(b, 1));
 
-   /* The desc_offset is actually 16.8.8 */
-   nir_ssa_def *dyn_offset_base =
-      nir_extract_u8(b, desc_offset, nir_imm_int(b, 0));
-   nir_ssa_def *desc_buffer_index =
-      nir_extract_u8(b, desc_offset, nir_imm_int(b, 1));
-   nir_ssa_def *desc_offset_base =
-      nir_extract_u16(b, desc_offset, nir_imm_int(b, 1));
+      nir_ssa_def *offset32 = nir_channel(b, index, 1);
 
-   /* Compute the actual descriptor offset */
-   const unsigned descriptor_size =
-      anv_descriptor_type_size(state->pdevice, desc_type);
-   desc_offset = nir_iadd(b, desc_offset_base,
-                             nir_imul_imm(b, array_index, descriptor_size));
+      nir_ssa_def *array_max = nir_channel(b, index, 2);
+      array_index = nir_channel(b, index, 3);
+      if (state->add_bounds_checks)
+         array_index = nir_umin(b, array_index, array_max);
 
-   nir_ssa_def *desc =
-      nir_load_ubo(b, 4, 32, desc_buffer_index, desc_offset,
-                   .align_mul = 8,
-                   .align_offset = 0,
-                   .range_base = 0,
-                   .range = ~0);
+      nir_ssa_def *base_addr = nir_load_desc_set_address_intel(b, set);
+
+      /* Compute the actual descriptor offset */
+      const unsigned desc_size =
+         anv_descriptor_type_size(state->pdevice, desc_type);
+      offset32 = nir_iadd(b, offset32, nir_imul_imm(b, array_index, desc_size));
+
+      desc = nir_load_global_constant_offset(b, 4, 32, base_addr, offset32,
+                                             .align_mul = 8,
+                                             .align_offset = 0);
+   } else {
+      nir_ssa_def *desc_offset = nir_channel(b, index, 0);
+      array_index = nir_umin(b, nir_channel(b, index, 1),
+                                nir_channel(b, index, 2));
+
+      /* The desc_offset is actually 16.8.8 */
+      dyn_offset_base =
+         nir_extract_u8(b, desc_offset, nir_imm_int(b, 0));
+      nir_ssa_def *desc_buffer_index =
+         nir_extract_u8(b, desc_offset, nir_imm_int(b, 1));
+      nir_ssa_def *desc_offset_base =
+         nir_extract_u16(b, desc_offset, nir_imm_int(b, 1));
+
+      /* Compute the actual descriptor offset */
+      const unsigned descriptor_size =
+         anv_descriptor_type_size(state->pdevice, desc_type);
+      desc_offset = nir_iadd(b, desc_offset_base,
+                                nir_imul_imm(b, array_index, descriptor_size));
+
+      desc = nir_load_ubo(b, 4, 32, desc_buffer_index, desc_offset,
+                          .align_mul = 8,
+                          .align_offset = 0,
+                          .range_base = 0,
+                          .range = ~0);
+   }
 
    if (state->has_dynamic_buffers) {
       /* This shader has dynamic offsets and we have no way of knowing
@@ -641,6 +702,7 @@ lower_load_vulkan_descriptor(nir_intrinsic_instr *intrin,
       break;
 
    case nir_address_format_32bit_index_offset:
+      assert(!state->use_a64_desc_access);
       desc = index;
       break;
 
@@ -701,9 +763,6 @@ build_descriptor_load(nir_deref_instr *deref, unsigned offset,
 
    nir_builder *b = &state->builder;
 
-   nir_ssa_def *desc_buffer_index =
-      nir_imm_int(b, state->set[set].desc_offset);
-
    nir_ssa_def *desc_offset =
       nir_imm_int(b, bind_layout->descriptor_offset + offset);
    if (deref->deref_type != nir_deref_type_var) {
@@ -718,14 +777,22 @@ build_descriptor_load(nir_deref_instr *deref, unsigned offset,
                              nir_imul_imm(b, arr_index, descriptor_size));
    }
 
-   nir_ssa_def *desc_load =
-      nir_load_ubo(b, num_components, bit_size, desc_buffer_index, desc_offset,
-                   .align_mul = 8,
-                   .align_offset =  offset % 8,
-                   .range_base = 0,
-                   .range = ~0);
-
-   return desc_load;
+   if (state->use_a64_desc_access) {
+      nir_ssa_def *addr =
+         nir_load_desc_set_address_intel(b, nir_imm_int(b, set));
+      return nir_load_global_constant_offset(b, num_components, bit_size,
+                                             addr, desc_offset,
+                                             .align_mul = 8,
+                                             .align_offset = offset % 8);
+   } else {
+      return nir_load_ubo(b, num_components, bit_size,
+                          nir_imm_int(b, state->set[set].desc_offset),
+                          desc_offset,
+                          .align_mul = 8,
+                          .align_offset = offset % 8,
+                          .range_base = 0,
+                          .range = ~0);
+   }
 }
 
 static void
@@ -1156,7 +1223,9 @@ anv_nir_apply_pipeline_layout(const struct anv_physical_device *pdevice,
    }
 
    for (unsigned s = 0; s < layout->num_sets; s++) {
-      if (state.set[s].desc_buffer_used) {
+      if (state.use_a64_desc_access) {
+         state.set[s].desc_offset = BINDLESS_OFFSET;
+      } else if (state.set[s].desc_buffer_used) {
          map->surface_to_descriptor[map->surface_count] =
             (struct anv_pipeline_binding) {
                .set = ANV_DESCRIPTOR_SET_DESCRIPTORS,
