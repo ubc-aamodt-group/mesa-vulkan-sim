@@ -520,9 +520,9 @@ lower_res_reindex_intrinsic(nir_intrinsic_instr *intrin,
 }
 
 static nir_ssa_def *
-build_ssbo_descriptor_load(const VkDescriptorType desc_type,
-                           nir_ssa_def *index,
-                           struct apply_pipeline_layout_state *state)
+build_buffer_descriptor_load(const VkDescriptorType desc_type,
+                             nir_ssa_def *index,
+                             struct apply_pipeline_layout_state *state)
 {
    nir_builder *b = &state->builder;
 
@@ -535,6 +535,8 @@ build_ssbo_descriptor_load(const VkDescriptorType desc_type,
                                           nir_channel(b, index, 2));
 
    /* The desc_offset is actually 16.8.8 */
+   nir_ssa_def *dyn_offset_base =
+      nir_extract_u8(b, desc_offset, nir_imm_int(b, 0));
    nir_ssa_def *desc_buffer_index =
       nir_extract_u8(b, desc_offset, nir_imm_int(b, 1));
    nir_ssa_def *desc_offset_base =
@@ -546,17 +548,49 @@ build_ssbo_descriptor_load(const VkDescriptorType desc_type,
    desc_offset = nir_iadd(b, desc_offset_base,
                              nir_imul_imm(b, array_index, descriptor_size));
 
-   nir_ssa_def *desc_load =
+   nir_ssa_def *desc =
       nir_load_ubo(b, 4, 32, desc_buffer_index, desc_offset,
                    .align_mul = 8,
                    .align_offset = 0,
                    .range_base = 0,
                    .range = ~0);
 
+   if (state->has_dynamic_buffers) {
+      /* This shader has dynamic offsets and we have no way of knowing
+       * (save from the dynamic offset base index) if this buffer has a
+       * dynamic offset.
+       */
+      nir_ssa_def *dyn_offset_idx = nir_iadd(b, dyn_offset_base, array_index);
+      if (state->add_bounds_checks) {
+         dyn_offset_idx = nir_umin(b, dyn_offset_idx,
+                                      nir_imm_int(b, MAX_DYNAMIC_BUFFERS));
+      }
+
+      nir_ssa_def *dyn_load =
+         nir_load_push_constant(b, 1, 32, nir_imul_imm(b, dyn_offset_idx, 4),
+                                .base = offsetof(struct anv_push_constants, dynamic_offsets),
+                                .range = MAX_DYNAMIC_BUFFERS * 4);
+
+      nir_ssa_def *dynamic_offset =
+         nir_bcsel(b, nir_ieq_imm(b, dyn_offset_base, 0xff),
+                      nir_imm_int(b, 0), dyn_load);
+
+      /* The dynamic offset gets added to the base pointer so that we
+       * have a sliding window range.
+       */
+      nir_ssa_def *base_ptr =
+         nir_pack_64_2x32(b, nir_channels(b, desc, 0x3));
+      base_ptr = nir_iadd(b, base_ptr, nir_u2u64(b, dynamic_offset));
+      desc = nir_vec4(b, nir_unpack_64_2x32_split_x(b, base_ptr),
+                         nir_unpack_64_2x32_split_y(b, base_ptr),
+                         nir_channel(b, desc, 2),
+                         nir_channel(b, desc, 3));
+   }
+
    /* The last element of the vec4 is always zero */
-   return nir_vec4(b, nir_channel(b, desc_load, 0),
-                      nir_channel(b, desc_load, 1),
-                      nir_channel(b, desc_load, 2),
+   return nir_vec4(b, nir_channel(b, desc, 0),
+                      nir_channel(b, desc, 1),
+                      nir_channel(b, desc, 2),
                       nir_imm_int(b, 0));
 }
 
@@ -602,49 +636,9 @@ lower_load_vulkan_descriptor(nir_intrinsic_instr *intrin,
    nir_address_format addr_format = desc_addr_format(desc_type, state);
    switch (addr_format) {
    case nir_address_format_64bit_global_32bit_offset:
-   case nir_address_format_64bit_bounded_global: {
-      desc = build_ssbo_descriptor_load(desc_type, index, state);
-
-      if (state->has_dynamic_buffers) {
-         /* This shader has dynamic offsets and we have no way of knowing
-          * (save from the dynamic offset base index) if this buffer has a
-          * dynamic offset.
-          */
-         nir_ssa_def *desc_offset = nir_channel(b, index, 0);
-         nir_ssa_def *array_index = nir_umin(b, nir_channel(b, index, 1),
-                                                nir_channel(b, index, 2));
-
-         nir_ssa_def *dyn_offset_base =
-            nir_extract_u8(b, desc_offset, nir_imm_int(b, 0));
-         nir_ssa_def *dyn_offset_idx =
-            nir_iadd(b, dyn_offset_base, array_index);
-         if (state->add_bounds_checks) {
-            dyn_offset_idx = nir_umin(b, dyn_offset_idx,
-                                         nir_imm_int(b, MAX_DYNAMIC_BUFFERS));
-         }
-
-         nir_ssa_def *dyn_load =
-            nir_load_push_constant(b, 1, 32, nir_imul_imm(b, dyn_offset_idx, 4),
-                                   .base = offsetof(struct anv_push_constants, dynamic_offsets),
-                                   .range = MAX_DYNAMIC_BUFFERS * 4);
-
-         nir_ssa_def *dynamic_offset =
-            nir_bcsel(b, nir_ieq_imm(b, dyn_offset_base, 0xff),
-                         nir_imm_int(b, 0), dyn_load);
-
-         /* The dynamic offset gets added to the base pointer so that we
-          * have a sliding window range.
-          */
-         nir_ssa_def *base_ptr =
-            nir_pack_64_2x32(b, nir_channels(b, desc, 0x3));
-         base_ptr = nir_iadd(b, base_ptr, nir_u2u64(b, dynamic_offset));
-         desc = nir_vec4(b, nir_unpack_64_2x32_split_x(b, base_ptr),
-                            nir_unpack_64_2x32_split_y(b, base_ptr),
-                            nir_channel(b, desc, 2),
-                            nir_channel(b, desc, 3));
-      }
+   case nir_address_format_64bit_bounded_global:
+      desc = build_buffer_descriptor_load(desc_type, index, state);
       break;
-   }
 
    case nir_address_format_32bit_index_offset:
       desc = index;
@@ -676,7 +670,7 @@ lower_get_ssbo_size(nir_intrinsic_instr *intrin,
    nir_ssa_def *index = intrin->src[0].ssa;
 
    if (state->pdevice->has_a64_buffer_access) {
-      nir_ssa_def *desc = build_ssbo_descriptor_load(desc_type, index, state);
+      nir_ssa_def *desc = build_buffer_descriptor_load(desc_type, index, state);
       nir_ssa_def *size = nir_channel(b, desc, 2);
       nir_ssa_def_rewrite_uses(&intrin->dest.ssa, nir_src_for_ssa(size));
       nir_instr_remove(&intrin->instr);
