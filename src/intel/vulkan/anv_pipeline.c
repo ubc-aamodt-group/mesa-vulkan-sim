@@ -369,7 +369,7 @@ void anv_DestroyPipeline(
       if (gfx_pipeline->blend_state.map)
          anv_state_pool_free(&device->dynamic_state_pool, gfx_pipeline->blend_state);
 
-      for (unsigned s = 0; s < MESA_SHADER_STAGES; s++) {
+      for (unsigned s = 0; s < ARRAY_SIZE(gfx_pipeline->shaders); s++) {
          if (gfx_pipeline->shaders[s])
             anv_shader_bin_unref(device, gfx_pipeline->shaders[s]);
       }
@@ -663,7 +663,7 @@ anv_pipeline_hash_graphics(struct anv_graphics_pipeline *pipeline,
    const bool rba = pipeline->base.device->robust_buffer_access;
    _mesa_sha1_update(&ctx, &rba, sizeof(rba));
 
-   for (unsigned s = 0; s < MESA_SHADER_STAGES; s++) {
+   for (unsigned s = 0; s < ARRAY_SIZE(pipeline->shaders); s++) {
       if (stages[s].entrypoint) {
          _mesa_sha1_update(&ctx, stages[s].shader_sha1,
                            sizeof(stages[s].shader_sha1));
@@ -1351,7 +1351,7 @@ anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
    unsigned char sha1[20];
    anv_pipeline_hash_graphics(pipeline, layout, stages, sha1);
 
-   for (unsigned s = 0; s < MESA_SHADER_STAGES; s++) {
+   for (unsigned s = 0; s < ARRAY_SIZE(pipeline->shaders); s++) {
       if (!stages[s].entrypoint)
          continue;
 
@@ -1365,7 +1365,7 @@ anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
    if (!skip_cache_lookup) {
       unsigned found = 0;
       unsigned cache_hits = 0;
-      for (unsigned s = 0; s < MESA_SHADER_STAGES; s++) {
+      for (unsigned s = 0; s < ARRAY_SIZE(pipeline->shaders); s++) {
          if (!stages[s].entrypoint)
             continue;
 
@@ -1395,7 +1395,7 @@ anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
                VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT_EXT;
          }
          /* We found all our shaders in the cache.  We're done. */
-         for (unsigned s = 0; s < MESA_SHADER_STAGES; s++) {
+         for (unsigned s = 0; s < ARRAY_SIZE(pipeline->shaders); s++) {
             if (!stages[s].entrypoint)
                continue;
 
@@ -1425,7 +1425,7 @@ anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
           * references to the shaders in the cache.  We'll get them out of the
           * cache again as part of the compilation process.
           */
-         for (unsigned s = 0; s < MESA_SHADER_STAGES; s++) {
+         for (unsigned s = 0; s < ARRAY_SIZE(pipeline->shaders); s++) {
             stages[s].feedback.flags = 0;
             if (pipeline->shaders[s]) {
                anv_shader_bin_unref(pipeline->base.device, pipeline->shaders[s]);
@@ -1440,7 +1440,7 @@ anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
 
    void *pipeline_ctx = ralloc_context(NULL);
 
-   for (unsigned s = 0; s < MESA_SHADER_STAGES; s++) {
+   for (unsigned s = 0; s < ARRAY_SIZE(pipeline->shaders); s++) {
       if (!stages[s].entrypoint)
          continue;
 
@@ -1467,7 +1467,7 @@ anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
 
    /* Walk backwards to link */
    struct anv_pipeline_stage *next_stage = NULL;
-   for (int s = MESA_SHADER_STAGES - 1; s >= 0; s--) {
+   for (int s = ARRAY_SIZE(pipeline->shaders) - 1; s >= 0; s--) {
       if (!stages[s].entrypoint)
          continue;
 
@@ -1512,7 +1512,7 @@ anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
    }
 
    struct anv_pipeline_stage *prev_stage = NULL;
-   for (unsigned s = 0; s < MESA_SHADER_STAGES; s++) {
+   for (unsigned s = 0; s < ARRAY_SIZE(pipeline->shaders); s++) {
       if (!stages[s].entrypoint)
          continue;
 
@@ -1646,7 +1646,7 @@ done:
 fail:
    ralloc_free(pipeline_ctx);
 
-   for (unsigned s = 0; s < MESA_SHADER_STAGES; s++) {
+   for (unsigned s = 0; s < ARRAY_SIZE(pipeline->shaders); s++) {
       if (pipeline->shaders[s])
          anv_shader_bin_unref(pipeline->base.device, pipeline->shaders[s]);
    }
