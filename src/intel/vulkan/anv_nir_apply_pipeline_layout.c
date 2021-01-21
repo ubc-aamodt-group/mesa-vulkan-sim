@@ -205,17 +205,19 @@ nir_deref_find_descriptor(nir_deref_instr *deref,
 }
 
 static nir_ssa_def *
-build_index_for_res_reindex(nir_intrinsic_instr *intrin,
-                            struct apply_pipeline_layout_state *state)
+build_index_offset_for_res_reindex(nir_intrinsic_instr *intrin,
+                                   struct apply_pipeline_layout_state *state)
 {
    nir_builder *b = &state->builder;
 
    if (intrin->intrinsic == nir_intrinsic_vulkan_resource_reindex) {
-      nir_ssa_def *bti =
-         build_index_for_res_reindex(nir_src_as_intrinsic(intrin->src[0]), state);
+      nir_intrinsic_instr *parent = nir_src_as_intrinsic(intrin->src[0]);
+      nir_ssa_def *io = build_index_offset_for_res_reindex(parent, state);
 
       b->cursor = nir_before_instr(&intrin->instr);
-      return nir_iadd(b, bti, nir_ssa_for_src(b, intrin->src[1], 1));
+      nir_ssa_def *offset = nir_ssa_for_src(b, intrin->src[1], 1);
+      return nir_vec2(b, nir_channel(b, io, 0),
+                         nir_iadd(b, nir_channel(b, io, 1), offset));
    }
 
    assert(intrin->intrinsic == nir_intrinsic_vulkan_resource_index);
@@ -235,7 +237,8 @@ build_index_for_res_reindex(nir_intrinsic_instr *intrin,
    if (nir_src_is_const(intrin->src[0]) || state->add_bounds_checks)
       array_index = nir_umin(b, array_index, nir_imm_int(b, array_size - 1));
 
-   return nir_iadd_imm(b, array_index, surface_index);
+   return nir_vec2(b, nir_iadd_imm(b, array_index, surface_index),
+                      nir_imm_int(b, 0));
 }
 
 static nir_ssa_def *
@@ -256,12 +259,8 @@ build_index_offset_for_deref(nir_deref_instr *deref,
    nir_intrinsic_instr *load_desc = nir_src_as_intrinsic(deref->parent);
    assert(load_desc->intrinsic == nir_intrinsic_load_vulkan_descriptor);
 
-   nir_ssa_def *index =
-      build_index_for_res_reindex(nir_src_as_intrinsic(load_desc->src[0]), state);
-
-   /* Return a 0 offset which will get picked up by the recursion */
-   b->cursor = nir_before_instr(&deref->instr);
-   return nir_vec2(b, index, nir_imm_int(b, 0));
+   return build_index_offset_for_res_reindex(
+      nir_src_as_intrinsic(load_desc->src[0]), state);
 }
 
 static bool
@@ -338,9 +337,13 @@ lower_direct_buffer_access(nir_function_impl *impl,
             if (desc == NULL || !descriptor_has_bti(desc, state))
                break;
 
-            nir_ssa_def *index =
-               build_index_for_res_reindex(nir_src_as_intrinsic(intrin->src[0]),
-                                           state);
+            nir_ssa_def *io = build_index_offset_for_res_reindex(
+               nir_src_as_intrinsic(intrin->src[0]), state);
+
+            nir_builder *b = &state->builder;
+            b->cursor = nir_before_instr(&intrin->instr);
+
+            nir_ssa_def *index = nir_channel(b, io, 0);
             nir_instr_rewrite_src(&intrin->instr, &intrin->src[0],
                                   nir_src_for_ssa(index));
             _mesa_set_add(state->lowered_instrs, intrin);
