@@ -427,9 +427,6 @@ lower_res_index_intrinsic(nir_intrinsic_instr *intrin,
    nir_ssa_def *index;
    nir_address_format addr_format = desc_addr_format(desc_type, state);
    if (state->use_a64_desc_access) {
-      assert(intrin->dest.ssa.num_components == 4);
-      assert(intrin->dest.ssa.bit_size == 32);
-
       if (bind_layout->data & ANV_DESCRIPTOR_INLINE_UNIFORM) {
          /* This is an inline uniform block.  Just reference the descriptor
           * set and use the descriptor offset as the base.
@@ -450,9 +447,6 @@ lower_res_index_intrinsic(nir_intrinsic_instr *intrin,
       switch (addr_format) {
       case nir_address_format_64bit_global_32bit_offset:
       case nir_address_format_64bit_bounded_global: {
-         assert(intrin->dest.ssa.num_components == 4);
-         assert(intrin->dest.ssa.bit_size == 32);
-
          /* We store the descriptor offset as 16.8.8 where the top 16 bits are
           * the offset into the descriptor set, the next 8 are the binding
           * table index of the descriptor buffer, and the bottom 8 bits are
@@ -475,13 +469,9 @@ lower_res_index_intrinsic(nir_intrinsic_instr *intrin,
             /* This is an inline uniform block.  Just reference the descriptor
              * set and use the descriptor offset as the base.
              */
-            assert(intrin->dest.ssa.num_components == 2);
-            assert(intrin->dest.ssa.bit_size == 32);
             index = nir_imm_ivec2(b, state->set[set].desc_offset,
                                      bind_layout->descriptor_offset);
          } else {
-            assert(intrin->dest.ssa.num_components == 2);
-            assert(intrin->dest.ssa.bit_size == 32);
             index = nir_vec2(b, nir_iadd_imm(b, array_index, surface_index),
                                 nir_imm_int(b, 0));
          }
@@ -518,8 +508,6 @@ lower_res_reindex_intrinsic(nir_intrinsic_instr *intrin,
    nir_ssa_def *new_index;
    if (state->use_a64_desc_access) {
       /* See also lower_res_index_intrinsic() */
-      assert(intrin->dest.ssa.num_components == 4);
-      assert(intrin->dest.ssa.bit_size == 32);
       new_index = nir_vec4(b, nir_channel(b, old_index, 0),
                               nir_channel(b, old_index, 1),
                               nir_channel(b, old_index, 2),
@@ -530,8 +518,6 @@ lower_res_reindex_intrinsic(nir_intrinsic_instr *intrin,
       case nir_address_format_64bit_global_32bit_offset:
       case nir_address_format_64bit_bounded_global:
          /* See also lower_res_index_intrinsic() */
-         assert(intrin->dest.ssa.num_components == 4);
-         assert(intrin->dest.ssa.bit_size == 32);
          new_index = nir_vec4(b, nir_channel(b, old_index, 0),
                                  nir_iadd(b, nir_channel(b, old_index, 1),
                                              offset),
@@ -540,8 +526,6 @@ lower_res_reindex_intrinsic(nir_intrinsic_instr *intrin,
          break;
 
       case nir_address_format_32bit_index_offset:
-         assert(intrin->dest.ssa.num_components == 2);
-         assert(intrin->dest.ssa.bit_size == 32);
          new_index = nir_vec2(b, nir_iadd(b, nir_channel(b, old_index, 0), offset),
                                  nir_channel(b, old_index, 1));
          break;
