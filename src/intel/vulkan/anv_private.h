@@ -1774,6 +1774,18 @@ anv_address_add(struct anv_address addr, uint64_t offset)
    return addr;
 }
 
+static inline void *
+anv_address_map(struct anv_address addr)
+{
+   if (addr.bo == NULL)
+      return NULL;
+
+   if (addr.bo->map == NULL)
+      return NULL;
+
+   return addr.bo->map + addr.offset;
+}
+
 static inline void
 write_reloc(const struct anv_device *device, void *p, uint64_t v, bool flush)
 {

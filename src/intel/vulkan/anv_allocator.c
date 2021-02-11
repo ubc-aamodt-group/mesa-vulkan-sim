@@ -1670,7 +1670,7 @@ anv_device_alloc_bo(struct anv_device *device,
       /* We don't want to change these defaults if it's going to be shared
        * with another process.
        */
-      assert(!(alloc_flags & ANV_BO_ALLOC_EXTERNAL));
+      //assert(!(alloc_flags & ANV_BO_ALLOC_EXTERNAL));
 
       /* Regular objects are created I915_CACHING_CACHED on LLC platforms and
        * I915_CACHING_NONE on non-LLC platforms.  For many internal state

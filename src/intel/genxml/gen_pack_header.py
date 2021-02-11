@@ -132,6 +132,7 @@ __gen_address(__gen_user_data *data, void *location,
 {
    uint64_t addr_u64 = __gen_combine_address(data, location, address, delta);
    if (end == 31) {
+      assert(addr_u64 <= UINT32_MAX);
       return addr_u64;
    } else if (end < 63) {
       const unsigned shift = 63 - end;

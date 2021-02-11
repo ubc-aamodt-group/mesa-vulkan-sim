@@ -1105,7 +1105,8 @@ void anv_GetPhysicalDeviceFeatures2(
          features->accelerationStructure = false;
          features->accelerationStructureCaptureReplay = false;
          features->accelerationStructureIndirectBuild = false;
-         features->accelerationStructureHostCommands = false;
+         features->accelerationStructureHostCommands =
+            pdevice->info.has_ray_tracing && sizeof(void *) >= 8;
          features->descriptorBindingAccelerationStructureUpdateAfterBind = true;
          break;
       }
@@ -3528,6 +3529,13 @@ VkResult anv_AllocateMemory(
 
    enum anv_bo_alloc_flags alloc_flags = 0;
 
+   if (sizeof(void *) >= 8 &&
+       (mem->type->propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+      alloc_flags |= ANV_BO_ALLOC_MAPPED;
+      if (mem->type->propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+         alloc_flags |= ANV_BO_ALLOC_SNOOPED;
+   }
+
    const VkExportMemoryAllocateInfo *export_info = NULL;
    const VkImportAndroidHardwareBufferInfoANDROID *ahw_import_info = NULL;
    const VkImportMemoryFdInfoKHR *fd_info = NULL;
@@ -3868,6 +3876,11 @@ VkResult anv_MapMemory(
       return VK_SUCCESS;
    }
 
+   if (mem->bo->map) {
+      *ppData = mem->bo->map + offset;
+      return VK_SUCCESS;
+   }
+
    if (size == VK_WHOLE_SIZE)
       size = mem->bo->size - offset;
 
@@ -3925,7 +3938,7 @@ void anv_UnmapMemory(
    ANV_FROM_HANDLE(anv_device, device, _device);
    ANV_FROM_HANDLE(anv_device_memory, mem, _memory);
 
-   if (mem == NULL || mem->host_ptr)
+   if (mem == NULL || !mem->map)
       return;
 
    anv_gem_munmap(device, mem->map, mem->map_size);

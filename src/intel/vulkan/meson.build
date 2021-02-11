@@ -18,6 +18,15 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+embree_lib = 'embree3'
+embree_lib_dir = '/opt/embree-3.12.2.x86_64.linux/lib'
+embree_header_dir = '/opt/embree-3.12.2.x86_64.linux/include'
+dep_embree = declare_dependency(
+    link_args : ['-L' + embree_lib_dir, '-l' + embree_lib],
+    include_directories : include_directories(embree_header_dir))
+
+#dep_embree = dependency('embree', cmake_package_version :'3.0')
+
 anv_extensions_py = files('anv_extensions.py')
 
 anv_entrypoints = custom_target(
@@ -132,6 +141,7 @@ libanv_files = files(
 )
 
 anv_deps = [
+  dep_embree,
   dep_libdrm,
   dep_valgrind,
   idep_genxml,
