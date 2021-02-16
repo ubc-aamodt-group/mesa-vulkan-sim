@@ -3609,6 +3609,10 @@ struct anv_ray_tracing_pipeline {
     * client has requested a dynamic stack size.
     */
    uint32_t                                     stack_size;
+
+   nir_shader *pipeline_nir[MESA_SHADER_STAGES];
+
+   VkRayTracingPipelineCreateInfoKHR ray_tracing_create_info;
 };
 
 #define ANV_DECL_PIPELINE_DOWNCAST(pipe_type, pipe_enum)             \

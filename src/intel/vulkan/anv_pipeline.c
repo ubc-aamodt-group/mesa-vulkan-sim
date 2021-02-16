@@ -2392,10 +2392,100 @@ is_rt_stack_size_dynamic(const VkRayTracingPipelineCreateInfoKHR *info)
 }
 
 static VkResult
+deep_copy_ray_tracing_shader_group(struct VkRayTracingShaderGroupCreateInfoKHR *dst,
+                       const struct VkRayTracingShaderGroupCreateInfoKHR *src)
+{
+   dst->sType = src->sType;
+   dst->pNext = NULL;
+   dst->type = src->type;
+   dst->generalShader = src->generalShader;
+   dst->closestHitShader = src->closestHitShader;
+   dst->anyHitShader = src->anyHitShader;
+   dst->intersectionShader = src->intersectionShader;
+   assert(src->pShaderGroupCaptureReplayHandle == NULL);
+   dst->pShaderGroupCaptureReplayHandle = NULL;
+   return VK_SUCCESS;
+}
+
+static VkResult
+deep_copy_pipeline_dynamic_state_create_info(VkPipelineDynamicStateCreateInfo *dst,
+                               const VkPipelineDynamicStateCreateInfo *src)
+{
+    dst->sType = src->sType;
+    dst->pNext = NULL;
+    dst->flags = src->flags;
+    dst->dynamicStateCount = src->dynamicStateCount;
+    /*LVP_PIPELINE_DUP(dst->pDynamicStates, //TODO: this one doesn't exist in anv
+                     src->pDynamicStates,
+                     VkDynamicState,
+                     dst->dynamicStateCount);*/
+
+    return VK_SUCCESS;
+}
+
+static VkResult
+deep_copy_ray_tracing_create_info(VkRayTracingPipelineCreateInfoKHR *dst,
+                               const VkRayTracingPipelineCreateInfoKHR *src)
+{
+   void *mem_ctx = ralloc_context(NULL);
+
+   int i;
+   VkResult result;
+   VkPipelineShaderStageCreateInfo *stages;
+   VkRayTracingShaderGroupCreateInfoKHR *groups;
+
+   dst->sType = src->sType;
+   dst->pNext = NULL;
+   dst->flags = src->flags;
+   dst->maxPipelineRayRecursionDepth = src->maxPipelineRayRecursionDepth;
+   dst->layout = src->layout;
+   dst->basePipelineHandle = src->basePipelineHandle;
+   dst->basePipelineIndex = src->basePipelineIndex;
+
+   /* pStages */
+   dst->stageCount = src->stageCount;
+   stages = ralloc_array(mem_ctx, VkPipelineShaderStageCreateInfo, dst->stageCount);
+   for (i = 0 ; i < dst->stageCount; i++) {
+       //TODO: deep_copy_shader_stage doesn't exist in anv
+      //result = deep_copy_shader_stage(mem_ctx, &stages[i], &src->pStages[i]);
+      if (result != VK_SUCCESS)
+         return result;
+   }
+   dst->pStages = stages;
+
+   /* pGroups */
+   dst->groupCount = src->groupCount;
+   groups = ralloc_array(mem_ctx, VkRayTracingShaderGroupCreateInfoKHR, dst->groupCount);
+   for (i = 0 ; i < dst->groupCount; i++) {
+      result = deep_copy_ray_tracing_shader_group(&groups[i], &src->pGroups[i]);
+      if (result != VK_SUCCESS)
+         return result;
+   }
+   dst->pGroups = groups;
+
+   /* pLibraryInfo */
+   assert(src->pLibraryInfo == NULL);
+   dst->pLibraryInfo = NULL;
+
+   /* pLibraryInterface */
+   assert(src->pLibraryInterface == NULL);
+   dst->pLibraryInterface = NULL;
+
+   /* pDynamicState */
+   //dst->pDynamicState = ralloc_array(mem_ctx, VkPipelineDynamicStateCreateInfo, 1);
+   //deep_copy_pipeline_dynamic_state_create_info(mem_ctx, dst->pDynamicState, src->pDynamicState);
+
+   return VK_SUCCESS;
+}
+
+
+static VkResult
 anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
                                  struct anv_pipeline_cache *cache,
                                  const VkRayTracingPipelineCreateInfoKHR *info)
 {
+   deep_copy_ray_tracing_create_info(&(pipeline->ray_tracing_create_info), info);
+
    const struct gen_device_info *devinfo = &pipeline->base.device->info;
    VkResult result;
 
@@ -2441,6 +2531,7 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
 
       stages[i].nir = anv_pipeline_stage_get_nir(&pipeline->base, cache,
                                                  pipeline_ctx, &stages[i]);
+
       if (stages[i].nir == NULL) {
          ralloc_free(pipeline_ctx);
          return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -2454,6 +2545,8 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
          stages[i].feedback.flags |=
             VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT_EXT;
       }
+
+      pipeline->pipeline_nir[i] = stages[i].nir;
    }
 
    compile_trivial_return_shader(pipeline);
@@ -2655,31 +2748,31 @@ anv_ray_tracing_pipeline_init(struct anv_ray_tracing_pipeline *pipeline,
    util_dynarray_init(&pipeline->shaders, pipeline->base.mem_ctx);
 
    /* TODO: We should probably create this once per device */
-   {
-      void *tmp_ctx = ralloc_context(NULL);
-      nir_shader *trampoline_nir =
-         brw_nir_create_raygen_trampoline(device->physical->compiler, tmp_ctx);
-
-      struct brw_cs_prog_key key = {
-         /* TODO: Other subgroup sizes? */
-         .base.subgroup_size_type = BRW_SUBGROUP_SIZE_REQUIRE_8,
-      };
-      struct brw_cs_prog_data prog_data = {
-         .base.nr_params = 4,
-         .uses_inline_data = true,
-         .uses_btd_stack_ids = true,
-      };
-
-      const unsigned *tramp_data =
-         brw_compile_cs(device->physical->compiler, device, tmp_ctx, &key,
-                        &prog_data, trampoline_nir, -1, NULL, NULL);
-
-      pipeline->trampoline =
-         anv_state_pool_alloc(&device->instruction_state_pool,
-                              prog_data.base.program_size, 64);
-      memcpy(pipeline->trampoline.map, tramp_data, prog_data.base.program_size);
-      ralloc_free(tmp_ctx);
-   }
+   // {
+   //    void *tmp_ctx = ralloc_context(NULL);
+   //    nir_shader *trampoline_nir =
+   //       brw_nir_create_raygen_trampoline(device->physical->compiler, tmp_ctx);
+   //
+   //    struct brw_cs_prog_key key = {
+   //       /* TODO: Other subgroup sizes? */
+   //       .base.subgroup_size_type = BRW_SUBGROUP_SIZE_REQUIRE_8,
+   //    };
+   //    struct brw_cs_prog_data prog_data = {
+   //       .base.nr_params = 4,
+   //       .uses_inline_data = true,
+   //       .uses_btd_stack_ids = true,
+   //    };
+   //
+   //    const unsigned *tramp_data =
+   //       brw_compile_cs(device->physical->compiler, device, tmp_ctx, &key,
+   //                      &prog_data, trampoline_nir, -1, NULL, NULL);
+   //
+   //    pipeline->trampoline =
+   //       anv_state_pool_alloc(&device->instruction_state_pool,
+   //                            prog_data.base.program_size, 64);
+   //    memcpy(pipeline->trampoline.map, tramp_data, prog_data.base.program_size);
+   //    ralloc_free(tmp_ctx);
+   // }
 
    result = anv_pipeline_compile_ray_tracing(pipeline, cache, pCreateInfo);
    if (result != VK_SUCCESS)

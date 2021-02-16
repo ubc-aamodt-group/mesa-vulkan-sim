@@ -2610,7 +2610,7 @@ VkResult genX(CreateComputePipelines)(
    return result;
 }
 
-#if GEN_GEN > 12 || GEN_IS_GEN12HP
+//#if GEN_GEN > 12 || GEN_IS_GEN12HP
 
 static void
 assert_rt_stage_index_valid(const VkRayTracingPipelineCreateInfoKHR* pCreateInfo,
@@ -2787,4 +2787,4 @@ genX(CreateRayTracingPipelinesKHR)(
 
    return result;
 }
-#endif /* GEN_GEN > 12 || GEN_IS_GEN12HP */
+// /#endif /* GEN_GEN > 12 || GEN_IS_GEN12HP */
