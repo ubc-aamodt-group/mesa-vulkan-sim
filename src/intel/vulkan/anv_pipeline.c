@@ -2549,184 +2549,184 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
       pipeline->pipeline_nir[i] = stages[i].nir;
    }
 
-   compile_trivial_return_shader(pipeline);
+   //compile_trivial_return_shader(pipeline);
 
-   uint32_t stack_max[MESA_VULKAN_SHADER_STAGES] = {};
-
-   for (uint32_t i = 0; i < info->stageCount; i++) {
-      if (!stages[i].entrypoint)
-         continue;
-
-      /* We handle intersection shaders as part of the group */
-      if (stages[i].stage == MESA_SHADER_INTERSECTION)
-         continue;
-
-      int64_t stage_start = os_time_get_nano();
-
-      void *stage_ctx = ralloc_context(pipeline_ctx);
-
-      nir_shader *nir = nir_shader_clone(stage_ctx, stages[i].nir);
-      switch (stages[i].stage) {
-      case MESA_SHADER_RAYGEN:
-         brw_nir_lower_raygen(nir);
-         break;
-
-      case MESA_SHADER_ANY_HIT:
-         brw_nir_lower_any_hit(nir, devinfo);
-         break;
-
-      case MESA_SHADER_CLOSEST_HIT:
-         brw_nir_lower_closest_hit(nir);
-         break;
-
-      case MESA_SHADER_MISS:
-         brw_nir_lower_miss(nir);
-         break;
-
-      case MESA_SHADER_INTERSECTION:
-         unreachable("These are handled later");
-
-      case MESA_SHADER_CALLABLE:
-         brw_nir_lower_callable(nir);
-         break;
-
-      default:
-         unreachable("Invalid ray-tracing shader stage");
-      }
-
-      result = compile_upload_rt_shader(pipeline, nir, &stages[i],
-                                        &stages[i].bin, stage_ctx);
-      if (result != VK_SUCCESS) {
-         ralloc_free(pipeline_ctx);
-         return result;
-      }
-
-      uint32_t stack_size =
-         brw_bs_prog_data_const(stages[i].bin->prog_data)->max_stack_size;
-      stack_max[stages[i].stage] = MAX2(stack_max[stages[i].stage], stack_size);
-
-      ralloc_free(stage_ctx);
-
-      stages[i].feedback.duration += os_time_get_nano() - stage_start;
-   }
-
-   for (uint32_t i = 0; i < info->groupCount; i++) {
-      const VkRayTracingShaderGroupCreateInfoKHR *ginfo = &info->pGroups[i];
-      struct anv_rt_shader_group *group = &pipeline->groups[i];
-      group->type = ginfo->type;
-      switch (ginfo->type) {
-      case VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR:
-         assert(ginfo->generalShader < info->stageCount);
-         group->general = stages[ginfo->generalShader].bin;
-         break;
-
-      case VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR:
-         if (ginfo->anyHitShader < info->stageCount)
-            group->any_hit = stages[ginfo->anyHitShader].bin;
-
-         if (ginfo->closestHitShader < info->stageCount)
-            group->closest_hit = stages[ginfo->closestHitShader].bin;
-         break;
-
-      case VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR: {
-         if (ginfo->closestHitShader < info->stageCount)
-            group->closest_hit = stages[ginfo->closestHitShader].bin;
-
-         /* The any-hit and intersection shader have to be combined */
-         void *group_ctx = ralloc_context(pipeline_ctx);
-
-         uint32_t intersection_idx = info->pGroups[i].intersectionShader;
-         assert(intersection_idx < info->stageCount);
-         nir_shader *intersection =
-            nir_shader_clone(group_ctx, stages[intersection_idx].nir);
-
-         uint32_t any_hit_idx = info->pGroups[i].anyHitShader;
-         const nir_shader *any_hit = NULL;
-         if (any_hit_idx < info->stageCount)
-            any_hit = stages[any_hit_idx].nir;
-
-         brw_nir_lower_combined_intersection_any_hit(intersection, any_hit,
-                                                     devinfo);
-
-         result = compile_upload_rt_shader(pipeline, intersection,
-                                           &stages[intersection_idx],
-                                           &group->intersection,
-                                           group_ctx);
-         if (result != VK_SUCCESS) {
-            ralloc_free(pipeline_ctx);
-            return result;
-         }
-
-         uint32_t stack_size =
-            brw_bs_prog_data_const(group->intersection->prog_data)->max_stack_size;
-         stack_max[MESA_SHADER_INTERSECTION] =
-            MAX2(stack_max[MESA_SHADER_INTERSECTION], stack_size);
-
-         ralloc_free(group_ctx);
-         break;
-      }
-
-      default:
-         unreachable("Invalid ray tracing shader group type");
-      }
-   }
+   // uint32_t stack_max[MESA_VULKAN_SHADER_STAGES] = {};
+   //
+   // for (uint32_t i = 0; i < info->stageCount; i++) {
+   //    if (!stages[i].entrypoint)
+   //       continue;
+   //
+   //    /* We handle intersection shaders as part of the group */
+   //    if (stages[i].stage == MESA_SHADER_INTERSECTION)
+   //       continue;
+   //
+   //    int64_t stage_start = os_time_get_nano();
+   //
+   //    void *stage_ctx = ralloc_context(pipeline_ctx);
+   //
+   //    nir_shader *nir = nir_shader_clone(stage_ctx, stages[i].nir);
+   //    switch (stages[i].stage) {
+   //    case MESA_SHADER_RAYGEN:
+   //       brw_nir_lower_raygen(nir);
+   //       break;
+   //
+   //    case MESA_SHADER_ANY_HIT:
+   //       brw_nir_lower_any_hit(nir, devinfo);
+   //       break;
+   //
+   //    case MESA_SHADER_CLOSEST_HIT:
+   //       brw_nir_lower_closest_hit(nir);
+   //       break;
+   //
+   //    case MESA_SHADER_MISS:
+   //       brw_nir_lower_miss(nir);
+   //       break;
+   //
+   //    case MESA_SHADER_INTERSECTION:
+   //       unreachable("These are handled later");
+   //
+   //    case MESA_SHADER_CALLABLE:
+   //       brw_nir_lower_callable(nir);
+   //       break;
+   //
+   //    default:
+   //       unreachable("Invalid ray-tracing shader stage");
+   //    }
+   //
+   //    // result = compile_upload_rt_shader(pipeline, nir, &stages[i],
+   //    //                                   &stages[i].bin, stage_ctx);
+   //    // if (result != VK_SUCCESS) {
+   //    //    ralloc_free(pipeline_ctx);
+   //    //    return result;
+   //    // }
+   //    //
+   //    // uint32_t stack_size =
+   //    //    brw_bs_prog_data_const(stages[i].bin->prog_data)->max_stack_size;
+   //    // stack_max[stages[i].stage] = MAX2(stack_max[stages[i].stage], stack_size);
+   //
+   //    ralloc_free(stage_ctx);
+   //
+   //    stages[i].feedback.duration += os_time_get_nano() - stage_start;
+   // }
+   //
+   // for (uint32_t i = 0; i < info->groupCount; i++) {
+   //    const VkRayTracingShaderGroupCreateInfoKHR *ginfo = &info->pGroups[i];
+   //    struct anv_rt_shader_group *group = &pipeline->groups[i];
+   //    group->type = ginfo->type;
+   //    switch (ginfo->type) {
+   //    case VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR:
+   //       assert(ginfo->generalShader < info->stageCount);
+   //       group->general = stages[ginfo->generalShader].bin;
+   //       break;
+   //
+   //    case VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR:
+   //       if (ginfo->anyHitShader < info->stageCount)
+   //          group->any_hit = stages[ginfo->anyHitShader].bin;
+   //
+   //       if (ginfo->closestHitShader < info->stageCount)
+   //          group->closest_hit = stages[ginfo->closestHitShader].bin;
+   //       break;
+   //
+   //    case VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR: {
+   //       if (ginfo->closestHitShader < info->stageCount)
+   //          group->closest_hit = stages[ginfo->closestHitShader].bin;
+   //
+   //       /* The any-hit and intersection shader have to be combined */
+   //       void *group_ctx = ralloc_context(pipeline_ctx);
+   //
+   //       uint32_t intersection_idx = info->pGroups[i].intersectionShader;
+   //       assert(intersection_idx < info->stageCount);
+   //       nir_shader *intersection =
+   //          nir_shader_clone(group_ctx, stages[intersection_idx].nir);
+   //
+   //       uint32_t any_hit_idx = info->pGroups[i].anyHitShader;
+   //       const nir_shader *any_hit = NULL;
+   //       if (any_hit_idx < info->stageCount)
+   //          any_hit = stages[any_hit_idx].nir;
+   //
+   //       brw_nir_lower_combined_intersection_any_hit(intersection, any_hit,
+   //                                                   devinfo);
+   //
+   //       result = compile_upload_rt_shader(pipeline, intersection,
+   //                                         &stages[intersection_idx],
+   //                                         &group->intersection,
+   //                                         group_ctx);
+   //       if (result != VK_SUCCESS) {
+   //          ralloc_free(pipeline_ctx);
+   //          return result;
+   //       }
+   //
+   //       uint32_t stack_size =
+   //          brw_bs_prog_data_const(group->intersection->prog_data)->max_stack_size;
+   //       stack_max[MESA_SHADER_INTERSECTION] =
+   //          MAX2(stack_max[MESA_SHADER_INTERSECTION], stack_size);
+   //
+   //       ralloc_free(group_ctx);
+   //       break;
+   //    }
+   //
+   //    default:
+   //       unreachable("Invalid ray tracing shader group type");
+   //    }
+   // }
 
    ralloc_free(pipeline_ctx);
 
-   if (is_rt_stack_size_dynamic(info)) {
-      pipeline->stack_size = 0; /* 0 means dynamic */
-   } else {
-      /* From the Vulkan spec:
-       *
-       *    "If the stack size is not set explicitly, the stack size for a
-       *    pipeline is:
-       *
-       *       rayGenStackMax +
-       *       min(1, maxPipelineRayRecursionDepth) ×
-       *       max(closestHitStackMax, missStackMax,
-       *           intersectionStackMax + anyHitStackMax) +
-       *       max(0, maxPipelineRayRecursionDepth-1) ×
-       *       max(closestHitStackMax, missStackMax) +
-       *       2 × callableStackMax"
-       */
-      pipeline->stack_size =
-         stack_max[MESA_SHADER_RAYGEN] +
-         MIN2(1, info->maxPipelineRayRecursionDepth) *
-         MAX4(stack_max[MESA_SHADER_CLOSEST_HIT],
-              stack_max[MESA_SHADER_MISS],
-              stack_max[MESA_SHADER_INTERSECTION],
-              stack_max[MESA_SHADER_ANY_HIT]) +
-         MAX2(0, (int)info->maxPipelineRayRecursionDepth - 1) *
-         MAX2(stack_max[MESA_SHADER_CLOSEST_HIT],
-              stack_max[MESA_SHADER_MISS]) +
-         2 * stack_max[MESA_SHADER_CALLABLE];
-
-      /* This is an extremely unlikely case but we need to set it to some
-       * non-zero value so that we don't accidentally think it's dynamic.
-       * Our minimum stack size is 2KB anyway so we could set to any small
-       * value we like.
-       */
-      if (pipeline->stack_size == 0)
-         pipeline->stack_size = 1;
-   }
-
-   if (false /* cache_hit */) {
-      pipeline_feedback.flags |=
-         VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT_EXT;
-   }
-   pipeline_feedback.duration = os_time_get_nano() - pipeline_start;
-
-   const VkPipelineCreationFeedbackCreateInfoEXT *create_feedback =
-      vk_find_struct_const(info->pNext, PIPELINE_CREATION_FEEDBACK_CREATE_INFO_EXT);
-   if (create_feedback) {
-      *create_feedback->pPipelineCreationFeedback = pipeline_feedback;
-
-      assert(info->stageCount == create_feedback->pipelineStageCreationFeedbackCount);
-      for (uint32_t i = 0; i < info->stageCount; i++) {
-         gl_shader_stage s = vk_to_mesa_shader_stage(info->pStages[i].stage);
-         create_feedback->pPipelineStageCreationFeedbacks[i] = stages[s].feedback;
-      }
-   }
+   // if (is_rt_stack_size_dynamic(info)) {
+   //    pipeline->stack_size = 0; /* 0 means dynamic */
+   // } else {
+   //    /* From the Vulkan spec:
+   //     *
+   //     *    "If the stack size is not set explicitly, the stack size for a
+   //     *    pipeline is:
+   //     *
+   //     *       rayGenStackMax +
+   //     *       min(1, maxPipelineRayRecursionDepth) ×
+   //     *       max(closestHitStackMax, missStackMax,
+   //     *           intersectionStackMax + anyHitStackMax) +
+   //     *       max(0, maxPipelineRayRecursionDepth-1) ×
+   //     *       max(closestHitStackMax, missStackMax) +
+   //     *       2 × callableStackMax"
+   //     */
+   //    pipeline->stack_size =
+   //       stack_max[MESA_SHADER_RAYGEN] +
+   //       MIN2(1, info->maxPipelineRayRecursionDepth) *
+   //       MAX4(stack_max[MESA_SHADER_CLOSEST_HIT],
+   //            stack_max[MESA_SHADER_MISS],
+   //            stack_max[MESA_SHADER_INTERSECTION],
+   //            stack_max[MESA_SHADER_ANY_HIT]) +
+   //       MAX2(0, (int)info->maxPipelineRayRecursionDepth - 1) *
+   //       MAX2(stack_max[MESA_SHADER_CLOSEST_HIT],
+   //            stack_max[MESA_SHADER_MISS]) +
+   //       2 * stack_max[MESA_SHADER_CALLABLE];
+   //
+   //    /* This is an extremely unlikely case but we need to set it to some
+   //     * non-zero value so that we don't accidentally think it's dynamic.
+   //     * Our minimum stack size is 2KB anyway so we could set to any small
+   //     * value we like.
+   //     */
+   //    if (pipeline->stack_size == 0)
+   //       pipeline->stack_size = 1;
+   // }
+   //
+   // if (false /* cache_hit */) {
+   //    pipeline_feedback.flags |=
+   //       VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT_EXT;
+   // }
+   // pipeline_feedback.duration = os_time_get_nano() - pipeline_start;
+   //
+   // const VkPipelineCreationFeedbackCreateInfoEXT *create_feedback =
+   //    vk_find_struct_const(info->pNext, PIPELINE_CREATION_FEEDBACK_CREATE_INFO_EXT);
+   // if (create_feedback) {
+   //    *create_feedback->pPipelineCreationFeedback = pipeline_feedback;
+   //
+   //    assert(info->stageCount == create_feedback->pipelineStageCreationFeedbackCount);
+   //    for (uint32_t i = 0; i < info->stageCount; i++) {
+   //       gl_shader_stage s = vk_to_mesa_shader_stage(info->pStages[i].stage);
+   //       create_feedback->pPipelineStageCreationFeedbacks[i] = stages[s].feedback;
+   //    }
+   // }
 
    return VK_SUCCESS;
 }
