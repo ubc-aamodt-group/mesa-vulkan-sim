@@ -3970,6 +3970,10 @@ void nir_print_shader_annotated(nir_shader *shader, FILE *fp, struct hash_table 
 void nir_print_instr(const nir_instr *instr, FILE *fp);
 void nir_print_deref(const nir_deref_instr *deref, FILE *fp);
 
+//nir to ptx translation functions
+void nir_translate_shader_to_ptx(nir_shader *shader, FILE *fp);
+void nir_translate_shader_annotated(nir_shader *shader, FILE *fp, struct hash_table *errors);
+
 /** Shallow clone of a single instruction. */
 nir_instr *nir_instr_clone(nir_shader *s, const nir_instr *orig);
 

@@ -2479,6 +2479,19 @@ deep_copy_ray_tracing_create_info(VkRayTracingPipelineCreateInfoKHR *dst,
 }
 
 
+static void translate_nir_to_ptx(nir_shader *shader, int shader_type)
+{
+   assert(shader_type >= MESA_SHADER_RAYGEN && shader_type <= MESA_SHADER_CALLABLE);
+   
+   if(0){ // print out current nir shader
+      nir_print_shader(shader, stderr);
+   }
+   
+   printf("GPGPU-SIM: Translating NIR shaders to PTX\n\n");
+   nir_translate_shader_to_ptx(shader, stderr);
+}
+
+
 static VkResult
 anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
                                  struct anv_pipeline_cache *cache,
@@ -2547,6 +2560,11 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
       }
 
       pipeline->pipeline_nir[i] = stages[i].nir;
+
+      // Insert NIR to PTX translator here for each different ray tracing shaders
+      if(i >= MESA_SHADER_RAYGEN && i <= MESA_SHADER_CALLABLE) { // shader type from 8 to 13
+         translate_nir_to_ptx(stages[i].nir, i);
+      }
    }
 
    //compile_trivial_return_shader(pipeline);
