@@ -1848,6 +1848,7 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
 
    if (!strcmp(info->name, "load_ray_launch_id")){
       if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = UINT;
          print_ptx_reg_decl(state, instr->dest.ssa.num_components, UINT, instr->dest.ssa.bit_size);
          print_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";\n\t");
@@ -1856,6 +1857,7 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
    }
    else if (!strcmp(info->name, "load_ray_launch_size")){
       if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = UINT;
          print_ptx_reg_decl(state, instr->dest.ssa.num_components, UINT, instr->dest.ssa.bit_size);
          print_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";\n\t");
@@ -1879,6 +1881,7 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
          # The intended usage is that the shader will call vulkan_surface_index to
          # get an index and then pass that as the buffer index ubo/ssbo calls. */
       if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = UINT;
          print_ptx_reg_decl(state, instr->dest.ssa.num_components, UINT, instr->dest.ssa.bit_size);
          print_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";\n\t");
@@ -1895,6 +1898,7 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
       // } cam;
       // we can pass in the result from vulkan_resource_index to get the pointer to the cam struct
       if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = BITS;
          print_ptx_reg_decl(state, instr->dest.ssa.num_components, BITS, instr->dest.ssa.bit_size);
          print_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";\n\t");
@@ -1903,6 +1907,7 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
    }
    else if (!strcmp(info->name, "load_deref")){ // get address / pointer of a variable used for reading / loading
       if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = BITS;
          print_ptx_reg_decl(state, instr->dest.ssa.num_components, BITS, instr->dest.ssa.bit_size);
          print_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";\n\t");
@@ -1911,6 +1916,7 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
    }
    else if (!strcmp(info->name, "store_deref")){ // get address / pointer of a variable used for writing / storing
       if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = BITS;
          print_ptx_reg_decl(state, instr->dest.ssa.num_components, BITS, instr->dest.ssa.bit_size);
          print_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";\n\t");
@@ -1919,6 +1925,7 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
    }
    else if (!strcmp(info->name, "image_deref_store")){
       if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = BITS;
          print_ptx_reg_decl(state, instr->dest.ssa.num_components, BITS, instr->dest.ssa.bit_size);
          print_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";\n\t");
@@ -1927,6 +1934,7 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
    }
    else if (!strcmp(info->name, "trace_ray")){
       if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = FLOAT;
          print_ptx_reg_decl(state, instr->dest.ssa.num_components, FLOAT, instr->dest.ssa.bit_size);
          print_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";\n\t");
@@ -1937,9 +1945,8 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
 
    if (info->has_dest) {
       print_dest_as_ptx_no_pos(&instr->dest, state);
+      fprintf(fp, ", ");
    }
-
-   fprintf(fp, ", ");
 
    for (unsigned i = 0; i < num_srcs; i++) {
       if (i != 0)
@@ -2391,7 +2398,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
      int num_bits = ssa_register_info[src_reg_idx].num_bits;
 
       print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, ssa_reg_type, instr->dest.dest.ssa.bit_size);
-      fprintf(fp, ";");
+      fprintf(fp, ";\n\t");
       for (unsigned i = 0; i < instr->dest.dest.ssa.num_components; i++) {
          if (i != 0) {
             fprintf(fp, "\n");
@@ -2545,6 +2552,12 @@ print_deref_instr_as_ptx(nir_deref_instr *instr, print_state *state, ssa_reg_inf
    print_dest_as_ptx_no_pos(&instr->dest, state);
    fprintf(fp, ";\n\t");
 
+   ssa_register_info[instr->dest.ssa.index].type = BITS;
+   ssa_register_info[instr->dest.ssa.index].num_bits = instr->dest.ssa.bit_size;
+   ssa_register_info[instr->dest.ssa.index].num_components = instr->dest.ssa.num_components;
+   ssa_register_info[instr->dest.ssa.index].ssa_idx = instr->dest.ssa.index;
+
+
    switch (instr->deref_type) {
    case nir_deref_type_var:
       fprintf(fp, "deref_var ");
@@ -2568,7 +2581,7 @@ print_deref_instr_as_ptx(nir_deref_instr *instr, print_state *state, ssa_reg_inf
 
    /* Only casts naturally return a pointer type */
    if (instr->deref_type != nir_deref_type_cast)
-      fprintf(fp, "&");
+      fprintf(fp, "&"); // TODO: this & gotta go
 
    print_dest_as_ptx_no_pos(&instr->dest, state);
    fprintf(fp, ", ");

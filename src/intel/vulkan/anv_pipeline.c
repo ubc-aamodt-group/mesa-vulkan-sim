@@ -2479,11 +2479,9 @@ deep_copy_ray_tracing_create_info(VkRayTracingPipelineCreateInfoKHR *dst,
 }
 
 
-static void translate_nir_to_ptx(nir_shader *shader, int shader_type)
+static void translate_nir_to_ptx(nir_shader *shader)
 {
-   assert(shader_type >= MESA_SHADER_RAYGEN && shader_type <= MESA_SHADER_CALLABLE);
-   
-   if(0){ // print out current nir shader
+   if(1){ // print out current nir shader
       nir_print_shader(shader, stderr);
    }
    
@@ -2550,6 +2548,11 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
          return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
       }
 
+      // Insert NIR to PTX translator here for each different ray tracing shaders, the lowered shaders under have too many intel specific intrinsics
+      if(stages[i].stage >= MESA_SHADER_RAYGEN && stages[i].stage <= MESA_SHADER_CALLABLE) { // shader type from 8 to 13
+         translate_nir_to_ptx(stages[i].nir);
+      }
+
       anv_pipeline_lower_nir(&pipeline->base, pipeline_ctx, &stages[i], layout);
 
       stages[i].feedback.duration += os_time_get_nano() - stage_start;
@@ -2560,11 +2563,6 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
       }
 
       pipeline->pipeline_nir[i] = stages[i].nir;
-
-      // Insert NIR to PTX translator here for each different ray tracing shaders
-      if(i >= MESA_SHADER_RAYGEN && i <= MESA_SHADER_CALLABLE) { // shader type from 8 to 13
-         translate_nir_to_ptx(stages[i].nir, i);
-      }
    }
 
    //compile_trivial_return_shader(pipeline);
