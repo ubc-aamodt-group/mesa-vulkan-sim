@@ -22,6 +22,7 @@
  */
 
 #include "anv_private.h"
+#include "gpgpusim_calls.h"
 
 #include "genxml/gen_macros.h"
 #include "genxml/genX_pack.h"
@@ -2751,6 +2752,7 @@ ray_tracing_pipeline_create(
    //    }
    // }
 
+   gpgpusim_setPipelineInfo(pCreateInfo);
    *pPipeline = anv_pipeline_to_handle(&pipeline->base);
 
    return pipeline->base.batch.status;

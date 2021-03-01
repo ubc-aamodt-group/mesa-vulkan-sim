@@ -21,6 +21,7 @@
  * IN THE SOFTWARE.
  */
 
+#include "anv_acceleration_structure.h"
 #include "anv_private.h"
 
 #include <math.h>
@@ -35,17 +36,7 @@
 #include "embree3/rtcore_device.h"
 #include "embree3/rtcore_builder.h"
 
-struct anv_bvh_vec4f {
-   float v[4];
-};
-
-struct anv_bvh_vec3f {
-   float v[3];
-};
-
-struct anv_bvh_triangle {
-   struct anv_bvh_vec3f v[3];
-};
+#include "gpgpusim_calls.h"
 
 static uint64_t
 anv_bvh_max_size(VkAccelerationStructureTypeKHR type, uint64_t leaf_count)
@@ -756,27 +747,6 @@ add_bvh_instances(uint32_t geometry_id,
    return idx;
 }
 
-struct anv_bvh_node {
-   uint8_t is_leaf;
-
-   int8_t exp_x;
-   int8_t exp_y;
-   int8_t exp_z;
-
-   float origin_x;
-   float origin_y;
-   float origin_z;
-
-   uint8_t lower_x[6];
-   uint8_t upper_x[6];
-   uint8_t lower_y[6];
-   uint8_t upper_y[6];
-   uint8_t lower_z[6];
-   uint8_t upper_z[6];
-
-   struct anv_bvh_node *children[6];
-};
-
 static void
 anv_bvh_node_init(struct anv_bvh_node *node)
 {
@@ -877,12 +847,6 @@ anv_bvh_node_set_child_bounds(struct anv_bvh_node *node,
                node->lower_z, node->upper_z,
                lower, upper, child_count);
 }
-
-struct anv_bvh_leaf {
-   uint8_t is_leaf;
-   uint32_t geometry_id;
-   uint32_t primitive_id;
-};
 
 static void
 anv_bvh_leaf_init(struct anv_bvh_leaf *leaf,
@@ -1163,6 +1127,7 @@ anv_cpu_build_acceleration_structures(
 
    for (uint32_t i = 0; i < infoCount; i++) {
       const VkAccelerationStructureBuildGeometryInfoKHR *pInfo = &pInfos[i];
+      gpgpusim_setGeometries(pInfo->pGeometries, pInfo->geometryCount);
       const VkAccelerationStructureBuildRangeInfoKHR *pBuildRangeInfos =
          ppBuildRangeInfos[i];
       ANV_FROM_HANDLE(anv_acceleration_structure, src_accel,
