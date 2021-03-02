@@ -3100,7 +3100,7 @@ print_ptx_function_impl(nir_function_impl *impl, print_state *state)
 {
    FILE *fp = state->fp;
 
-   fprintf(fp, "// \nimpl %s ", impl->function->name);
+   fprintf(fp, "\n// impl %s ", impl->function->name);
 
    fprintf(fp, "{\n");
 
@@ -3120,7 +3120,7 @@ print_ptx_function_impl(nir_function_impl *impl, print_state *state)
       print_cf_node_as_ptx(node, state, 1);
    }
 
-   fprintf(fp, "\tblock block_%u:\n}\n\n", impl->end_block->index);
+   fprintf(fp, "\t// block block_%u:\n// }\n\n", impl->end_block->index);
 }
 
 

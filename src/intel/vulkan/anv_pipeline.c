@@ -2481,12 +2481,56 @@ deep_copy_ray_tracing_create_info(VkRayTracingPipelineCreateInfoKHR *dst,
 
 static void translate_nir_to_ptx(nir_shader *shader)
 {
-   if(1){ // print out current nir shader
-      nir_print_shader(shader, stderr);
-   }
+   FILE *pFile;
+   char *mesa_root = getenv("MESA_ROOT");
+   char *filePath = "gpgpusimShaders/";
+   char *fileName;
+   char *label; // in case there are multiple variants of the same shader
+   char *extension = ".ptx";
    
-   printf("GPGPU-SIM: Translating NIR shaders to PTX\n\n");
-   nir_translate_shader_to_ptx(shader, stderr);
+   label = shader->info.label;
+   if (!label){
+      label = "0";
+   }
+
+   switch (shader->info.stage) {
+      case MESA_SHADER_RAYGEN:
+         fileName = "MESA_SHADER_RAYGEN";
+         break;
+      case MESA_SHADER_ANY_HIT:
+         fileName = "MESA_SHADER_ANY_HIT";
+         break;
+      case MESA_SHADER_CLOSEST_HIT:
+         fileName = "MESA_SHADER_CLOSEST_HIT";
+         break;
+      case MESA_SHADER_MISS:
+         fileName = "MESA_SHADER_MISS";
+         break;
+      case MESA_SHADER_INTERSECTION:
+         fileName = "MESA_SHADER_INTERSECTION";
+         break;
+      case MESA_SHADER_CALLABLE:
+         fileName = "MESA_SHADER_CALLABLE";
+         break;
+      default:
+         unreachable("Invalid shader type");
+   }
+
+   char fullPath[200];
+   snprintf(fullPath, sizeof(fullPath), "%s%s%s_%s%s", mesa_root, filePath, fileName, label, extension);
+   
+   char command[200];
+   snprintf(command, sizeof(command), "mkdir -p %s%s", mesa_root, filePath);
+   system(command);
+   
+   pFile = fopen (fullPath , "w");
+   printf("GPGPU-SIM VULKAN: Translating NIR %s to PTX\n", fileName);
+   nir_translate_shader_to_ptx(shader, pFile);
+
+   if(0){ // debugging: print out current nir shader
+      nir_print_shader(shader, stderr);
+      nir_translate_shader_to_ptx(shader, stderr);
+   }
 }
 
 
