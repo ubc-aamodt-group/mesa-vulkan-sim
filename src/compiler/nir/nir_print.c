@@ -1945,21 +1945,22 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
 
    if (info->has_dest) {
       print_dest_as_ptx_no_pos(&instr->dest, state);
-      fprintf(fp, ", ");
+      if(num_srcs > 0)
+         fprintf(fp, ", ");
    }
 
    for (unsigned i = 0; i < num_srcs; i++) {
       if (i != 0)
          fprintf(fp, ", ");
 
-      print_src(&instr->src[i], state);
+      print_src_as_ptx(&instr->src[i], state);
    }
 
-   fprintf(fp, ", ");
+   //fprintf(fp, ", ");
 
    for (unsigned i = 0; i < info->num_indices; i++) {
-      if (i != 0)
-         fprintf(fp, ", ");
+      //if (i != 0)
+      fprintf(fp, ", ");
 
       fprintf(fp, "%d", instr->const_index[i]);
    }
@@ -2315,7 +2316,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          fprintf(fp, ";");
          fprintf(fp, "\n\t");
 
-         fprintf(fp, "cvt.f32");
+         fprintf(fp, "cvt.rn.f32");
          fprintf(fp, ".u%d ", instr->dest.dest.ssa.bit_size);
 
          ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
@@ -2338,7 +2339,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          fprintf(fp, ";");
          fprintf(fp, "\n\t");
 
-         fprintf(fp, "rcp.f%d ", instr->dest.dest.ssa.bit_size);
+         fprintf(fp, "rcp.approx.f%d ", instr->dest.dest.ssa.bit_size);
 
          ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
       }
@@ -2398,6 +2399,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
      int num_bits = ssa_register_info[src_reg_idx].num_bits;
 
       print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, ssa_reg_type, instr->dest.dest.ssa.bit_size);
+      print_alu_dest_as_ptx_no_pos(&instr->dest, state);
       fprintf(fp, ";\n\t");
       for (unsigned i = 0; i < instr->dest.dest.ssa.num_components; i++) {
          if (i != 0) {
@@ -2473,7 +2475,7 @@ print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_st
       // For this type in NIR it prints something like CameraProperties*
       // However, we should put the size of the CameraProperties struct into a magic register and load the size from it
       // drop the * since its already a pointer type
-      print_src(&instr->parent, state);
+      print_src_as_ptx(&instr->parent, state);
       return;
    }
 
@@ -2499,34 +2501,42 @@ print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_st
       is_parent_pointer && instr->deref_type != nir_deref_type_struct;
 
    /* Cast need extra parens and so * dereferences */
-   if (is_parent_cast || need_deref)
-      fprintf(fp, "(");
+   //if (is_parent_cast || need_deref)
+   //   fprintf(fp, "(");
 
-   if (need_deref)
-      fprintf(fp, "*");
+   if (need_deref){
+      fprintf(fp, "1, "); // 1 means there was a star * for the variable
+   }
+   else {
+      fprintf(fp, "0, ");
+   }
+      
 
    if (whole_chain) {
-      print_deref_link(parent, whole_chain, state);
+      print_deref_link_as_ptx(parent, whole_chain, state);
    } else {
-      print_src(&instr->parent, state);
+      print_src_as_ptx(&instr->parent, state);
    }
 
-   if (is_parent_cast || need_deref)
-      fprintf(fp, ")");
+   //if (is_parent_cast || need_deref)
+   //   fprintf(fp, ")");
 
    switch (instr->deref_type) {
    case nir_deref_type_struct:
-      fprintf(fp, "%s%s", is_parent_pointer ? "->" : ".",
+      //fprintf(fp, "%s%s", is_parent_pointer ? "->" : ".",
+      //        glsl_get_struct_elem_name(parent->type, instr->strct.index));
+      fprintf(fp, "%s%s", is_parent_pointer ? ", ptr, " : ", not_ptr, ",
               glsl_get_struct_elem_name(parent->type, instr->strct.index));
       break;
 
    case nir_deref_type_array:
    case nir_deref_type_ptr_as_array: {
       if (nir_src_is_const(instr->arr.index)) {
-         fprintf(fp, "[%"PRId64"]", nir_src_as_int(instr->arr.index));
+         //fprintf(fp, "[%"PRId64"]", nir_src_as_int(instr->arr.index));
+         fprintf(fp, ", %"PRId64"", nir_src_as_int(instr->arr.index));
       } else {
          fprintf(fp, "[");
-         print_src(&instr->arr.index, state);
+         print_src_as_ptx(&instr->arr.index, state);
          fprintf(fp, "]");
       }
       break;
@@ -2580,8 +2590,8 @@ print_deref_instr_as_ptx(nir_deref_instr *instr, print_state *state, ssa_reg_inf
    }
 
    /* Only casts naturally return a pointer type */
-   if (instr->deref_type != nir_deref_type_cast)
-      fprintf(fp, "&"); // TODO: this & gotta go
+   // if (instr->deref_type != nir_deref_type_cast)
+   //    fprintf(fp, "&"); // TODO: this & gotta go
 
    print_dest_as_ptx_no_pos(&instr->dest, state);
    fprintf(fp, ", ");
@@ -2598,6 +2608,7 @@ print_deref_instr_as_ptx(nir_deref_instr *instr, print_state *state, ssa_reg_inf
                           modes ? "|" : "");
    }
    //fprintf(fp, " %s) ", glsl_get_type_name(instr->type));
+   fprintf(fp, ";");
 
 
    // Original NIR
@@ -2710,21 +2721,21 @@ print_load_const_instr_as_ptx(nir_load_const_instr *instr, print_state *state, s
          fprintf(fp, "\n\t");
          fprintf(fp, "mov.f64 ");
          print_ssa_def_as_ptx(&instr->def, state, i); //dst
-         fprintf(fp, " ");
+         fprintf(fp, ", ");
          fprintf(fp, "0D%16" PRIx64, instr->value[i].u64); // 0D stands for hex float representation
          break;
       case 32:
          fprintf(fp, "\n\t");
          fprintf(fp, "mov.f32 ");
          print_ssa_def_as_ptx(&instr->def, state, i); //dst
-         fprintf(fp, " ");
+         fprintf(fp, ", ");
          fprintf(fp, "0F%08x", instr->value[i].u32); // 0F stands for hex float representation
          break;
       case 16:
          fprintf(fp, "\n\t");
          fprintf(fp, "mov.b16 ");
          print_ssa_def_as_ptx(&instr->def, state, i); //dst
-         fprintf(fp, " ");
+         fprintf(fp, ", ");
          fprintf(fp, "0x%04x /* %f */", instr->value[i].u16,
                  _mesa_half_to_float(instr->value[i].u16));
          break;
@@ -2733,13 +2744,13 @@ print_load_const_instr_as_ptx(nir_load_const_instr *instr, print_state *state, s
          fprintf(fp, "\n\t");
          fprintf(fp, "mov.b8 ");
          print_ssa_def_as_ptx(&instr->def, state, i); //dst
-         fprintf(fp, " ");
+         fprintf(fp, ", ");
          break;
       case 1:
          fprintf(fp, "\t");
          fprintf(fp, "mov.b1 ");
          print_ssa_def_as_ptx(&instr->def, state, i); //dst
-         fprintf(fp, " ");
+         fprintf(fp, ", ");
          fprintf(fp, "%s", instr->value[i].b ? "1" : "0");
          break;
       }
@@ -2792,7 +2803,18 @@ static void
 print_ssa_undef_instr_as_ptx(nir_ssa_undef_instr* instr, print_state *state, ssa_reg_info *ssa_register_info)
 {
    FILE *fp = state->fp;
-   fprintf(fp, "// ");
+
+   // PTX Code
+   print_ptx_reg_decl(state, instr->def.num_components, FLOAT, instr->def.bit_size);
+   print_ssa_use_as_ptx(&instr->def, state);
+   fprintf(fp, ";\n\t");
+
+   fprintf(fp, "mov.f32 ");
+   print_ssa_use_as_ptx(&instr->def, state);
+   fprintf(fp, ", 0F000000ff;");
+
+   // Original NIR
+   fprintf(fp, "\t// ");
    print_ssa_def(&instr->def, state);
    fprintf(fp, " = undefined");
 }
@@ -2854,7 +2876,7 @@ print_instr_as_ptx(const nir_instr *instr, print_state *state, unsigned tabs, ss
       ssa_register_info[ssa_undef_instr->def.index].ssa_idx = ssa_undef_instr->def.index;
       ssa_register_info[ssa_undef_instr->def.index].num_components = (int) ssa_undef_instr->def.num_components;
       ssa_register_info[ssa_undef_instr->def.index].num_bits = (int) ssa_undef_instr->def.bit_size;
-      ssa_register_info[ssa_undef_instr->def.index].type = UNDEF;
+      ssa_register_info[ssa_undef_instr->def.index].type = FLOAT;
       print_ssa_undef_instr_as_ptx(nir_instr_as_ssa_undef(instr), state, ssa_register_info);
       break;
 
@@ -3096,11 +3118,39 @@ print_var_decl_as_ptx(nir_variable *var, print_state *state)
 
 
 static void
-print_ptx_function_impl(nir_function_impl *impl, print_state *state)
+print_ptx_function_impl(nir_function_impl *impl, print_state *state, gl_shader_stage stage)
 {
    FILE *fp = state->fp;
 
-   fprintf(fp, "\n// impl %s ", impl->function->name);
+   //fprintf(fp, "\n// impl %s \n", impl->function->name);
+
+   fprintf(fp, ".entry ");
+
+   switch (stage) {
+      case MESA_SHADER_RAYGEN:
+         fprintf(fp, "MESA_SHADER_RAYGEN");
+         break;
+      case MESA_SHADER_ANY_HIT:
+         fprintf(fp, "MESA_SHADER_ANY_HIT");
+         break;
+      case MESA_SHADER_CLOSEST_HIT:
+         fprintf(fp, "MESA_SHADER_CLOSEST_HIT");
+         break;
+      case MESA_SHADER_MISS:
+         fprintf(fp, "MESA_SHADER_MISS");
+         break;
+      case MESA_SHADER_INTERSECTION:
+         fprintf(fp, "MESA_SHADER_INTERSECTION");
+         break;
+      case MESA_SHADER_CALLABLE:
+         fprintf(fp, "MESA_SHADER_CALLABLE");
+         break;
+      default:
+         unreachable("Invalid shader type");
+   }
+
+   fprintf(fp, "_%s ", impl->function->name);
+   fprintf(fp, "() "); // any shader inputs would go here
 
    fprintf(fp, "{\n");
 
@@ -3120,7 +3170,10 @@ print_ptx_function_impl(nir_function_impl *impl, print_state *state)
       print_cf_node_as_ptx(node, state, 1);
    }
 
-   fprintf(fp, "\t// block block_%u:\n// }\n\n", impl->end_block->index);
+   fprintf(fp, "\t// block block_%u:\n", impl->end_block->index);
+
+   fprintf(fp, "\texit;\n");
+   fprintf(fp, "}\n");
 }
 
 
@@ -3135,7 +3188,7 @@ print_ptx_function(nir_function *function, print_state *state)
    fprintf(fp, "\n");
 
    if (function->impl != NULL) {
-      print_ptx_function_impl(function->impl, state);
+      print_ptx_function_impl(function->impl, state, function->shader->info.stage);
       return;
    }
 }

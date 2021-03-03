@@ -2527,7 +2527,7 @@ static void translate_nir_to_ptx(nir_shader *shader)
    printf("GPGPU-SIM VULKAN: Translating NIR %s to PTX\n", fileName);
    nir_translate_shader_to_ptx(shader, pFile);
 
-   if(0){ // debugging: print out current nir shader
+   if(1){ // debugging: print out current nir shader
       nir_print_shader(shader, stderr);
       nir_translate_shader_to_ptx(shader, stderr);
    }
