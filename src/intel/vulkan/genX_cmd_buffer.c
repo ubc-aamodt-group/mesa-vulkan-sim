@@ -4759,7 +4759,7 @@ void genX(CmdDispatchIndirect)(
    emit_cs_walker(cmd_buffer, pipeline, true, prog_data, 0, 0, 0);
 }
 
-#if GEN_GEN > 12 || GEN_IS_GEN12HP
+//#if GEN_GEN > 12 || GEN_IS_GEN12HP
 static void
 calc_local_trace_size(uint8_t local_shift[3], const uint32_t global[3])
 {
@@ -4807,6 +4807,9 @@ cmd_buffer_trace_rays(struct anv_cmd_buffer *cmd_buffer,
                       uint32_t launch_depth,
                       uint64_t launch_size_addr)
 {
+    printf("cmd_buffer_trace_rays\n");
+    fflush(stdout);
+    usleep(3 * 1000);
    struct anv_cmd_ray_tracing_state *rt = &cmd_buffer->state.rt;
    struct anv_ray_tracing_pipeline *pipeline = rt->pipeline;
 
@@ -4830,9 +4833,9 @@ cmd_buffer_trace_rays(struct anv_cmd_buffer *cmd_buffer,
     *
     * TODO(RT): This is a bit of a hack
     */
-   anv_reloc_list_add_bo(cmd_buffer->batch.relocs,
-                         cmd_buffer->batch.alloc,
-                         rt->scratch.bo);
+   // anv_reloc_list_add_bo(cmd_buffer->batch.relocs,
+   //                       cmd_buffer->batch.alloc,
+   //                       rt->scratch.bo);
 
    /* Allocate and set up our RT_DISPATCH_GLOBALS */
    struct anv_state rtdg_state =
@@ -4841,143 +4844,144 @@ cmd_buffer_trace_rays(struct anv_cmd_buffer *cmd_buffer,
                                          sizeof(struct anv_push_constants),
                                          64);
 
-   struct GEN_RT_DISPATCH_GLOBALS rtdg = {
-      .MemBaseAddress = (struct anv_address) {
-         .bo = rt->scratch.bo,
-         .offset = rt->scratch.layout.ray_stack_start,
-      },
-      .CallStackHandler =
-         anv_shader_bin_get_bsr(pipeline->trivial_return_shader, 0),
-      .AsyncRTStackSize = rt->scratch.layout.ray_stack_stride / 64,
-      .NumDSSRTStacks = rt->scratch.layout.stack_ids_per_dss,
-      .MaxBVHLevels = BRW_RT_MAX_BVH_LEVELS,
-      .Flags = RT_DEPTH_TEST_LESS_EQUAL,
-      .HitGroupTable = vk_sdar_to_shader_table(hit_sbt),
-      .MissGroupTable = vk_sdar_to_shader_table(miss_sbt),
-      .SWStackSize = rt->scratch.layout.sw_stack_size / 64,
-      .LaunchWidth = launch_width,
-      .LaunchHeight = launch_height,
-      .LaunchDepth = launch_depth,
-      .CallableGroupTable = vk_sdar_to_shader_table(callable_sbt),
-   };
-   GEN_RT_DISPATCH_GLOBALS_pack(NULL, rtdg_state.map, &rtdg);
-
-   /* Push constants go after the RT_DISPATCH_GLOBALS */
-   assert(GEN_RT_DISPATCH_GLOBALS_length * 4 <= BRW_RT_PUSH_CONST_OFFSET);
-   memcpy(rtdg_state.map + BRW_RT_PUSH_CONST_OFFSET,
-          &cmd_buffer->state.rt.base.push_constants,
-          sizeof(struct anv_push_constants));
-
-   struct anv_address rtdg_addr = {
-      .bo = cmd_buffer->device->dynamic_state_pool.block_pool.bo,
-      .offset = rtdg_state.offset,
-   };
-
-   uint8_t local_size_log2[3];
-   uint32_t global_size[3] = {};
-   if (is_indirect) {
-      /* Pick a local size that's probably ok.  We assume most TraceRays calls
-       * will use a two-dimensional dispatch size.  Worst case, our initial
-       * dispatch will be a little slower than it has to be.
-       */
-      local_size_log2[0] = 2;
-      local_size_log2[1] = 1;
-      local_size_log2[2] = 0;
-
-      struct gen_mi_builder b;
-      gen_mi_builder_init(&b, &cmd_buffer->batch);
-
-      struct gen_mi_value launch_size[3] = {
-         gen_mi_mem32(anv_address_from_u64(launch_size_addr + 0)),
-         gen_mi_mem32(anv_address_from_u64(launch_size_addr + 4)),
-         gen_mi_mem32(anv_address_from_u64(launch_size_addr + 8)),
-      };
-
-      /* Store the original launch size into RT_DISPATCH_GLOBALS
-       *
-       * TODO: Pull values from genX_bits.h once RT_DISPATCH_GLOBALS gets
-       * moved into a genX version.
-       */
-      gen_mi_store(&b, gen_mi_mem32(anv_address_add(rtdg_addr, 52)),
-                   gen_mi_value_ref(&b, launch_size[0]));
-      gen_mi_store(&b, gen_mi_mem32(anv_address_add(rtdg_addr, 56)),
-                   gen_mi_value_ref(&b, launch_size[1]));
-      gen_mi_store(&b, gen_mi_mem32(anv_address_add(rtdg_addr, 60)),
-                   gen_mi_value_ref(&b, launch_size[2]));
-
-      /* Compute the global dispatch size */
-      for (unsigned i = 0; i < 3; i++) {
-         if (local_size_log2[i] == 0)
-            continue;
-
-         /* global_size = DIV_ROUND_UP(launch_size, local_size)
-          *
-          * Fortunately for us MI_ALU math is 64-bit and , gen_mi_ushr32_imm
-          * has the semantics of shifting the enture 64-bit value and taking
-          * the bottom 32 so we don't have to worry about roll-over.
-          */
-         uint32_t local_size = 1 << local_size_log2[i];
-         launch_size[i] = gen_mi_iadd(&b, launch_size[i],
-                                      gen_mi_imm(local_size - 1));
-         launch_size[i] = gen_mi_ushr32_imm(&b, launch_size[i],
-                                            local_size_log2[i]);
-      }
-
-      gen_mi_store(&b, gen_mi_reg32(GPGPU_DISPATCHDIMX), launch_size[0]);
-      gen_mi_store(&b, gen_mi_reg32(GPGPU_DISPATCHDIMY), launch_size[1]);
-      gen_mi_store(&b, gen_mi_reg32(GPGPU_DISPATCHDIMZ), launch_size[2]);
-   } else {
-      uint32_t launch_size[3] = { launch_width, launch_height, launch_depth };
-      calc_local_trace_size(local_size_log2, launch_size);
-
-      for (unsigned i = 0; i < 3; i++) {
-         /* We have to be a bit careful here because DIV_ROUND_UP adds to the
-          * numerator value may overflow.  Cast to uint64_t to avoid this.
-          */
-         uint32_t local_size = 1 << local_size_log2[i];
-         global_size[i] = DIV_ROUND_UP((uint64_t)launch_size[i], local_size);
-      }
-   }
-
-   anv_batch_emit(&cmd_buffer->batch, GENX(COMPUTE_WALKER), cw) {
-      cw.IndirectParameterEnable        = is_indirect;
-      cw.PredicateEnable                = false;
-      cw.SIMDSize                       = SIMD8;
-      cw.LocalXMaximum                  = (1 << local_size_log2[0]) - 1;
-      cw.LocalYMaximum                  = (1 << local_size_log2[1]) - 1;
-      cw.LocalZMaximum                  = (1 << local_size_log2[2]) - 1;
-      cw.ThreadGroupIDXDimension        = global_size[0];
-      cw.ThreadGroupIDYDimension        = global_size[1];
-      cw.ThreadGroupIDZDimension        = global_size[2];
-      cw.ExecutionMask                  = 0xff;
-      cw.EmitInlineParameter            = true;
-
-      const gl_shader_stage s = MESA_SHADER_RAYGEN;
-      struct anv_state *surfaces = &cmd_buffer->state.binding_tables[s];
-      struct anv_state *samplers = &cmd_buffer->state.samplers[s];
-      cw.InterfaceDescriptor = (struct GENX(INTERFACE_DESCRIPTOR_DATA)) {
-         .KernelStartPointer = pipeline->trampoline.offset,
-         .SamplerStatePointer = samplers->offset,
-         /* i965: DIV_ROUND_UP(CLAMP(stage_state->sampler_count, 0, 16), 4), */
-         .SamplerCount = 0,
-         .BindingTablePointer = surfaces->offset,
-         .NumberofThreadsinGPGPUThreadGroup = 1,
-         .BTDMode = true,
-      };
-
-      struct brw_rt_raygen_trampoline_params trampoline_params = {
-         .rt_disp_globals_addr = anv_address_physical(rtdg_addr),
-         .raygen_bsr_addr = raygen_sbt->deviceAddress,
-         .is_indirect = is_indirect,
-         .local_group_size_log2 = {
-            local_size_log2[0],
-            local_size_log2[1],
-            local_size_log2[2],
-         },
-      };
-      STATIC_ASSERT(sizeof(trampoline_params) == 32);
-      memcpy(cw.InlineData, &trampoline_params, sizeof(trampoline_params));
-   }
+   // struct GEN_RT_DISPATCH_GLOBALS rtdg = {
+   //    .MemBaseAddress = (struct anv_address) {
+   //       .bo = rt->scratch.bo,
+   //       .offset = rt->scratch.layout.ray_stack_start,
+   //    },
+   //    .CallStackHandler =
+   //       anv_shader_bin_get_bsr(pipeline->trivial_return_shader, 0),
+   //    .AsyncRTStackSize = rt->scratch.layout.ray_stack_stride / 64,
+   //    .NumDSSRTStacks = rt->scratch.layout.stack_ids_per_dss,
+   //    .MaxBVHLevels = BRW_RT_MAX_BVH_LEVELS,
+   //    .Flags = RT_DEPTH_TEST_LESS_EQUAL,
+   //    .HitGroupTable = vk_sdar_to_shader_table(hit_sbt),
+   //    .MissGroupTable = vk_sdar_to_shader_table(miss_sbt),
+   //    .SWStackSize = rt->scratch.layout.sw_stack_size / 64,
+   //    .LaunchWidth = launch_width,
+   //    .LaunchHeight = launch_height,
+   //    .LaunchDepth = launch_depth,
+   //    .CallableGroupTable = vk_sdar_to_shader_table(callable_sbt),
+   // };
+   // GEN_RT_DISPATCH_GLOBALS_pack(NULL, rtdg_state.map, &rtdg);
+   //
+   // /* Push constants go after the RT_DISPATCH_GLOBALS */
+   // assert(GEN_RT_DISPATCH_GLOBALS_length * 4 <= BRW_RT_PUSH_CONST_OFFSET);
+   // memcpy(rtdg_state.map + BRW_RT_PUSH_CONST_OFFSET,
+   //        &cmd_buffer->state.rt.base.push_constants,
+   //        sizeof(struct anv_push_constants));
+   //
+   // struct anv_address rtdg_addr = {
+   //    .bo = cmd_buffer->device->dynamic_state_pool.block_pool.bo,
+   //    .offset = rtdg_state.offset,
+   // };
+   //
+   // uint8_t local_size_log2[3];
+   // uint32_t global_size[3] = {};
+   // if (is_indirect) {
+   //    /* Pick a local size that's probably ok.  We assume most TraceRays calls
+   //     * will use a two-dimensional dispatch size.  Worst case, our initial
+   //     * dispatch will be a little slower than it has to be.
+   //     */
+   //    local_size_log2[0] = 2;
+   //    local_size_log2[1] = 1;
+   //    local_size_log2[2] = 0;
+   //
+   //    struct gen_mi_builder b;
+   //    gen_mi_builder_init(&b, &cmd_buffer->batch);
+   //
+   //    struct gen_mi_value launch_size[3] = {
+   //       gen_mi_mem32(anv_address_from_u64(launch_size_addr + 0)),
+   //       gen_mi_mem32(anv_address_from_u64(launch_size_addr + 4)),
+   //       gen_mi_mem32(anv_address_from_u64(launch_size_addr + 8)),
+   //    };
+   //
+   //    /* Store the original launch size into RT_DISPATCH_GLOBALS
+   //     *
+   //     * TODO: Pull values from genX_bits.h once RT_DISPATCH_GLOBALS gets
+   //     * moved into a genX version.
+   //     */
+   //    gen_mi_store(&b, gen_mi_mem32(anv_address_add(rtdg_addr, 52)),
+   //                 gen_mi_value_ref(&b, launch_size[0]));
+   //    gen_mi_store(&b, gen_mi_mem32(anv_address_add(rtdg_addr, 56)),
+   //                 gen_mi_value_ref(&b, launch_size[1]));
+   //    gen_mi_store(&b, gen_mi_mem32(anv_address_add(rtdg_addr, 60)),
+   //                 gen_mi_value_ref(&b, launch_size[2]));
+   //
+   //    /* Compute the global dispatch size */
+   //    for (unsigned i = 0; i < 3; i++) {
+   //       if (local_size_log2[i] == 0)
+   //          continue;
+   //
+   //       /* global_size = DIV_ROUND_UP(launch_size, local_size)
+   //        *
+   //        * Fortunately for us MI_ALU math is 64-bit and , gen_mi_ushr32_imm
+   //        * has the semantics of shifting the enture 64-bit value and taking
+   //        * the bottom 32 so we don't have to worry about roll-over.
+   //        */
+   //       uint32_t local_size = 1 << local_size_log2[i];
+   //       assert(0); // MRS_TODO: why comment next two commands?
+   //       // launch_size[i] = gen_mi_iadd(&b, launch_size[i],
+   //       //                              gen_mi_imm(local_size - 1));
+   //       // launch_size[i] = gen_mi_ushr32_imm(&b, launch_size[i],
+   //       //                                    local_size_log2[i]);
+   //    }
+   //
+   //    gen_mi_store(&b, gen_mi_reg32(GPGPU_DISPATCHDIMX), launch_size[0]);
+   //    gen_mi_store(&b, gen_mi_reg32(GPGPU_DISPATCHDIMY), launch_size[1]);
+   //    gen_mi_store(&b, gen_mi_reg32(GPGPU_DISPATCHDIMZ), launch_size[2]);
+   // } else {
+   //    uint32_t launch_size[3] = { launch_width, launch_height, launch_depth };
+   //    calc_local_trace_size(local_size_log2, launch_size);
+   //
+   //    for (unsigned i = 0; i < 3; i++) {
+   //       /* We have to be a bit careful here because DIV_ROUND_UP adds to the
+   //        * numerator value may overflow.  Cast to uint64_t to avoid this.
+   //        */
+   //       uint32_t local_size = 1 << local_size_log2[i];
+   //       global_size[i] = DIV_ROUND_UP((uint64_t)launch_size[i], local_size);
+   //    }
+   // }
+   //
+   // anv_batch_emit(&cmd_buffer->batch, GENX(COMPUTE_WALKER), cw) {
+   //    cw.IndirectParameterEnable        = is_indirect;
+   //    cw.PredicateEnable                = false;
+   //    cw.SIMDSize                       = SIMD8;
+   //    cw.LocalXMaximum                  = (1 << local_size_log2[0]) - 1;
+   //    cw.LocalYMaximum                  = (1 << local_size_log2[1]) - 1;
+   //    cw.LocalZMaximum                  = (1 << local_size_log2[2]) - 1;
+   //    cw.ThreadGroupIDXDimension        = global_size[0];
+   //    cw.ThreadGroupIDYDimension        = global_size[1];
+   //    cw.ThreadGroupIDZDimension        = global_size[2];
+   //    cw.ExecutionMask                  = 0xff;
+   //    cw.EmitInlineParameter            = true;
+   //
+   //    const gl_shader_stage s = MESA_SHADER_RAYGEN;
+   //    struct anv_state *surfaces = &cmd_buffer->state.binding_tables[s];
+   //    struct anv_state *samplers = &cmd_buffer->state.samplers[s];
+   //    cw.InterfaceDescriptor = (struct GENX(INTERFACE_DESCRIPTOR_DATA)) {
+   //       .KernelStartPointer = pipeline->trampoline.offset,
+   //  cmd_     .SamplerStatePointer = samplers->offset,
+   //       /* i965: DIV_ROUND_UP(CLAMP(stage_state->sampler_count, 0, 16), 4), */
+   //       .SamplerCount = 0,
+   //       .BindingTablePointer = surfaces->offset,
+   //       .NumberofThreadsinGPGPUThreadGroup = 1,
+   //       .BTDMode = true,
+   //    };
+   //
+   //    struct brw_rt_raygen_trampoline_params trampoline_params = {
+   //       .rt_disp_globals_addr = anv_address_physical(rtdg_addr),
+   //       .raygen_bsr_addr = raygen_sbt->deviceAddress,
+   //       .is_indirect = is_indirect,
+   //       .local_group_size_log2 = {
+   //          local_size_log2[0],
+   //          local_size_log2[1],
+   //          local_size_log2[2],
+   //       },
+   //    };
+   //    STATIC_ASSERT(sizeof(trampoline_params) == 32);
+   //    memcpy(cw.InlineData, &trampoline_params, sizeof(trampoline_params));
+   // }
 }
 
 void
@@ -5023,7 +5027,7 @@ genX(CmdTraceRaysIndirectKHR)(
                          0, 0, 0, /* width, height, depth, */
                          indirectDeviceAddress);
 }
-#endif /* GEN_GEN > 12 || GEN_IS_GEN12HP */
+//#endif /* GEN_GEN > 12 || GEN_IS_GEN12HP */
 
 static void
 genX(flush_pipeline_select)(struct anv_cmd_buffer *cmd_buffer,

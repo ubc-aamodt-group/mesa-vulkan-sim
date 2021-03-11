@@ -521,10 +521,10 @@ void anv_CmdBindPipeline(
       cmd_buffer->state.rt.pipeline = rt_pipeline;
       cmd_buffer->state.rt.pipeline_dirty = true;
 
-      if (rt_pipeline->stack_size > 0) {
-         anv_CmdSetRayTracingPipelineStackSizeKHR(commandBuffer,
-                                                  rt_pipeline->stack_size);
-      }
+      // if (rt_pipeline->stack_size > 0) {
+      //    anv_CmdSetRayTracingPipelineStackSizeKHR(commandBuffer,
+      //                                             rt_pipeline->stack_size);
+      // }
       break;
    }
 
