@@ -1854,6 +1854,19 @@ void anv_GetPhysicalDeviceProperties2(
 
    vk_foreach_struct(ext, pProperties->pNext) {
       switch (ext->sType) {
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR: {
+         VkPhysicalDeviceRayTracingPipelinePropertiesKHR *props = (void *)ext;
+         props->shaderGroupHandleSize = 32;
+         props->maxRayRecursionDepth = 31;
+         props->maxShaderGroupStride = 4096;
+         props->shaderGroupBaseAlignment = 64;
+         props->shaderGroupHandleCaptureReplaySize = 32;
+         props->maxRayDispatchInvocationCount = 1073741824;
+         props->shaderGroupHandleAlignment = 32;
+         props->maxRayHitAttributeSize = 32;
+         break;
+      }
+
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR: {
          VkPhysicalDeviceAccelerationStructurePropertiesKHR *props = (void *)ext;
          props->maxGeometryCount = (1u << 24) - 1;
