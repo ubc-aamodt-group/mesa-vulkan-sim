@@ -35,6 +35,8 @@
 #include "genxml/genX_pack.h"
 #include "genxml/gen_rt_pack.h"
 
+#include "gpgpusim_calls.h"
+
 /* We reserve :
  *    - GPR 14 for secondary command buffer returns
  *    - GPR 15 for conditional rendering
@@ -4807,42 +4809,41 @@ cmd_buffer_trace_rays(struct anv_cmd_buffer *cmd_buffer,
                       uint32_t launch_depth,
                       uint64_t launch_size_addr)
 {
-    printf("cmd_buffer_trace_rays\n");
-    fflush(stdout);
-    usleep(3 * 1000);
-   struct anv_cmd_ray_tracing_state *rt = &cmd_buffer->state.rt;
-   struct anv_ray_tracing_pipeline *pipeline = rt->pipeline;
-
-   if (anv_batch_has_error(&cmd_buffer->batch))
-      return;
-
-   /* If we have a known degenerate launch size, just bail */
-   if (!is_indirect &&
-       (launch_width == 0 || launch_height == 0 || launch_depth == 0))
-      return;
-
-   genX(cmd_buffer_config_l3)(cmd_buffer, pipeline->base.l3_config);
-   genX(flush_pipeline_select_gpgpu)(cmd_buffer);
-
-   cmd_buffer->state.rt.pipeline_dirty = false;
-
-   genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
-
-   /* Add these to the reloc list as they're internal buffers that don't
-    * actually have relocs to pick them up manually.
-    *
-    * TODO(RT): This is a bit of a hack
-    */
-   // anv_reloc_list_add_bo(cmd_buffer->batch.relocs,
-   //                       cmd_buffer->batch.alloc,
-   //                       rt->scratch.bo);
-
-   /* Allocate and set up our RT_DISPATCH_GLOBALS */
-   struct anv_state rtdg_state =
-      anv_cmd_buffer_alloc_dynamic_state(cmd_buffer,
-                                         BRW_RT_PUSH_CONST_OFFSET +
-                                         sizeof(struct anv_push_constants),
-                                         64);
+    gpgpusim_vkCmdTraceRaysKHR(raygen_sbt, miss_sbt, hit_sbt, callable_sbt,
+            is_indirect, launch_width, launch_height, launch_depth, launch_size_addr);
+   // struct anv_cmd_ray_tracing_state *rt = &cmd_buffer->state.rt;
+   // struct anv_ray_tracing_pipeline *pipeline = rt->pipeline;
+   //
+   // if (anv_batch_has_error(&cmd_buffer->batch))
+   //    return;
+   //
+   // /* If we have a known degenerate launch size, just bail */
+   // if (!is_indirect &&
+   //     (launch_width == 0 || launch_height == 0 || launch_depth == 0))
+   //    return;
+   //
+   // genX(cmd_buffer_config_l3)(cmd_buffer, pipeline->base.l3_config);
+   // genX(flush_pipeline_select_gpgpu)(cmd_buffer);
+   //
+   // cmd_buffer->state.rt.pipeline_dirty = false;
+   //
+   // genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
+   //
+   // /* Add these to the reloc list as they're internal buffers that don't
+   //  * actually have relocs to pick them up manually.
+   //  *
+   //  * TODO(RT): This is a bit of a hack
+   //  */
+   // // anv_reloc_list_add_bo(cmd_buffer->batch.relocs,
+   // //                       cmd_buffer->batch.alloc,
+   // //                       rt->scratch.bo);
+   //
+   // /* Allocate and set up our RT_DISPATCH_GLOBALS */
+   // struct anv_state rtdg_state =
+   //    anv_cmd_buffer_alloc_dynamic_state(cmd_buffer,
+   //                                       BRW_RT_PUSH_CONST_OFFSET +
+   //                                       sizeof(struct anv_push_constants),
+   //                                       64);
 
    // struct GEN_RT_DISPATCH_GLOBALS rtdg = {
    //    .MemBaseAddress = (struct anv_address) {
