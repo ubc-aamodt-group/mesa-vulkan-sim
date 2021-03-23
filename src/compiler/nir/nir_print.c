@@ -2361,7 +2361,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          fprintf(fp, ";");
          fprintf(fp, "\n\t");
 
-         fprintf(fp, "rsqrt.f%d ", instr->dest.dest.ssa.bit_size);
+         fprintf(fp, "rsqrt.approx.f%d ", instr->dest.dest.ssa.bit_size);
 
          ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
       }
