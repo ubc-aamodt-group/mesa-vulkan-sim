@@ -2478,6 +2478,7 @@ deep_copy_ray_tracing_create_info(VkRayTracingPipelineCreateInfoKHR *dst,
    return VK_SUCCESS;
 }
 
+static bool gpgpusim_initialized = false;
 
 static void translate_nir_to_ptx(nir_shader *shader)
 {
@@ -2520,6 +2521,13 @@ static void translate_nir_to_ptx(nir_shader *shader)
    snprintf(fullPath, sizeof(fullPath), "%s%s%s_%s%s", mesa_root, filePath, fileName, label, extension);
    
    char command[200];
+
+   if(!gpgpusim_initialized){
+      snprintf(command, sizeof(command), "rm -rf %s%s", mesa_root, filePath);
+      system(command);
+      gpgpusim_initialized = true;
+   }
+
    snprintf(command, sizeof(command), "mkdir -p %s%s", mesa_root, filePath);
    system(command);
    
