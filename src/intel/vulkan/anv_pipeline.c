@@ -42,6 +42,38 @@
 /* Needed for SWIZZLE macros */
 #include "program/prog_instruction.h"
 
+// Taken from v3dv_print_spirv
+static void debug_print_spirv(const char *data, uint32_t size, FILE *fp)
+{
+   char path[] = "/tmp/fileXXXXXX";
+   char line[2048], command[128];
+   FILE *p;
+   int fd;
+
+   /* Dump the binary into a temporary file. */
+   fd = mkstemp(path);
+   if (fd < 0)
+      return;
+
+   if (write(fd, data, size) == -1)
+      goto fail;
+
+   sprintf(command, "spirv-dis %s", path);
+
+   /* Disassemble using spirv-dis if installed. */
+   p = popen(command, "r");
+   if (p) {
+      while (fgets(line, sizeof(line), p))
+         fprintf(fp, "%s", line);
+      pclose(p);
+   }
+
+ fail:
+   close(fd);
+   unlink(path);
+}
+
+
 // Shader functions
 
 VkResult anv_CreateShaderModule(
@@ -70,6 +102,18 @@ VkResult anv_CreateShaderModule(
    _mesa_sha1_compute(module->data, module->size, module->sha1);
 
    *pShaderModule = anv_shader_module_to_handle(module);
+
+   // David's code to print out spirv opcodes
+   int i = 5;
+   int size_in_words = module->size / 4; 
+   while (i < size_in_words) 
+   { 
+      auto opcode = ((uint32_t*)module->data)[i] & 0xFFFF; 
+      auto instruction_word_count = ((uint32_t*)module->data)[i] >> 16; i += instruction_word_count; 
+   } 
+
+   // Dumping out SPIRV
+   debug_print_spirv(module->data, module->size, stderr);
 
    return VK_SUCCESS;
 }
