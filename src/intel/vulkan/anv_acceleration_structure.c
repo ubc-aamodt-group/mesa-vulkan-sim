@@ -1382,6 +1382,8 @@ anv_CmdBuildAccelerationStructuresKHR(
                                                ppBuildRangeInfos, false);
       if (result != VK_SUCCESS)
          anv_batch_set_error(&cmd_buffer->batch, result);
+      if (pInfos[0].type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR)
+         gpgpusim_setAccelerationStructure(pInfos[0].dstAccelerationStructure);
       return;
    }
 
