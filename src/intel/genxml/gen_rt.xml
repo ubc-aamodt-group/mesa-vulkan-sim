@@ -158,7 +158,7 @@
     <field name="Object To World m30" start="416" end="447" type="float"/>
     <field name="Object To World m31" start="448" end="479" type="float"/>
     <field name="Object To World m32" start="480" end="511" type="float"/>
-    <field name="BVH Address" start="512" end="559" type="address"/>
+    <field name="BVH Address" start="512" end="575" type="address"/>
     <field name="Instance ID" start="576" end="607" type="uint"/>
     <field name="Instance Index" start="608" end="639" type="uint"/>
     <field name="Object To World m00" start="640" end="671" type="float"/>

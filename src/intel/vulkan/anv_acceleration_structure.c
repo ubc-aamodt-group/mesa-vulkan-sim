@@ -263,7 +263,8 @@ anv_GetAccelerationStructureDeviceAddressKHR(
    assert(!anv_address_is_null(accel->address));
    assert(accel->address.bo->flags & EXEC_OBJECT_PINNED);
 
-   return anv_address_physical(accel->address);
+   //return anv_address_physical(accel->address);
+   return (VkDeviceAddress)anv_address_map(accel->address);
 }
 
 void
@@ -660,7 +661,8 @@ get_accel_instance(const void *instance_data,
       const VkDeviceOrHostAddressConstKHR accel_doha = {
          .deviceAddress = reference,
       };
-      *accel_map = doha_to_host_const(accel_doha, state);
+      //*accel_map = doha_to_host_const(accel_doha, state);
+      *accel_map = (void *)reference;
       *accel_addr = anv_address_from_u64(reference);
    }
 }
