@@ -35,7 +35,7 @@
 #include "genxml/genX_pack.h"
 #include "genxml/gen_rt_pack.h"
 
-#include "gpgpusim_calls.h"
+#include "gpgpusim_calls_from_mesa.h"
 
 /* We reserve :
  *    - GPR 14 for secondary command buffer returns

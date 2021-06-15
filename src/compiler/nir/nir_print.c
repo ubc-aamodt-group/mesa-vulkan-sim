@@ -2555,7 +2555,8 @@ print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_st
 static void
 print_deref_instr_as_ptx(nir_deref_instr *instr, print_state *state, ssa_reg_info *ssa_register_info)
 {
-   FILE *fp = state->fp;
+   //FILE *fp = state->fp;
+   FILE *fp = stdout;
 
    // PTX Code
    print_ptx_reg_decl(state, instr->dest.ssa.num_components, UINT, instr->dest.ssa.bit_size);
@@ -3076,6 +3077,124 @@ print_cf_node_as_ptx(nir_cf_node *node, print_state *state, unsigned int tabs)
    }
 }
 
+static val_type
+glsl_base_type_to_val_type(enum glsl_base_type type)
+{
+   switch (type)
+   {
+   case GLSL_TYPE_UINT:
+   case GLSL_TYPE_UINT8:
+   case GLSL_TYPE_UINT16:
+   case GLSL_TYPE_UINT64:
+      return UINT;
+   
+   case GLSL_TYPE_INT:
+   case GLSL_TYPE_INT8:
+   case GLSL_TYPE_INT16:
+   case GLSL_TYPE_INT64:
+      return INT;
+   
+   case GLSL_TYPE_FLOAT:
+   case GLSL_TYPE_FLOAT16:
+      return FLOAT;
+   
+   case GLSL_TYPE_BOOL:
+      return BITS;
+
+
+   case GLSL_TYPE_SAMPLER:
+   case GLSL_TYPE_IMAGE:
+   case GLSL_TYPE_ATOMIC_UINT:
+   case GLSL_TYPE_STRUCT:
+   case GLSL_TYPE_INTERFACE:
+   case GLSL_TYPE_ARRAY:
+   case GLSL_TYPE_VOID:
+   case GLSL_TYPE_SUBROUTINE:
+   case GLSL_TYPE_FUNCTION:
+   case GLSL_TYPE_ERROR:
+   case GLSL_TYPE_DOUBLE:
+   default:
+      assert(0);
+      break;
+   }
+}
+
+// static uint32_t
+// glsl_base_type_to_num_bits(enum glsl_base_type type)
+// {
+//    switch (type)
+//    {
+//    case GLSL_TYPE_BOOL:
+//       return 1;
+   
+//    case GLSL_TYPE_UINT8:
+//    case GLSL_TYPE_INT8:
+//       return 8;
+   
+//    case GLSL_TYPE_UINT16:
+//    case GLSL_TYPE_INT16:
+//    case GLSL_TYPE_FLOAT16:
+//       return 16;
+   
+//    case GLSL_TYPE_UINT:
+//    case GLSL_TYPE_INT:
+//    case GLSL_TYPE_FLOAT:
+//       return 32;
+   
+//    case GLSL_TYPE_UINT64:
+//    case GLSL_TYPE_INT64:
+//       return 64;
+
+//    case GLSL_TYPE_SAMPLER:
+//    case GLSL_TYPE_IMAGE:
+//    case GLSL_TYPE_ATOMIC_UINT:
+//    case GLSL_TYPE_STRUCT:
+//    case GLSL_TYPE_INTERFACE:
+//    case GLSL_TYPE_ARRAY:
+//    case GLSL_TYPE_VOID:
+//    case GLSL_TYPE_SUBROUTINE:
+//    case GLSL_TYPE_FUNCTION:
+//    case GLSL_TYPE_ERROR:
+//    case GLSL_TYPE_DOUBLE:
+//       assert(0);
+//       return 0;
+   
+//    default:
+//       break;
+//    }
+// }
+
+
+static void
+print_ptx_local_decl(print_state *state, val_type type, int num_bits, char* name, int length)
+{
+   FILE *fp = state->fp;
+   fprintf(fp, ".local ");
+
+   switch (type) {
+      case UINT:
+         fprintf(fp, ".u%d", num_bits);
+         break;
+      case INT:
+         fprintf(fp, ".s%d", num_bits);
+         break;
+      case FLOAT:
+         fprintf(fp, ".f%d", num_bits);
+         break;
+      case BITS:
+         fprintf(fp, ".b%d", num_bits); // i guess
+         break;
+      case UNDEF: // ignore this
+         break;
+   }
+
+   fprintf(fp, "%s", name);
+
+   if (length > 1) {
+      fprintf(fp, "[%d]", length);
+   }
+   fprintf(fp, ";\n");
+}
 
 static void
 print_var_decl_as_ptx(nir_variable *var, print_state *state)
@@ -3084,6 +3203,15 @@ print_var_decl_as_ptx(nir_variable *var, print_state *state)
 
    // PTX Code
    // The variables here are probably treated as magic variables
+
+   if ((var->data.mode == nir_var_shader_temp) ||
+         (var->data.mode == nir_var_shader_call_data) ||
+         (var->data.mode == nir_var_ray_hit_attrib) ||
+         (var->data.mode == nir_var_mem_constant))
+   {
+      print_ptx_local_decl(state, glsl_base_type_to_val_type(glsl_get_base_type(var->type)),
+                           glsl_get_bit_size(var->type), var->name, glsl_get_vector_elements(var->type));
+   }
 
    // Original NIR
    fprintf(fp, "// decl_var ");

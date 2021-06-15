@@ -22,7 +22,7 @@
  */
 
 #include "anv_private.h"
-#include "gpgpusim_calls.h"
+#include "gpgpusim_calls_from_mesa.h"
 
 #include "genxml/gen_macros.h"
 #include "genxml/genX_pack.h"
@@ -2786,7 +2786,6 @@ genX(CreateRayTracingPipelinesKHR)(
 
    for (; i < createInfoCount; i++)
       pPipelines[i] = VK_NULL_HANDLE;
-
    return result;
 }
 // /#endif /* GEN_GEN > 12 || GEN_IS_GEN12HP */

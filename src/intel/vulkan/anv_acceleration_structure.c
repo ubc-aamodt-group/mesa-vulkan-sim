@@ -36,7 +36,7 @@
 #include "embree3/rtcore_device.h"
 #include "embree3/rtcore_builder.h"
 
-#include "gpgpusim_calls.h"
+#include "gpgpusim_calls_from_mesa.h"
 
 static uint64_t
 anv_bvh_max_size(VkAccelerationStructureTypeKHR type, uint64_t leaf_count)

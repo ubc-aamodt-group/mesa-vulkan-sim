@@ -31,6 +31,7 @@
 #include "vk_util.h"
 
 #include "anv_private.h"
+#include "gpgpusim_calls_from_mesa.h"
 
 /*
  * Descriptor set layouts.
@@ -1579,7 +1580,7 @@ anv_descriptor_set_write_acceleration_structure(struct anv_device *device,
 
    struct anv_address_range_descriptor desc_data = { };
    if (accel != NULL) {
-      desc_data.address = anv_address_physical(accel->address);
+      desc_data.address = (uint64_t)(anv_address_map(accel->address));
       desc_data.range = accel->size;
    }
    assert(anv_descriptor_size(bind_layout) == sizeof(desc_data));
@@ -1588,6 +1589,81 @@ anv_descriptor_set_write_acceleration_structure(struct anv_device *device,
                     element * sizeof(desc_data);
    memcpy(desc_map, &desc_data, sizeof(desc_data));
 }
+
+
+static void update_gpgpusim_descriptor_sets(struct anv_descriptor_set *set)
+{
+   for(int i = 0; i < set->descriptor_count; i++)
+   {
+      switch (set->descriptors[i].type)
+      {
+      case VK_DESCRIPTOR_TYPE_SAMPLER:
+      case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+      case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+      case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+      case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+      {
+         const struct anv_descriptor_set_binding_layout *bind_layout = &set->layout->binding[i];
+         struct anv_descriptor *desc = &set->descriptors[bind_layout->descriptor_index];
+         void *desc_map = set->desc_mem.map + bind_layout->descriptor_offset;
+
+         if (bind_layout->data & ANV_DESCRIPTOR_SAMPLED_IMAGE) {
+            struct anv_sampled_image_descriptor *desc_data = desc_map;
+            uint32_t count = MAX2(1, bind_layout->max_plane_count);
+         }
+         // else{
+         //    assert(0);
+         // }
+         break;
+      }
+
+      case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+      case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+         break;
+
+      case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+      case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+      case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
+      case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+      {
+         const struct anv_descriptor_set_binding_layout *bind_layout = &set->layout->binding[i];
+         struct anv_descriptor *desc = &set->descriptors[bind_layout->descriptor_index];
+         void *desc_map = set->desc_mem.map + bind_layout->descriptor_offset;
+
+         if (set->descriptors[i].type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC ||
+               set->descriptors[i].type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC)
+         {
+            assert(0);
+            // in this case it is stored in set->descriptors[i].buffer (look at set->descriptors[i].offset etc when got here and implement)
+         }
+         else
+         {
+            struct anv_buffer_view *bview = &set->buffer_views[bind_layout->buffer_view_index];
+            gpgpusim_setDescriptorSet(0, i, anv_address_map(bview->address), bview->range, set->descriptors[i].type);
+         }
+         
+         break;
+      }
+
+      case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT:
+         break;
+
+      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV:
+      {
+         struct anv_descriptor_set_binding_layout *bind_layout = &set->layout->binding[i];
+         void *desc_map = set->desc_mem.map + bind_layout->descriptor_offset;
+         struct anv_address_range_descriptor *desc_data = desc_map;
+         gpgpusim_setDescriptorSet(0, i, (void *)(desc_data->address), desc_data->range, set->descriptors[i].type);
+         break;
+      }
+
+      default:
+         break;
+      }
+   }
+}
+
 
 void anv_UpdateDescriptorSets(
     VkDevice                                    _device,
@@ -1680,6 +1756,7 @@ void anv_UpdateDescriptorSets(
       default:
          break;
       }
+      update_gpgpusim_descriptor_sets(set);
    }
 
    for (uint32_t i = 0; i < descriptorCopyCount; i++) {
