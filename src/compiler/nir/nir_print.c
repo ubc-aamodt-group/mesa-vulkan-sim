@@ -1570,6 +1570,7 @@ static void
 init_print_state(print_state *state, nir_shader *shader, FILE *fp)
 {
    state->fp = fp;
+   //state->fp = stderr;
    state->shader = shader;
    state->ht = _mesa_pointer_hash_table_create(NULL);
    state->syms = _mesa_set_create(NULL, _mesa_hash_string,
@@ -2525,16 +2526,17 @@ print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_st
    case nir_deref_type_struct:
       //fprintf(fp, "%s%s", is_parent_pointer ? "->" : ".",
       //        glsl_get_struct_elem_name(parent->type, instr->strct.index));
-      fprintf(fp, "%s%s", is_parent_pointer ? ", ptr, " : ", not_ptr, ",
-              glsl_get_struct_elem_name(parent->type, instr->strct.index));
+      fprintf(fp, "%s%s, %d", is_parent_pointer ? ", ptr, " : ", not_ptr, ",
+              glsl_get_struct_elem_name(parent->type, instr->strct.index), glsl_get_struct_field_offset(parent->type, instr->strct.index));
       break;
 
    case nir_deref_type_array:
    case nir_deref_type_ptr_as_array: {
       if (nir_src_is_const(instr->arr.index)) {
          //fprintf(fp, "[%"PRId64"]", nir_src_as_int(instr->arr.index));
-         fprintf(fp, ", %"PRId64"", nir_src_as_int(instr->arr.index));
+         fprintf(fp, ", %"PRId64", %u", nir_src_as_int(instr->arr.index), nir_deref_instr_array_stride(instr));
       } else {
+         assert(0); //unimplemented. need to calculate array index before accessing?
          fprintf(fp, "[");
          print_src_as_ptx(&instr->arr.index, state);
          fprintf(fp, "]");
@@ -2555,8 +2557,7 @@ print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_st
 static void
 print_deref_instr_as_ptx(nir_deref_instr *instr, print_state *state, ssa_reg_info *ssa_register_info)
 {
-   //FILE *fp = state->fp;
-   FILE *fp = stdout;
+   FILE *fp = state->fp;
 
    // PTX Code
    print_ptx_reg_decl(state, instr->dest.ssa.num_components, UINT, instr->dest.ssa.bit_size);
@@ -2712,21 +2713,160 @@ print_load_const_instr_as_ptx(nir_load_const_instr *instr, print_state *state, s
          ssa_register_info[instr->def.index].type = BITS;
          break;
    }
-
-   // Operand value in vectorized form
    fprintf(fp, "\n\t");
-   fprintf(fp, "mov");
+
 
    int ptx_vec_len = 1;
    if (instr->def.num_components == 2){
-      fprintf(fp, ".v2");
       ptx_vec_len = 2;
    }
    else if (instr->def.num_components > 2 && instr->def.num_components <= 4){
-      fprintf(fp, ".v4");
       ptx_vec_len = 4;
    }
    else if (instr->def.num_components > 4){
+      abort();
+   }
+
+   if(ptx_vec_len > 1)
+   {
+      for(int i = 0; i < ptx_vec_len; i++)
+      {
+         print_ptx_reg_decl(state, 1, FLOAT, instr->def.bit_size);
+         print_ssa_use_as_ptx(&instr->def, state);
+         if(ptx_vec_len > 1)
+         {
+            switch (i)
+            {
+            case 0:
+               fprintf(fp, "x;");
+               break;
+            
+            case 1:
+               fprintf(fp, "y;");
+               break;
+            
+            case 2:
+               fprintf(fp, "z;");
+               break;
+            
+            case 3:
+               fprintf(fp, "w;");
+               break;
+
+            default:
+               break;
+            }
+         }
+
+
+         fprintf(fp, "\n\t");
+         fprintf(fp, "mov");
+         switch (instr->def.bit_size) {
+         case 64:
+            fprintf(fp, ".f64 ");
+            print_ssa_use_as_ptx(&instr->def, state); //dst
+            break;
+         case 32:
+            fprintf(fp, ".f32 ");
+            print_ssa_use_as_ptx(&instr->def, state); //dst
+            break;
+         case 16:
+            fprintf(fp, ".b16 ");
+            print_ssa_use_as_ptx(&instr->def, state); //dst
+            break;
+         case 8:
+            fprintf(fp, ".b8 ");
+            print_ssa_use_as_ptx(&instr->def, state); //dst
+            fprintf(fp, ", ");
+            break;
+         case 1:
+            fprintf(fp, ".b1 ");
+            print_ssa_use_as_ptx(&instr->def, state); //dst
+            break;
+         }
+
+         switch (i)
+            {
+            case 0:
+               fprintf(fp, "x");
+               break;
+            
+            case 1:
+               fprintf(fp, "y");
+               break;
+            
+            case 2:
+               fprintf(fp, "z");
+               break;
+            
+            case 3:
+               fprintf(fp, "w");
+               break;
+
+            default:
+               break;
+            }
+
+         fprintf(fp, ", ");
+
+         if (i > instr->def.num_components-1){
+            switch (instr->def.bit_size) {
+            case 64:
+               fprintf(fp, "0D%16" PRIx64, (uint64_t)0); // 0D stands for hex float representation
+               break;
+            case 32:
+               fprintf(fp, "0F%08x", (uint32_t)0); // 0F stands for hex float representation
+               break;
+            case 16:
+               fprintf(fp, "0x%04x /* %f */", (uint16_t)0,
+                     _mesa_half_to_float((uint16_t)0));
+               break;
+            case 8:
+               fprintf(fp, "0x%02x", (uint8_t)0);
+               break;
+            case 1:
+               fprintf(fp, "%s", "0");
+               break;
+            }
+         }
+         else {
+            switch (instr->def.bit_size) {
+            case 64:
+               fprintf(fp, "0D%16" PRIx64, instr->value[i].u64); // 0D stands for hex float representation
+               break;
+            case 32:
+               fprintf(fp, "0F%08x", instr->value[i].u32); // 0F stands for hex float representation
+               break;
+            case 16:
+               fprintf(fp, "0x%04x /* %f */", instr->value[i].u16,
+                     _mesa_half_to_float(instr->value[i].u16));
+               break;
+            case 8:
+               fprintf(fp, "0x%02x", instr->value[i].u8);
+               break;
+            case 1:
+               fprintf(fp, "%s", instr->value[i].b ? "1" : "0");
+               break;
+            }
+         }
+
+         fprintf(fp, ";");
+         fprintf(fp, "\n\t");
+      }
+   }
+
+
+   // Operand value in vectorized form
+   fprintf(fp, "mov");
+
+   // int ptx_vec_len = 1;
+   if (ptx_vec_len == 2){
+      fprintf(fp, ".v2");
+   }
+   else if (ptx_vec_len == 4){
+      fprintf(fp, ".v4");
+   }
+   else if (ptx_vec_len > 4){
       abort();
    }
 
@@ -2766,46 +2906,74 @@ print_load_const_instr_as_ptx(nir_load_const_instr *instr, print_state *state, s
          fprintf(fp, ", ");
       }
 
-      if (i > instr->def.num_components-1){
-         switch (instr->def.bit_size) {
-         case 64:
-            fprintf(fp, "0D%16" PRIx64, (uint64_t)0); // 0D stands for hex float representation
+      if(ptx_vec_len == 1) {
+         if (i > instr->def.num_components-1){
+            switch (instr->def.bit_size) {
+            case 64:
+               fprintf(fp, "0D%16" PRIx64, (uint64_t)0); // 0D stands for hex float representation
+               break;
+            case 32:
+               fprintf(fp, "0F%08x", (uint32_t)0); // 0F stands for hex float representation
+               break;
+            case 16:
+               fprintf(fp, "0x%04x /* %f */", (uint16_t)0,
+                     _mesa_half_to_float((uint16_t)0));
+               break;
+            case 8:
+               fprintf(fp, "0x%02x", (uint8_t)0);
+               break;
+            case 1:
+               fprintf(fp, "%s", "0");
+               break;
+            }
+         }
+         else {
+            switch (instr->def.bit_size) {
+            case 64:
+               fprintf(fp, "0D%16" PRIx64, instr->value[i].u64); // 0D stands for hex float representation
+               break;
+            case 32:
+               fprintf(fp, "0F%08x", instr->value[i].u32); // 0F stands for hex float representation
+               break;
+            case 16:
+               fprintf(fp, "0x%04x /* %f */", instr->value[i].u16,
+                     _mesa_half_to_float(instr->value[i].u16));
+               break;
+            case 8:
+               fprintf(fp, "0x%02x", instr->value[i].u8);
+               break;
+            case 1:
+               fprintf(fp, "%s", instr->value[i].b ? "1" : "0");
+               break;
+            }
+         }
+      }
+      else
+      {
+         print_ssa_use_as_ptx(&instr->def, state);
+         switch (i)
+         {
+         case 0:
+            fprintf(fp, "x");
             break;
-         case 32:
-            fprintf(fp, "0F%08x", (uint32_t)0); // 0F stands for hex float representation
-            break;
-         case 16:
-            fprintf(fp, "0x%04x /* %f */", (uint16_t)0,
-                  _mesa_half_to_float((uint16_t)0));
-            break;
-         case 8:
-            fprintf(fp, "0x%02x", (uint8_t)0);
-            break;
+         
          case 1:
-            fprintf(fp, "%s", "0");
+            fprintf(fp, "y");
+            break;
+         
+         case 2:
+            fprintf(fp, "z");
+            break;
+         
+         case 3:
+            fprintf(fp, "w");
+            break;
+
+         default:
             break;
          }
       }
-      else {
-         switch (instr->def.bit_size) {
-         case 64:
-            fprintf(fp, "0D%16" PRIx64, instr->value[i].u64); // 0D stands for hex float representation
-            break;
-         case 32:
-            fprintf(fp, "0F%08x", instr->value[i].u32); // 0F stands for hex float representation
-            break;
-         case 16:
-            fprintf(fp, "0x%04x /* %f */", instr->value[i].u16,
-                  _mesa_half_to_float(instr->value[i].u16));
-            break;
-         case 8:
-            fprintf(fp, "0x%02x", instr->value[i].u8);
-            break;
-         case 1:
-            fprintf(fp, "%s", instr->value[i].b ? "1" : "0");
-            break;
-         }
-      }
+         
    }
 
    if (instr->def.num_components > 1) {
@@ -3099,11 +3267,11 @@ glsl_base_type_to_val_type(enum glsl_base_type type)
       return FLOAT;
    
    case GLSL_TYPE_BOOL:
+   case GLSL_TYPE_IMAGE:
       return BITS;
 
 
    case GLSL_TYPE_SAMPLER:
-   case GLSL_TYPE_IMAGE:
    case GLSL_TYPE_ATOMIC_UINT:
    case GLSL_TYPE_STRUCT:
    case GLSL_TYPE_INTERFACE:
@@ -3165,36 +3333,36 @@ glsl_base_type_to_val_type(enum glsl_base_type type)
 // }
 
 
-static void
-print_ptx_local_decl(print_state *state, val_type type, int num_bits, char* name, int length)
-{
-   FILE *fp = state->fp;
-   fprintf(fp, ".local ");
+// static void
+// print_ptx_local_decl(print_state *state, val_type type, int num_bits, char* name, int length)
+// {
+//    FILE *fp = state->fp;
+//    fprintf(fp, ".local ");
 
-   switch (type) {
-      case UINT:
-         fprintf(fp, ".u%d", num_bits);
-         break;
-      case INT:
-         fprintf(fp, ".s%d", num_bits);
-         break;
-      case FLOAT:
-         fprintf(fp, ".f%d", num_bits);
-         break;
-      case BITS:
-         fprintf(fp, ".b%d", num_bits); // i guess
-         break;
-      case UNDEF: // ignore this
-         break;
-   }
+//    switch (type) {
+//       case UINT:
+//          fprintf(fp, ".u%d", num_bits);
+//          break;
+//       case INT:
+//          fprintf(fp, ".s%d", num_bits);
+//          break;
+//       case FLOAT:
+//          fprintf(fp, ".f%d", num_bits);
+//          break;
+//       case BITS:
+//          fprintf(fp, ".b%d", num_bits); // i guess
+//          break;
+//       case UNDEF: // ignore this
+//          break;
+//    }
 
-   fprintf(fp, "%s", name);
+//    fprintf(fp, " %s", name);
 
-   if (length > 1) {
-      fprintf(fp, "[%d]", length);
-   }
-   fprintf(fp, ";\n");
-}
+//    if (length > 1) {
+//       fprintf(fp, "[%d]", length);
+//    }
+//    fprintf(fp, ";\t");
+// }
 
 static void
 print_var_decl_as_ptx(nir_variable *var, print_state *state)
@@ -3203,15 +3371,17 @@ print_var_decl_as_ptx(nir_variable *var, print_state *state)
 
    // PTX Code
    // The variables here are probably treated as magic variables
+   fprintf(fp, "decl_var %s, %d, %d, %d, %d;\t", var->name, glsl_get_bit_size(var->type), glsl_get_vector_elements(var->type), 
+                  glsl_base_type_to_val_type(glsl_get_base_type(var->type)), var->data.mode);
 
-   if ((var->data.mode == nir_var_shader_temp) ||
-         (var->data.mode == nir_var_shader_call_data) ||
-         (var->data.mode == nir_var_ray_hit_attrib) ||
-         (var->data.mode == nir_var_mem_constant))
-   {
-      print_ptx_local_decl(state, glsl_base_type_to_val_type(glsl_get_base_type(var->type)),
-                           glsl_get_bit_size(var->type), var->name, glsl_get_vector_elements(var->type));
-   }
+   // if ((var->data.mode == nir_var_shader_temp) ||
+   //       (var->data.mode == nir_var_shader_call_data) ||
+   //       (var->data.mode == nir_var_ray_hit_attrib) ||
+   //       (var->data.mode == nir_var_mem_constant))
+   // {
+   //    print_ptx_local_decl(state, glsl_base_type_to_val_type(glsl_get_base_type(var->type)),
+   //                         glsl_get_bit_size(var->type), var->name, glsl_get_vector_elements(var->type));
+   // }
 
    // Original NIR
    fprintf(fp, "// decl_var ");
@@ -3497,8 +3667,20 @@ nir_translate_shader_annotated(nir_shader *shader, FILE *fp,
 }
 
 void
-nir_translate_shader_to_ptx(nir_shader *shader, FILE *fp)
+nir_translate_shader_to_ptx(nir_shader *shader, FILE *fp, char *filePath)
 {
    nir_translate_shader_annotated(shader, fp, NULL);
    fflush(fp);
+
+   if (filePath == NULL)
+      return;
+   char command[400];
+   char *mesa_root = getenv("MESA_ROOT");
+   snprintf(command, sizeof(command), "python3 %s/src/compiler/ptx/ptx_lower_instructions.py %s", mesa_root, filePath);
+   int result = system(command);
+   if (result != 0)
+   {
+      printf("MESA: ERROR ** while translating nir to PTX %d\n", result);
+      exit(1);
+   }
 }
