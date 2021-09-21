@@ -42,11 +42,22 @@ def unwrapp_vector(ptx_shader, vectorVariableName, unwrappedName):
         unwrapMovs.append(newMov)
     
 
-    wrapMov = PTXFunctionalLine()
-    wrapMov.leadingWhiteSpace = declaration.leadingWhiteSpace
-    wrapMov.buildString('mov%s%s' % (declaration.vector, declaration.variableType), (declaration.variableName, '{' + ", ".join(newRegNames) + '}'))
+    wrapMovs = list()
+    for i in range(declaration.vectorSize()):
+        wrapMov = PTXFunctionalLine()
+        wrapMov.leadingWhiteSpace = declaration.leadingWhiteSpace
+        variableType = declaration.variableType
+        if variableType == '.b32':
+            variableType = '.f32'
+        elif variableType == '.b64':
+            variableType = '.f64'
+        zero = '0'
+        if variableType[1] == 'f':
+            zero = '0F00000000'
+        wrapMov.buildString('add%s' % (variableType), (vectorVariableName + '.' + vector_suffix(i), newRegNames[i], zero))
+        wrapMovs.append(wrapMov)
 
-    return newRegNames, newDeclarations, unwrapMovs, wrapMov
+    return newRegNames, newDeclarations, unwrapMovs, wrapMovs
 
 
 def translate_descriptor_set_instructions(ptx_shader):
@@ -131,11 +142,15 @@ def translate_deref_instructions(ptx_shader):
                     newFunctional.buildString('ld.global%s' % declaration.variableType, (declaration.variableName + '_' + str(i), '[' + ptr + ' + ' + str(int(i * declaration.bitCount() / 8)) + ']'))
                     newLines.append(newFunctional)
                 
+                _, _, _, wrapMovs = unwrapp_vector(ptx_shader, declaration.variableName, declaration.variableName)
+                
                 # insert the new lines into shader
+                ptx_shader.lines[index] = PTXLine('//' + line.comment + '\n')
+                ptx_shader.lines[declerationLine + 1: declerationLine + 1] = wrapMovs
                 ptx_shader.lines[declerationLine: declerationLine] = newLines #TODO: why not store in current location?
 
                 # mov indicidual registers to final vector register
-                line.buildString('mov%s%s' % (declaration.vector, declaration.variableType), (declaration.variableName, '{' + ', '.join([declaration.variableName + '_' + str(i) for i in range(declaration.vectorSize())]) + '}'))
+                # line.buildString('mov%s%s' % (declaration.vector, declaration.variableType), (declaration.variableName, '{' + ', '.join([declaration.variableName + '_' + str(i) for i in range(declaration.vectorSize())]) + '}'))
         
         
         elif line.functionalType == FunctionalType.store_deref:
@@ -160,6 +175,9 @@ def translate_deref_instructions(ptx_shader):
                 newDecleration.buildString(DeclarationType.Register, None, declaration.variableType, declarationName)
                 newLines.append(newDecleration)
 
+                _, _, unwrapMovs, _ = unwrapp_vector(ptx_shader, declaration.variableName, declaration.variableName)
+                newLines = newLines + unwrapMovs
+
                 # load into each register
                 for i in range(declaration.vectorSize()):
                     newFunctional = PTXFunctionalLine()
@@ -168,10 +186,11 @@ def translate_deref_instructions(ptx_shader):
                     newLines.append(newFunctional)
                 
                 # insert the new lines into shader
+                ptx_shader.lines[index] = PTXLine('//' + line.comment + '\n')
                 ptx_shader.lines[index: index] = newLines
 
                 # mov indicidual registers to final vector register
-                line.buildString('mov%s%s' % (declaration.vector, declaration.variableType), (declaration.variableName, '{' + ', '.join([declaration.variableName + '_' + str(i) for i in range(declaration.vectorSize())]) + '}'))
+                # line.buildString('mov%s%s' % (declaration.vector, declaration.variableType), (declaration.variableName, '{' + ', '.join([declaration.variableName + '_' + str(i) for i in range(declaration.vectorSize())]) + '}'))
         
         # elif line.functionalType == FunctionalType.deref_var:
         #     print('@#^$*@^#&$*@#&^$* got here')
@@ -303,7 +322,7 @@ def translate_decl_var(ptx_shader):
         break
 
 
-def translate_ray_launch_instructions(ptx_shader):
+def  translate_ray_launch_instructions(ptx_shader):
     skip_lines = -1
     for index in range(len(ptx_shader.lines)):
         if index <= skip_lines:
@@ -334,15 +353,15 @@ def translate_ray_launch_instructions(ptx_shader):
             loadZero.leadingWhiteSpace = line.leadingWhiteSpace
             loadZero.buildString('mov%s' % (declaration.variableType), (newRegNames[3], "0"))
             
-
-            movLine = PTXFunctionalLine()
-            movLine.leadingWhiteSpace = line.leadingWhiteSpace
-            movLine.comment = comment
-            movLine.buildString('mov%s%s' % (declaration.vector, declaration.variableType), (declaration.variableName, '{' + ", ".join(newRegNames) + '}'))
+            _, _, _, wrapMovs = unwrapp_vector(ptx_shader, declaration.variableName, declaration.variableName)
+            # movLine = PTXFunctionalLine()
+            # movLine.leadingWhiteSpace = line.leadingWhiteSpace
+            # movLine.comment = comment
+            # movLine.buildString('mov%s%s' % (declaration.vector, declaration.variableType), (declaration.variableName, '{' + ", ".join(newRegNames) + '}'))
 
             ptx_shader.lines[index:index] =  newDeclarations
             ptx_shader.lines.insert(index + 5, loadZero)
-            ptx_shader.lines.insert(index + 6, movLine)
+            ptx_shader.lines[index + 6: index + 6] = wrapMovs[:3]
             skip_lines = index + 7
 
 

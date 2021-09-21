@@ -39,6 +39,10 @@ class PTXLine:
             self.fullLine += '; //' + self.comment
         else:
             self.fullLine += ';\n'
+    
+    def addComment(self, comment):
+        self.comment += '//' + comment + '\n'
+        self.buildString()
 
     @staticmethod
     def getInstructionClass(line):
@@ -195,7 +199,12 @@ class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line t
         args = args.split(',')
         self.args = [arg.strip() for arg in args]
     
-    def buildString(self, function, args):
+    def buildString(self, function=None, args=None):
+        if function is None:
+            function = self.functionalType
+        if args is None:
+            args = self.args
+        
         if isinstance(function, FunctionalType):
             self.command = function.name
             self.functionalType = function
@@ -203,6 +212,7 @@ class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line t
             self.command = function
             self.functionalType = FunctionalType.Other
         
+        self.args = args
         self.command += ' ' + ', '.join(args)
         super().buildString()
 

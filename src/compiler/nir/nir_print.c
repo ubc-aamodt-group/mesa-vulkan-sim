@@ -1908,8 +1908,8 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
    }
    else if (!strcmp(info->name, "load_deref")){ // get address / pointer of a variable used for reading / loading
       if (info->has_dest) {
-         ssa_register_info[instr->dest.ssa.index].type = BITS;
-         print_ptx_reg_decl(state, instr->dest.ssa.num_components, BITS, instr->dest.ssa.bit_size);
+         ssa_register_info[instr->dest.ssa.index].type = FLOAT;
+         print_ptx_reg_decl(state, instr->dest.ssa.num_components, FLOAT, instr->dest.ssa.bit_size);
          print_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";\n\t");
       }
@@ -1917,8 +1917,8 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
    }
    else if (!strcmp(info->name, "store_deref")){ // get address / pointer of a variable used for writing / storing
       if (info->has_dest) {
-         ssa_register_info[instr->dest.ssa.index].type = BITS;
-         print_ptx_reg_decl(state, instr->dest.ssa.num_components, BITS, instr->dest.ssa.bit_size);
+         ssa_register_info[instr->dest.ssa.index].type = FLOAT;
+         print_ptx_reg_decl(state, instr->dest.ssa.num_components, FLOAT, instr->dest.ssa.bit_size);
          print_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";\n\t");
       }
