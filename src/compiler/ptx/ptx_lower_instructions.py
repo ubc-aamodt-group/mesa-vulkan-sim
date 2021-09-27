@@ -86,44 +86,40 @@ def translate_vector_operands(ptx_shader, unique_ID):
         index += 1
         line = ptx_shader.lines[index]
 
-        if line.instructionClass != InstructionClass.Functional:
-            continue
+        if line.instructionClass == InstructionClass.Functional:
+            print("#######################")
+            print(line.fullLine)
 
-        newDeclerations = list()
-        getters = list()
-        setters = list()
-        for argIndex in range(len(line.args)):
-            arg = line.args[argIndex]
-            if '.' not in arg:
-                continue
-            assert arg[-2] == '.'
-            vectorRegName = arg[:-2]
-            declaration, _ = ptx_shader.findDeclaration(vectorRegName)
-            newRegName = vectorRegName + '_' + str(vector_suffix_number(arg[-1])) + '_ID' + str(unique_ID)
-            unique_ID += 1
+            for argIndex in range(len(line.args)):
+                arg = line.args[argIndex]
+                if '.' not in arg:
+                    continue
+                assert arg[-2] == '.'
+                vectorRegName = arg[:-2]
+                newRegName = vectorRegName + '_' + str(vector_suffix_number(arg[-1]))
 
-            newDecleration = PTXDecleration()
-            newDecleration.leadingWhiteSpace = declaration.leadingWhiteSpace
-            newDecleration.buildString(DeclarationType.Register, None, declaration.variableType, newRegName)
-            newDeclerations.append(newDecleration)
-
-            newGetter = PTXFunctionalLine()
-            newGetter.leadingWhiteSpace = declaration.leadingWhiteSpace
-            newGetter.buildString('get_element_32', (newRegName, vectorRegName, str(vector_suffix_number(arg[-1]))))
-            getters.append(newGetter)
-
-            newSetter = PTXFunctionalLine()
-            newSetter.leadingWhiteSpace = declaration.leadingWhiteSpace
-            newSetter.buildString('set_element_32', (vectorRegName, newRegName, str(vector_suffix_number(arg[-1]))))
-            setters.append(newSetter)
-
-            print(newRegName)
-            args = line.args
-            args[argIndex] = newRegName
-            line.buildString(line.fullFunction, args)
+                args = line.args
+                args[argIndex] = newRegName
+                line.buildString(line.fullFunction, args)
         
-        ptx_shader.lines[index + 1:index + 1] = setters
-        ptx_shader.lines[index:index] = newDeclerations + getters
+        elif line.instructionClass == InstructionClass.VariableDeclaration:
+            if line.declarationType != DeclarationType.Register:
+                continue
+            if not line.isVector():
+                continue
+
+            print("#######################")
+            print(line.fullLine)
+
+            newLines = list()
+            for i in range(line.vectorSize()):
+                newLine = PTXDecleration()
+                newLine.leadingWhiteSpace = line.leadingWhiteSpace
+                newLine.buildString(line.declarationType, '', line.variableType, line.variableName + '_' + str(vector_suffix_number(i)))
+            
+            ptx_shader.lines.remove(line)
+            ptx_shader.lines[index:index] = newLines
+
 
 
 def translate_descriptor_set_instructions(ptx_shader):
@@ -438,11 +434,12 @@ def main():
     assert len(sys.argv) == 2
     shaderPath = sys.argv[1]
     shader = PTXShader(shaderPath)
-    translate_vector_operands(shader, unique_ID)
     translate_descriptor_set_instructions(shader)
     translate_deref_instructions(shader)
-    translate_trace_ray(shader)
-    translate_decl_var(shader)
-    translate_ray_launch_instructions(shader)
+    translate_vector_operands(shader, unique_ID)
+    # translate_trace_ray(shader)
+    # translate_decl_var(shader)
+    # translate_ray_launch_instructions(shader)
     shader.writeToFile(shaderPath)
+    exit(-1)
 main()

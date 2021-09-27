@@ -46,7 +46,7 @@ class PTXLine:
 
     @staticmethod
     def getInstructionClass(line):
-        if len(line) == 0 or    line.isspace():
+        if len(line) == 0 or line.isspace():
             return InstructionClass.Empty
         
         #print("-%s-%s" % (line, line.isspace()))
@@ -60,7 +60,13 @@ class PTXLine:
         if firstWord in FunctionalType or firstWord.split('.')[0] in FunctionalType:
             return InstructionClass.Functional
         
-        return InstructionClass.UNKNOWN
+        if firstWord[0] == '.':
+            return InstructionClass.UNKNOWN
+        
+        if firstWord[0:2] == '//':
+            return InstructionClass.Empty
+        
+        return InstructionClass.Functional
     
     @staticmethod
     def createNewLine(line):
@@ -102,7 +108,7 @@ class PTXDecleration (PTXLine):
             self.vector = args[1]
             index = 2
         else:
-            self.vector = None
+            self.vector = ''
             index = 1
         
         self.variableType = args[index]
@@ -189,17 +195,21 @@ class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line t
                 else:
                     self.variableType = '.' + specifier
 
-
         else:
             self.functionalType = FunctionalType.Other
+            self.fullFunction = firstWord
+        
 
-        args = command.split(None, 1)[1]
-        if args[-1] == ';':
-            args = args[:-1]
-        elif args[-1][-1] == ';':
-            args[-1] = args[-1][:-1]
-        args = args.split(',')
-        self.args = [arg.strip() for arg in args]
+        if len(command.split(None, 1)) > 1:
+            args = command.split(None, 1)[1]
+            if args[-1] == ';':
+                args = args[:-1]
+            elif args[-1][-1] == ';':
+                args[-1] = args[-1][:-1]
+            args = args.split(',')
+            self.args = [arg.strip() for arg in args]
+        else:
+            self.args = []
     
     def buildString(self, function=None, args=None):
         if function is None:
@@ -229,9 +239,13 @@ class PTXShader:
         f = open(filePath, "r")
         lineNO = 1
         self.lines = []
+        self.vectorVariables = list()
         for line in f:
-            # print('parsing line %s' % lineNO)
+            # print('parsing line %s: %s' % (lineNO, line))
             ptxLine = PTXLine.createNewLine(line)
+            if ptxLine.instructionClass == InstructionClass.VariableDeclaration and ptxLine.declarationType == DeclarationType.Register:
+                if ptxLine.isVector():
+                    self.vectorVariables.append(ptxLine.variableName)
             # print(line)
             # print(ptxLine.instructionClass)
             # if ptxLine.instructionClass == InstructionClass.Functional:
