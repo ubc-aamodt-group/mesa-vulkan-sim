@@ -177,9 +177,11 @@ class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line t
 
         if firstWord in FunctionalType:
             self.functionalType = FunctionalType[firstWord]
+            self.fullFunction = self.functionalType
         elif firstWord.split('.')[0] in FunctionalType:
             dotSplit = firstWord.split('.')
             self.functionalType = FunctionalType[dotSplit[0]]
+            self.fullFunction = firstWord
             self.vector = None
             for specifier in dotSplit[1:]:
                 if specifier[0] == 'v':

@@ -1,7 +1,8 @@
+from enum import unique
 from ptx_parser import *
 import sys
 
-def vector_suffix(x):
+def vector_suffix_letter(x):
     if x == 0:
         return 'x'
     elif x == 1:
@@ -10,6 +11,17 @@ def vector_suffix(x):
         return 'z'
     elif x == 3:
         return 'w'
+
+def vector_suffix_number(x):
+    if x == 'x':
+        return 0
+    elif x == 'y':
+        return 1
+    elif x == 'z':
+        return 2
+    elif x == 'w':
+        return 3
+
 
 
 def unwrapp_vector(ptx_shader, vectorVariableName, unwrappedName):
@@ -26,38 +38,92 @@ def unwrapp_vector(ptx_shader, vectorVariableName, unwrappedName):
         newDeclarations.append(newDeclaration)
 
     unwrapMovs = list()
-    for i in range(declaration.vectorSize()):
-        newMov = PTXFunctionalLine()
-        newMov.leadingWhiteSpace = declaration.leadingWhiteSpace
+    # for i in range(declaration.vectorSize()):
+    #     newMov = PTXFunctionalLine()
+    #     newMov.leadingWhiteSpace = declaration.leadingWhiteSpace
 
-        variableType = declaration.variableType
-        if variableType == '.b32':
-            variableType = '.f32'
-        elif variableType == '.b64':
-            variableType = '.f64'
-        zero = '0'
-        if variableType[1] == 'f':
-            zero = '0F00000000'
-        newMov.buildString('add%s' % variableType, (newRegNames[i], vectorVariableName + '.' + vector_suffix(i), zero))
-        unwrapMovs.append(newMov)
+    #     variableType = declaration.variableType
+    #     if variableType == '.b32':
+    #         variableType = '.f32'
+    #     elif variableType == '.b64':
+    #         variableType = '.f64'
+    #     zero = '0'
+    #     if variableType[1] == 'f':
+    #         zero = '0F00000000'
+    #     newMov.buildString('add%s' % variableType, (newRegNames[i], vectorVariableName + '.' + vector_suffix_letter(i), zero))
+    #     unwrapMovs.append(newMov)
+    newMov = PTXFunctionalLine()
+    newMov.leadingWhiteSpace = declaration.leadingWhiteSpace
+    newMov.buildString('unwrap_32_4', tuple(newRegNames + [vectorVariableName, ]))
+    unwrapMovs.append(newMov)
     
 
     wrapMovs = list()
-    for i in range(declaration.vectorSize()):
-        wrapMov = PTXFunctionalLine()
-        wrapMov.leadingWhiteSpace = declaration.leadingWhiteSpace
-        variableType = declaration.variableType
-        if variableType == '.b32':
-            variableType = '.f32'
-        elif variableType == '.b64':
-            variableType = '.f64'
-        zero = '0'
-        if variableType[1] == 'f':
-            zero = '0F00000000'
-        wrapMov.buildString('add%s' % (variableType), (vectorVariableName + '.' + vector_suffix(i), newRegNames[i], zero))
-        wrapMovs.append(wrapMov)
+    # for i in range(declaration.vectorSize()):
+    #     wrapMov = PTXFunctionalLine()
+    #     wrapMov.leadingWhiteSpace = declaration.leadingWhiteSpace
+    #     variableType = declaration.variableType
+    #     if variableType == '.b32':
+    #         variableType = '.f32'
+    #     elif variableType == '.b64':
+    #         variableType = '.f64'
+    #     zero = '0'
+    #     if variableType[1] == 'f':
+    #         zero = '0F00000000'
+    #     wrapMov.buildString('add%s' % (variableType), (vectorVariableName + '.' + vector_suffix_letter(i), newRegNames[i], zero))
+    #     wrapMovs.append(wrapMov)
+    wrapMov = PTXFunctionalLine()
+    wrapMov.leadingWhiteSpace = declaration.leadingWhiteSpace
+    wrapMov.buildString('wrap_32_4', tuple([vectorVariableName, ] + newRegNames))
+    wrapMovs.append(wrapMov)
 
     return newRegNames, newDeclarations, unwrapMovs, wrapMovs
+
+
+def translate_vector_operands(ptx_shader, unique_ID):
+    index = -1
+    while index + 1 < len(ptx_shader.lines):
+        index += 1
+        line = ptx_shader.lines[index]
+
+        if line.instructionClass != InstructionClass.Functional:
+            continue
+
+        newDeclerations = list()
+        getters = list()
+        setters = list()
+        for argIndex in range(len(line.args)):
+            arg = line.args[argIndex]
+            if '.' not in arg:
+                continue
+            assert arg[-2] == '.'
+            vectorRegName = arg[:-2]
+            declaration, _ = ptx_shader.findDeclaration(vectorRegName)
+            newRegName = vectorRegName + '_' + str(vector_suffix_number(arg[-1])) + '_ID' + str(unique_ID)
+            unique_ID += 1
+
+            newDecleration = PTXDecleration()
+            newDecleration.leadingWhiteSpace = declaration.leadingWhiteSpace
+            newDecleration.buildString(DeclarationType.Register, None, declaration.variableType, newRegName)
+            newDeclerations.append(newDecleration)
+
+            newGetter = PTXFunctionalLine()
+            newGetter.leadingWhiteSpace = declaration.leadingWhiteSpace
+            newGetter.buildString('get_element_32', (newRegName, vectorRegName, str(vector_suffix_number(arg[-1]))))
+            getters.append(newGetter)
+
+            newSetter = PTXFunctionalLine()
+            newSetter.leadingWhiteSpace = declaration.leadingWhiteSpace
+            newSetter.buildString('set_element_32', (vectorRegName, newRegName, str(vector_suffix_number(arg[-1]))))
+            setters.append(newSetter)
+
+            print(newRegName)
+            args = line.args
+            args[argIndex] = newRegName
+            line.buildString(line.fullFunction, args)
+        
+        ptx_shader.lines[index + 1:index + 1] = setters
+        ptx_shader.lines[index:index] = newDeclerations + getters
 
 
 def translate_descriptor_set_instructions(ptx_shader):
@@ -125,15 +191,18 @@ def translate_deref_instructions(ptx_shader):
                 newLines = list()
                 
                 # declare new register to load individually
-                declarationName = ''
-                for i in range(declaration.vectorSize()):
-                    declarationName += declaration.variableName + '_' + str(i)
-                    if i != declaration.vectorSize() - 1:
-                        declarationName += ', '
-                newDecleration = PTXDecleration()
-                newDecleration.leadingWhiteSpace = declaration.leadingWhiteSpace
-                newDecleration.buildString(DeclarationType.Register, None, declaration.variableType, declarationName)
-                newLines.append(newDecleration)
+                # declarationName = ''
+                # for i in range(declaration.vectorSize()):
+                #     declarationName += declaration.variableName + '_' + str(i)
+                #     if i != declaration.vectorSize() - 1:
+                #         declarationName += ', '
+                # newDecleration = PTXDecleration()
+                # newDecleration.leadingWhiteSpace = declaration.leadingWhiteSpace
+                # newDecleration.buildString(DeclarationType.Register, None, declaration.variableType, declarationName)
+                # newLines.append(newDecleration)
+
+                _, newDeclarations, _, wrapMovs = unwrapp_vector(ptx_shader, declaration.variableName, declaration.variableName)
+                newLines = newDeclarations
 
                 # load into each register
                 for i in range(declaration.vectorSize()):
@@ -141,8 +210,6 @@ def translate_deref_instructions(ptx_shader):
                     newFunctional.leadingWhiteSpace = declaration.leadingWhiteSpace
                     newFunctional.buildString('ld.global%s' % declaration.variableType, (declaration.variableName + '_' + str(i), '[' + ptr + ' + ' + str(int(i * declaration.bitCount() / 8)) + ']'))
                     newLines.append(newFunctional)
-                
-                _, _, _, wrapMovs = unwrapp_vector(ptx_shader, declaration.variableName, declaration.variableName)
                 
                 # insert the new lines into shader
                 ptx_shader.lines[index] = PTXLine('//' + line.comment + '\n')
@@ -165,18 +232,18 @@ def translate_deref_instructions(ptx_shader):
                 newLines = list()
                 
                 # declare new register to load individually
-                declarationName = ''
-                for i in range(declaration.vectorSize()):
-                    declarationName += declaration.variableName + '_' + str(i)
-                    if i != declaration.vectorSize() - 1:
-                        declarationName += ', '
-                newDecleration = PTXDecleration()
-                newDecleration.leadingWhiteSpace = declaration.leadingWhiteSpace
-                newDecleration.buildString(DeclarationType.Register, None, declaration.variableType, declarationName)
-                newLines.append(newDecleration)
+                # declarationName = ''
+                # for i in range(declaration.vectorSize()):
+                #     declarationName += declaration.variableName + '_' + str(i)
+                #     if i != declaration.vectorSize() - 1:
+                #         declarationName += ', '
+                # newDecleration = PTXDecleration()
+                # newDecleration.leadingWhiteSpace = declaration.leadingWhiteSpace
+                # newDecleration.buildString(DeclarationType.Register, None, declaration.variableType, declarationName)
+                # newLines.append(newDecleration)
 
-                _, _, unwrapMovs, _ = unwrapp_vector(ptx_shader, declaration.variableName, declaration.variableName)
-                newLines = newLines + unwrapMovs
+                _, newDeclarations, unwrapMovs, _ = unwrapp_vector(ptx_shader, declaration.variableName, declaration.variableName)
+                newLines = newDeclarations + unwrapMovs
 
                 # load into each register
                 for i in range(declaration.vectorSize()):
@@ -256,12 +323,12 @@ def translate_trace_ray(ptx_shader):
         call_miss.condition = '@!hit'
 
         ptx_shader.lines.insert(index, hitDeclaration)
-        ptx_shader.lines[index + 1:index + 1] = originDeclarations[:3]
-        ptx_shader.lines[index + 4:index + 4] = directionDeclarations[:3]
-        ptx_shader.lines[index + 7:index + 7] = originMovs[:3]
-        ptx_shader.lines[index + 10:index + 10] = directionMovs[:3]
-        ptx_shader.lines.insert(index + 14, call_closest_hit)
-        ptx_shader.lines.insert(index + 15, call_miss)
+        ptx_shader.lines[index + 1:index + 1] = originDeclarations
+        ptx_shader.lines[index + 5:index + 5] = directionDeclarations
+        ptx_shader.lines[index + 9:index + 9] = originMovs[:3]
+        ptx_shader.lines[index + 12:index + 12] = directionMovs[:3]
+        ptx_shader.lines.insert(index + 16, call_closest_hit)
+        ptx_shader.lines.insert(index + 17, call_miss)
 
         print(ptx_shader.lines[index + 2].fullLine)
 
@@ -367,9 +434,11 @@ def  translate_ray_launch_instructions(ptx_shader):
 
 
 def main():
+    unique_ID = 0
     assert len(sys.argv) == 2
     shaderPath = sys.argv[1]
     shader = PTXShader(shaderPath)
+    translate_vector_operands(shader, unique_ID)
     translate_descriptor_set_instructions(shader)
     translate_deref_instructions(shader)
     translate_trace_ray(shader)
