@@ -313,8 +313,13 @@ def translate_decl_var(ptx_shader):
         if line.functionalType != FunctionalType.decl_var:
             continue
 
+        # print(line.fullLine)
+        # print(line.args)
+        # exit(-1)
+
         name, bit_size, vector_number, variable_type, storage_qualifier_type = line.args
         name = '%' + name
+
 
         newReg = PTXDecleration()
         newReg.leadingWhiteSpace = '\t'
@@ -327,7 +332,7 @@ def translate_decl_var(ptx_shader):
         newLine = PTXFunctionalLine()
         newLine.leadingWhiteSpace = '\t'
         newLine.comment = line.comment
-        newLine.buildString('rt_alloc_mem', (name, str(int(int(bit_size) / 8))))
+        newLine.buildString('rt_alloc_mem', (name, str(int(int(bit_size) / 8)), str(storage_qualifier_type)))
 
         new_declerations.append(newReg)
         # new_declerations.append(newSizeSet)
@@ -410,6 +415,17 @@ def translate_image_deref_store(ptx_shader):
         line.buildString(line.functionalType, args)
 
 
+def translate_exit(ptx_shader):
+    for index in range(len(ptx_shader.lines)):
+        line = ptx_shader.lines[index]
+
+        if line.instructionClass != InstructionClass.Functional:
+            continue
+
+        if line.functionalType != FunctionalType.exit:
+            continue
+
+        line.buildString(FunctionalType.ret, ())
 
 
 def main():
@@ -423,6 +439,7 @@ def main():
     translate_decl_var(shader)
     translate_ray_launch_instructions(shader)
     translate_image_deref_store(shader)
+    translate_exit(shader)
 
     translate_vector_operands(shader, unique_ID)
     shader.writeToFile(shaderPath)

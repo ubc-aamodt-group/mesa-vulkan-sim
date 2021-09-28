@@ -169,6 +169,8 @@ class FunctionalType(Enum, metaclass=MetaEnum):
     deref_var = 'deref_var'
     mov = 'mov'
     image_deref_store = 'image_deref_store'
+    exit = 'exit'
+    ret = 'ret'
     Other = auto()
 
 class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line that does sth like mov (eg it's not decleration)
@@ -181,6 +183,8 @@ class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line t
         self.command = command
 
         firstWord = command.split(None, 1)[0]
+        if firstWord[-1] == ';':
+            firstWord = firstWord[:-1]
 
         if firstWord in FunctionalType:
             self.functionalType = FunctionalType[firstWord]
@@ -247,12 +251,16 @@ class PTXShader:
             if ptxLine.instructionClass == InstructionClass.VariableDeclaration and ptxLine.declarationType == DeclarationType.Register:
                 if ptxLine.isVector():
                     self.vectorVariables.append(ptxLine.variableName)
+            # print("#1")
             # print(line)
             # print(ptxLine.instructionClass)
+            if ptxLine.instructionClass == InstructionClass.Functional:
+                print(ptxLine.functionalType)
             # if ptxLine.instructionClass == InstructionClass.Functional:
             #     print(ptxLine.functionalType)
             self.lines.append(ptxLine)
             lineNO += 1
+        # exit(-1)
         f.close()
     
     def findDeclaration(self, name):
