@@ -168,6 +168,7 @@ class FunctionalType(Enum, metaclass=MetaEnum):
     decl_var = 'decl_var'
     deref_var = 'deref_var'
     mov = 'mov'
+    image_deref_store = 'image_deref_store'
     Other = auto()
 
 class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line that does sth like mov (eg it's not decleration)

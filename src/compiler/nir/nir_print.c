@@ -2731,35 +2731,35 @@ print_load_const_instr_as_ptx(nir_load_const_instr *instr, print_state *state, s
    {
       for(int i = 0; i < ptx_vec_len; i++)
       {
-         print_ptx_reg_decl(state, 1, FLOAT, instr->def.bit_size);
-         print_ssa_use_as_ptx(&instr->def, state);
-         if(ptx_vec_len > 1)
-         {
-            switch (i)
-            {
-            case 0:
-               fprintf(fp, "x;");
-               break;
+         // print_ptx_reg_decl(state, 1, FLOAT, instr->def.bit_size);
+         // print_ssa_use_as_ptx(&instr->def, state);
+         // if(ptx_vec_len > 1)
+         // {
+         //    switch (i)
+         //    {
+         //    case 0:
+         //       fprintf(fp, "x;");
+         //       break;
             
-            case 1:
-               fprintf(fp, "y;");
-               break;
+         //    case 1:
+         //       fprintf(fp, "y;");
+         //       break;
             
-            case 2:
-               fprintf(fp, "z;");
-               break;
+         //    case 2:
+         //       fprintf(fp, "z;");
+         //       break;
             
-            case 3:
-               fprintf(fp, "w;");
-               break;
+         //    case 3:
+         //       fprintf(fp, "w;");
+         //       break;
 
-            default:
-               break;
-            }
-         }
+         //    default:
+         //       break;
+         //    }
+         // }
 
 
-         fprintf(fp, "\n\t");
+         // fprintf(fp, "\n\t");
          fprintf(fp, "mov");
          switch (instr->def.bit_size) {
          case 64:
@@ -2785,27 +2785,29 @@ print_load_const_instr_as_ptx(nir_load_const_instr *instr, print_state *state, s
             break;
          }
 
-         switch (i)
-            {
-            case 0:
-               fprintf(fp, "x");
-               break;
-            
-            case 1:
-               fprintf(fp, "y");
-               break;
-            
-            case 2:
-               fprintf(fp, "z");
-               break;
-            
-            case 3:
-               fprintf(fp, "w");
-               break;
+         fprintf(fp, "_%d", i);
 
-            default:
-               break;
-            }
+         // switch (i)
+         //    {
+         //    case 0:
+         //       fprintf(fp, "x");
+         //       break;
+            
+         //    case 1:
+         //       fprintf(fp, "y");
+         //       break;
+            
+         //    case 2:
+         //       fprintf(fp, "z");
+         //       break;
+            
+         //    case 3:
+         //       fprintf(fp, "w");
+         //       break;
+
+         //    default:
+         //       break;
+         //    }
 
          fprintf(fp, ", ");
 
@@ -2857,130 +2859,121 @@ print_load_const_instr_as_ptx(nir_load_const_instr *instr, print_state *state, s
 
 
    // Operand value in vectorized form
-   fprintf(fp, "mov");
+   if(ptx_vec_len == 1)
+   {
+      fprintf(fp, "mov");
+      switch (instr->def.bit_size) {
+      case 64:
+         fprintf(fp, ".f64 ");
+         print_ssa_use_as_ptx(&instr->def, state); //dst
+         break;
+      case 32:
+         fprintf(fp, ".f32 ");
+         print_ssa_use_as_ptx(&instr->def, state); //dst
+         break;
+      case 16:
+         fprintf(fp, ".b16 ");
+         print_ssa_use_as_ptx(&instr->def, state); //dst
+         break;
+      case 8:
+         fprintf(fp, ".b8 ");
+         print_ssa_use_as_ptx(&instr->def, state); //dst
+         fprintf(fp, ", ");
+         break;
+      case 1:
+         fprintf(fp, ".b1 ");
+         print_ssa_use_as_ptx(&instr->def, state); //dst
+         break;
+      }
 
-   // int ptx_vec_len = 1;
-   if (ptx_vec_len == 2){
-      fprintf(fp, ".v2");
-   }
-   else if (ptx_vec_len == 4){
-      fprintf(fp, ".v4");
-   }
-   else if (ptx_vec_len > 4){
-      abort();
-   }
-
-   switch (instr->def.bit_size) {
-   case 64:
-      fprintf(fp, ".f64 ");
-      print_ssa_use_as_ptx(&instr->def, state); //dst
-      break;
-   case 32:
-      fprintf(fp, ".f32 ");
-      print_ssa_use_as_ptx(&instr->def, state); //dst
-      break;
-   case 16:
-      fprintf(fp, ".b16 ");
-      print_ssa_use_as_ptx(&instr->def, state); //dst
-      break;
-   case 8:
-      fprintf(fp, ".b8 ");
-      print_ssa_use_as_ptx(&instr->def, state); //dst
-      fprintf(fp, ", ");
-      break;
-   case 1:
-      fprintf(fp, ".b1 ");
-      print_ssa_use_as_ptx(&instr->def, state); //dst
-      break;
-   }
-
-   if (instr->def.num_components > 1) {
-      fprintf(fp, ", {");
-   }
-   else {
-      fprintf(fp, ", ");
-   }
-
-   for (unsigned i = 0; i < ptx_vec_len; i++) {
-      if (i != 0) {
+      if (instr->def.num_components > 1) {
+         fprintf(fp, ", {");
+      }
+      else {
          fprintf(fp, ", ");
       }
 
-      if(ptx_vec_len == 1) {
-         if (i > instr->def.num_components-1){
-            switch (instr->def.bit_size) {
-            case 64:
-               fprintf(fp, "0D%16" PRIx64, (uint64_t)0); // 0D stands for hex float representation
-               break;
-            case 32:
-               fprintf(fp, "0F%08x", (uint32_t)0); // 0F stands for hex float representation
-               break;
-            case 16:
-               fprintf(fp, "0x%04x /* %f */", (uint16_t)0,
-                     _mesa_half_to_float((uint16_t)0));
-               break;
-            case 8:
-               fprintf(fp, "0x%02x", (uint8_t)0);
-               break;
-            case 1:
-               fprintf(fp, "%s", "0");
-               break;
+      for (unsigned i = 0; i < ptx_vec_len; i++) {
+         if (i != 0) {
+            fprintf(fp, ", ");
+         }
+
+         if(ptx_vec_len == 1) {
+            if (i > instr->def.num_components-1){
+               switch (instr->def.bit_size) {
+               case 64:
+                  fprintf(fp, "0D%16" PRIx64, (uint64_t)0); // 0D stands for hex float representation
+                  break;
+               case 32:
+                  fprintf(fp, "0F%08x", (uint32_t)0); // 0F stands for hex float representation
+                  break;
+               case 16:
+                  fprintf(fp, "0x%04x /* %f */", (uint16_t)0,
+                        _mesa_half_to_float((uint16_t)0));
+                  break;
+               case 8:
+                  fprintf(fp, "0x%02x", (uint8_t)0);
+                  break;
+               case 1:
+                  fprintf(fp, "%s", "0");
+                  break;
+               }
+            }
+            else {
+               switch (instr->def.bit_size) {
+               case 64:
+                  fprintf(fp, "0D%16" PRIx64, instr->value[i].u64); // 0D stands for hex float representation
+                  break;
+               case 32:
+                  fprintf(fp, "0F%08x", instr->value[i].u32); // 0F stands for hex float representation
+                  break;
+               case 16:
+                  fprintf(fp, "0x%04x /* %f */", instr->value[i].u16,
+                        _mesa_half_to_float(instr->value[i].u16));
+                  break;
+               case 8:
+                  fprintf(fp, "0x%02x", instr->value[i].u8);
+                  break;
+               case 1:
+                  fprintf(fp, "%s", instr->value[i].b ? "1" : "0");
+                  break;
+               }
             }
          }
-         else {
-            switch (instr->def.bit_size) {
-            case 64:
-               fprintf(fp, "0D%16" PRIx64, instr->value[i].u64); // 0D stands for hex float representation
-               break;
-            case 32:
-               fprintf(fp, "0F%08x", instr->value[i].u32); // 0F stands for hex float representation
-               break;
-            case 16:
-               fprintf(fp, "0x%04x /* %f */", instr->value[i].u16,
-                     _mesa_half_to_float(instr->value[i].u16));
-               break;
-            case 8:
-               fprintf(fp, "0x%02x", instr->value[i].u8);
-               break;
-            case 1:
-               fprintf(fp, "%s", instr->value[i].b ? "1" : "0");
-               break;
-            }
-         }
-      }
-      else
-      {
-         print_ssa_use_as_ptx(&instr->def, state);
-         switch (i)
+         else
          {
-         case 0:
-            fprintf(fp, "x");
-            break;
-         
-         case 1:
-            fprintf(fp, "y");
-            break;
-         
-         case 2:
-            fprintf(fp, "z");
-            break;
-         
-         case 3:
-            fprintf(fp, "w");
-            break;
+            print_ssa_use_as_ptx(&instr->def, state);
+            switch (i)
+            {
+            case 0:
+               fprintf(fp, "x");
+               break;
+            
+            case 1:
+               fprintf(fp, "y");
+               break;
+            
+            case 2:
+               fprintf(fp, "z");
+               break;
+            
+            case 3:
+               fprintf(fp, "w");
+               break;
 
-         default:
-            break;
+            default:
+               break;
+            }
          }
+            
       }
-         
-   }
 
-   if (instr->def.num_components > 1) {
-      fprintf(fp, "};");
-   }
-   else {
-      fprintf(fp, ";");
+      if (instr->def.num_components > 1) {
+         fprintf(fp, "};");
+      }
+      else {
+         fprintf(fp, ";");
+      }
    }
 
    // for (unsigned i = 0; i < instr->def.num_components; i++) {
