@@ -222,6 +222,18 @@ def translate_deref_instructions(ptx_shader):
                 ptx_shader.lines.remove(line)
                 newLines.append(PTXLine('//' + line.comment + '\n'))
                 ptx_shader.lines[index: index] = newLines
+        
+
+        elif line.functionalType == FunctionalType.deref_var:
+            dst, src, type = line.args
+            
+            declaration, declerationLine = ptx_shader.findDeclaration(dst)
+            assert not declaration.isVector()
+            assert declaration.declarationType == DeclarationType.Register
+            declaration.buildString(DeclarationType.Register, None, '.b64', declaration.variableName)
+
+            line.buildString('mov.b64', (dst, '%' + src))
+
 
         # elif line.functionalType == FunctionalType.mov:
         #     print(line.fullLine)
@@ -257,6 +269,7 @@ def translate_trace_ray(ptx_shader):
         assert len(line.args) == 11
 
         topLevelAS, rayFlags, cullMask, sbtRecordOffset, sbtRecordStride, missIndex, origin, Tmin, direction, Tmax, payload = line.args
+        line.args = line.args[:-1] # MRS_TODO: why there is a payload (in glsl code it is NULL but translated to ssa_88)? and why it gets an error to run?
         args = line.args
 
         # originRegNames, originDeclarations, originMovs, _ = unwrapp_vector(ptx_shader, origin, "trace_ray_" + str(index) + "_origin")
@@ -323,7 +336,7 @@ def translate_decl_var(ptx_shader):
 
         newReg = PTXDecleration()
         newReg.leadingWhiteSpace = '\t'
-        newReg.buildString(DeclarationType.Register, None, '.u64', name)
+        newReg.buildString(DeclarationType.Register, None, '.b64', name)
 
         # newSizeSet = PTXFunctionalLine()
         # newSizeSet.leadingWhiteSpace = '\t'
@@ -332,7 +345,7 @@ def translate_decl_var(ptx_shader):
         newLine = PTXFunctionalLine()
         newLine.leadingWhiteSpace = '\t'
         newLine.comment = line.comment
-        newLine.buildString('rt_alloc_mem', (name, str(int(int(bit_size) / 8)), str(storage_qualifier_type)))
+        newLine.buildString('rt_alloc_mem', (name, str(int(int(bit_size) * int(vector_number) / 8)), str(storage_qualifier_type)))
 
         new_declerations.append(newReg)
         # new_declerations.append(newSizeSet)
