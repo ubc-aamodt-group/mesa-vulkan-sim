@@ -1237,7 +1237,7 @@ anv_cpu_build_acceleration_structures(
 
       struct anv_bvh_node *root;
       if (prim_count <= 1) {
-         /* In this case, we don't actually need Embree to build a tree for us
+         /* In this case, we don't acanv_cpu_build_acceleration_structurestually need Embree to build a tree for us
           * because we only have one leaf.  It's easier to just construct the
           * two nodes we need manually.
           *
@@ -1299,6 +1299,8 @@ anv_cpu_build_acceleration_structures(
       void *root_map = dst_map + bvh.RootNodeOffset;
       build_state.nodes_map = root_map + root_size * 64;
       pack_node(root, true, root_map, &build_state);
+      if (pInfo->type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR)
+         gpgpusim_addTreelets(dst_map);
 
       rtcReleaseBVH(rtc_bvh);
    }
@@ -1384,8 +1386,6 @@ anv_CmdBuildAccelerationStructuresKHR(
                                                ppBuildRangeInfos, false);
       if (result != VK_SUCCESS)
          anv_batch_set_error(&cmd_buffer->batch, result);
-      if (pInfos[0].type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR)
-         gpgpusim_setAccelerationStructure(pInfos[0].dstAccelerationStructure);
       return;
    }
 
