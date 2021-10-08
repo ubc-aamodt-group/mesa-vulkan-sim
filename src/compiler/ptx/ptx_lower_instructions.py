@@ -330,22 +330,24 @@ def translate_decl_var(ptx_shader):
         # print(line.args)
         # exit(-1)
 
-        name, bit_size, vector_number, variable_type, storage_qualifier_type = line.args
+        name, bit_size, vector_number, variable_type, storage_qualifier_type, driver_location, binding = line.args
         name = '%' + name
-
 
         newReg = PTXDecleration()
         newReg.leadingWhiteSpace = '\t'
         newReg.buildString(DeclarationType.Register, None, '.b64', name)
 
-        # newSizeSet = PTXFunctionalLine()
-        # newSizeSet.leadingWhiteSpace = '\t'
-        # newSizeSet.buildString('mov.u32', ('%allocasize', str(int(int(bit_size) / 8))))
 
-        newLine = PTXFunctionalLine()
-        newLine.leadingWhiteSpace = '\t'
-        newLine.comment = line.comment
-        newLine.buildString('rt_alloc_mem', (name, str(int(int(bit_size) * int(vector_number) / 8)), str(storage_qualifier_type)))
+        if int(storage_qualifier_type) == 16: ## uniform type
+            newLine = PTXFunctionalLine()
+            newLine.leadingWhiteSpace = '\t'
+            newLine.comment = line.comment
+            newLine.buildString('load_vulkan_descriptor', (name, driver_location, binding))
+        else:
+            newLine = PTXFunctionalLine()
+            newLine.leadingWhiteSpace = '\t'
+            newLine.comment = line.comment
+            newLine.buildString('rt_alloc_mem', (name, str(int(int(bit_size) * int(vector_number) / 8)), str(storage_qualifier_type)))
 
         new_declerations.append(newReg)
         # new_declerations.append(newSizeSet)

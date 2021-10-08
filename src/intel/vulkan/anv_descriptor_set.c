@@ -1611,6 +1611,16 @@ static void update_gpgpusim_descriptor_sets(struct anv_descriptor_set *set)
             struct anv_sampled_image_descriptor *desc_data = desc_map;
             uint32_t count = MAX2(1, bind_layout->max_plane_count);
          }
+
+         else if(bind_layout->data & ANV_DESCRIPTOR_STORAGE_IMAGE) {
+            struct anv_storage_image_descriptor* desc_data = desc_map;
+            struct anv_image_view *image_view = set->descriptors[i].image_view;
+            if(image_view == NULL)
+               break;
+            struct anv_image * image = image_view->image;
+            void * address = anv_address_map(image->planes[0].address);
+            gpgpusim_setDescriptorSet(0, i, address, 0, set->descriptors[i].type);
+         }
          // else{
          //    assert(0);
          // }
