@@ -188,6 +188,7 @@ glsl_base_type_get_bit_size(const enum glsl_base_type base_type)
    case GLSL_TYPE_UINT64:
    case GLSL_TYPE_IMAGE:
    case GLSL_TYPE_SAMPLER:
+   case GLSL_TYPE_STRUCT:
       return 64;
 
    default:

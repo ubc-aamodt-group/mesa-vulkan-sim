@@ -1,17 +1,20 @@
 #ifndef GPGPUSIM_CALLS_FROM_MESA_H
 #define GPGPUSIM_CALLS_FROM_MESA_H
 
+#include "vulkan/vulkan_core.h"
+
 //extern void gpgpusim_init();
 extern void gpgpusim_setPipelineInfo(VkRayTracingPipelineCreateInfoKHR* pCreateInfos);
 extern void gpgpusim_setGeometries(const VkAccelerationStructureGeometryKHR* pGeometries, uint32_t geometryCount);
 extern void gpgpusim_addTreelets(VkAccelerationStructureKHR accelerationStructure);
 extern void gpgpusim_testTraversal(struct anv_bvh_node* root);
+extern uint32_t gpgpusim_registerShader(char * shaderPath, uint32_t shader_type);
 
 extern void gpgpusim_vkCmdTraceRaysKHR(
-                      const VkStridedDeviceAddressRegionKHR *raygen_sbt,
-                      const VkStridedDeviceAddressRegionKHR *miss_sbt,
-                      const VkStridedDeviceAddressRegionKHR *hit_sbt,
-                      const VkStridedDeviceAddressRegionKHR *callable_sbt,
+                      void *raygen_sbt,
+                      void *miss_sbt,
+                      void *hit_sbt,
+                      void *callable_sbt,
                       bool is_indirect,
                       uint32_t launch_width,
                       uint32_t launch_height,

@@ -107,4 +107,18 @@ anv_address_map(struct anv_address addr)
    return addr.bo->map + addr.offset;
 }
 
+struct GENERAL_SBT {
+    uint64_t General;
+};
+
+struct TRIANGLES_SBT {
+   uint64_t ClosestHit;
+   uint64_t AnyHit;
+};
+
+struct PROCEDURAL_SBT {
+   uint64_t ClosestHit;
+   uint64_t Intersection;
+};
+
 #endif /* ANV_PUBLIC_H */

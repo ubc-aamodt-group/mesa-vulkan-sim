@@ -2428,6 +2428,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
                fprintf(fp, ".b%d ", num_bits); // i guess
                break;
             case UNDEF: // ignore this
+               // fprintf(fp, " ");
                break;
          }
 
@@ -3365,7 +3366,7 @@ print_var_decl_as_ptx(nir_variable *var, print_state *state)
    // PTX Code
    // The variables here are probably treated as magic variables
    fprintf(fp, "decl_var %s, %d, %d, %d, %d, %u, %u;\t", var->name, glsl_get_bit_size(var->type), glsl_get_vector_elements(var->type), 
-                  glsl_base_type_to_val_type(glsl_get_base_type(var->type)), var->data.mode, var->data.driver_location, var->data.binding);
+                  glsl_get_base_type(var->type), var->data.mode, var->data.driver_location, var->data.binding);
 
    // if ((var->data.mode == nir_var_shader_temp) ||
    //       (var->data.mode == nir_var_shader_call_data) ||

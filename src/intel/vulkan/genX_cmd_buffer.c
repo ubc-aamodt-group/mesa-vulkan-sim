@@ -36,6 +36,7 @@
 #include "genxml/gen_rt_pack.h"
 
 #include "gpgpusim_calls_from_mesa.h"
+#include "anv_public.h"
 
 /* We reserve :
  *    - GPR 14 for secondary command buffer returns
@@ -4797,6 +4798,29 @@ vk_sdar_to_shader_table(const VkStridedDeviceAddressRegionKHR *region)
    };
 }
 
+static void *find_host_address(struct anv_device *device, const VkDeviceAddress addr)
+{
+   pthread_mutex_lock(&device->mutex);
+   struct anv_bo *bo = NULL;
+   list_for_each_entry(struct anv_device_memory, mem,
+                     &device->memory_objects, link) {
+      if (!(mem->bo->flags & EXEC_OBJECT_PINNED))
+         continue;
+
+      if (mem->bo->offset <= addr &&
+         addr < mem->bo->offset + mem->bo->size) {
+         bo = mem->bo;
+         break;
+      }
+   }
+   pthread_mutex_unlock(&device->mutex);
+
+   if (bo == NULL)
+      return NULL;
+
+   return bo->map + (addr - bo->offset);
+}
+
 static void
 cmd_buffer_trace_rays(struct anv_cmd_buffer *cmd_buffer,
                       const VkStridedDeviceAddressRegionKHR *raygen_sbt,
@@ -4809,7 +4833,11 @@ cmd_buffer_trace_rays(struct anv_cmd_buffer *cmd_buffer,
                       uint32_t launch_depth,
                       uint64_t launch_size_addr)
 {
-    gpgpusim_vkCmdTraceRaysKHR(raygen_sbt, miss_sbt, hit_sbt, callable_sbt,
+   void *raygen_addr = find_host_address(cmd_buffer->device, raygen_sbt->deviceAddress);
+   void *miss_addr = find_host_address(cmd_buffer->device, miss_sbt->deviceAddress);
+   void *hit_addr = find_host_address(cmd_buffer->device, hit_sbt->deviceAddress);
+   void *callable_addr = find_host_address(cmd_buffer->device, callable_sbt->deviceAddress);
+   gpgpusim_vkCmdTraceRaysKHR(raygen_addr, miss_addr, hit_addr, callable_addr,
             is_indirect, launch_width, launch_height, launch_depth, launch_size_addr);
    // struct anv_cmd_ray_tracing_state *rt = &cmd_buffer->state.rt;
    // struct anv_ray_tracing_pipeline *pipeline = rt->pipeline;

@@ -27,6 +27,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+#include "gpgpusim_calls_from_mesa.h"
+
 #include "util/mesa-sha1.h"
 #include "util/os_time.h"
 #include "common/gen_l3_config.h"
@@ -2523,13 +2525,14 @@ deep_copy_ray_tracing_create_info(VkRayTracingPipelineCreateInfoKHR *dst,
 }
 
 static bool gpgpusim_initialized = false;
+static int shader_ID = 0;
 
-static void translate_nir_to_ptx(nir_shader *shader)
+static void translate_nir_to_ptx(nir_shader *shader, char* shaderPath)
 {
    FILE *pFile;
    char *mesa_root = getenv("MESA_ROOT");
    char *filePath = "gpgpusimShaders/";
-   char *fileName;
+   char fileName[50];
    char *label; // in case there are multiple variants of the same shader
    char *extension = ".ptx";
    
@@ -2540,29 +2543,29 @@ static void translate_nir_to_ptx(nir_shader *shader)
 
    switch (shader->info.stage) {
       case MESA_SHADER_RAYGEN:
-         fileName = "MESA_SHADER_RAYGEN";
+         strcpy(fileName, "MESA_SHADER_RAYGEN");
          break;
       case MESA_SHADER_ANY_HIT:
-         fileName = "MESA_SHADER_ANY_HIT";
+         strcpy(fileName, "MESA_SHADER_ANY_HIT");
          break;
       case MESA_SHADER_CLOSEST_HIT:
-         fileName = "MESA_SHADER_CLOSEST_HIT";
+         strcpy(fileName, "MESA_SHADER_CLOSEST_HIT");
          break;
       case MESA_SHADER_MISS:
-         fileName = "MESA_SHADER_MISS";
+         strcpy(fileName, "MESA_SHADER_MISS");
          break;
       case MESA_SHADER_INTERSECTION:
-         fileName = "MESA_SHADER_INTERSECTION";
+         strcpy(fileName, "MESA_SHADER_INTERSECTION");
          break;
       case MESA_SHADER_CALLABLE:
-         fileName = "MESA_SHADER_CALLABLE";
+         strcpy(fileName, "MESA_SHADER_CALLABLE");
          break;
       default:
          unreachable("Invalid shader type");
    }
 
    char fullPath[200];
-   snprintf(fullPath, sizeof(fullPath), "%s%s%s_%s%s", mesa_root, filePath, fileName, label, extension);
+   snprintf(fullPath, sizeof(fullPath), "%s%s%s_%d%s", mesa_root, filePath, fileName, shader_ID++, extension);
    
    char command[200];
 
@@ -2578,6 +2581,8 @@ static void translate_nir_to_ptx(nir_shader *shader)
    pFile = fopen (fullPath , "w");
    printf("GPGPU-SIM VULKAN: Translating NIR %s to PTX\n", fileName);
    nir_translate_shader_to_ptx(shader, pFile, fullPath);
+
+   strcpy(shaderPath, fullPath);
 
    if(1){ // debugging: print out current nir shader
       nir_print_shader(shader, stderr);
@@ -2646,7 +2651,9 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
 
       // Insert NIR to PTX translator here for each different ray tracing shaders, the lowered shaders under have too many intel specific intrinsics
       if(stages[i].stage >= MESA_SHADER_RAYGEN && stages[i].stage <= MESA_SHADER_CALLABLE) { // shader type from 8 to 13
-         translate_nir_to_ptx(stages[i].nir);
+         char shaderPath[200];
+         translate_nir_to_ptx(stages[i].nir, shaderPath);
+         stages[i].bin = (void *)gpgpusim_registerShader(shaderPath, (uint32_t)(stages[i].stage));
       }
 
       anv_pipeline_lower_nir(&pipeline->base, pipeline_ctx, &stages[i], layout);
@@ -2663,8 +2670,8 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
 
    //compile_trivial_return_shader(pipeline);
 
-   // uint32_t stack_max[MESA_VULKAN_SHADER_STAGES] = {};
-   //
+   uint32_t stack_max[MESA_VULKAN_SHADER_STAGES] = {};
+   
    // for (uint32_t i = 0; i < info->stageCount; i++) {
    //    if (!stages[i].entrypoint)
    //       continue;
@@ -2721,67 +2728,67 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
    //
    //    stages[i].feedback.duration += os_time_get_nano() - stage_start;
    // }
-   //
-   // for (uint32_t i = 0; i < info->groupCount; i++) {
-   //    const VkRayTracingShaderGroupCreateInfoKHR *ginfo = &info->pGroups[i];
-   //    struct anv_rt_shader_group *group = &pipeline->groups[i];
-   //    group->type = ginfo->type;
-   //    switch (ginfo->type) {
-   //    case VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR:
-   //       assert(ginfo->generalShader < info->stageCount);
-   //       group->general = stages[ginfo->generalShader].bin;
-   //       break;
-   //
-   //    case VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR:
-   //       if (ginfo->anyHitShader < info->stageCount)
-   //          group->any_hit = stages[ginfo->anyHitShader].bin;
-   //
-   //       if (ginfo->closestHitShader < info->stageCount)
-   //          group->closest_hit = stages[ginfo->closestHitShader].bin;
-   //       break;
-   //
-   //    case VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR: {
-   //       if (ginfo->closestHitShader < info->stageCount)
-   //          group->closest_hit = stages[ginfo->closestHitShader].bin;
-   //
-   //       /* The any-hit and intersection shader have to be combined */
-   //       void *group_ctx = ralloc_context(pipeline_ctx);
-   //
-   //       uint32_t intersection_idx = info->pGroups[i].intersectionShader;
-   //       assert(intersection_idx < info->stageCount);
-   //       nir_shader *intersection =
-   //          nir_shader_clone(group_ctx, stages[intersection_idx].nir);
-   //
-   //       uint32_t any_hit_idx = info->pGroups[i].anyHitShader;
-   //       const nir_shader *any_hit = NULL;
-   //       if (any_hit_idx < info->stageCount)
-   //          any_hit = stages[any_hit_idx].nir;
-   //
-   //       brw_nir_lower_combined_intersection_any_hit(intersection, any_hit,
-   //                                                   devinfo);
-   //
-   //       result = compile_upload_rt_shader(pipeline, intersection,
-   //                                         &stages[intersection_idx],
-   //                                         &group->intersection,
-   //                                         group_ctx);
-   //       if (result != VK_SUCCESS) {
-   //          ralloc_free(pipeline_ctx);
-   //          return result;
-   //       }
-   //
-   //       uint32_t stack_size =
-   //          brw_bs_prog_data_const(group->intersection->prog_data)->max_stack_size;
-   //       stack_max[MESA_SHADER_INTERSECTION] =
-   //          MAX2(stack_max[MESA_SHADER_INTERSECTION], stack_size);
-   //
-   //       ralloc_free(group_ctx);
-   //       break;
-   //    }
-   //
-   //    default:
-   //       unreachable("Invalid ray tracing shader group type");
-   //    }
-   // }
+   
+   for (uint32_t i = 0; i < info->groupCount; i++) {
+      const VkRayTracingShaderGroupCreateInfoKHR *ginfo = &info->pGroups[i];
+      struct anv_rt_shader_group *group = &pipeline->groups[i];
+      group->type = ginfo->type;
+      switch (ginfo->type) {
+      case VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR:
+         assert(ginfo->generalShader < info->stageCount);
+         group->general = stages[ginfo->generalShader].bin;
+         break;
+   
+      case VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR:
+         if (ginfo->anyHitShader < info->stageCount)
+            group->any_hit = stages[ginfo->anyHitShader].bin;
+   
+         if (ginfo->closestHitShader < info->stageCount)
+            group->closest_hit = stages[ginfo->closestHitShader].bin;
+         break;
+   
+      case VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR: {
+         if (ginfo->closestHitShader < info->stageCount)
+            group->closest_hit = stages[ginfo->closestHitShader].bin;
+   
+         /* The any-hit and intersection shader have to be combined */
+         void *group_ctx = ralloc_context(pipeline_ctx);
+   
+         uint32_t intersection_idx = info->pGroups[i].intersectionShader;
+         assert(intersection_idx < info->stageCount);
+         nir_shader *intersection =
+            nir_shader_clone(group_ctx, stages[intersection_idx].nir);
+   
+         uint32_t any_hit_idx = info->pGroups[i].anyHitShader;
+         const nir_shader *any_hit = NULL;
+         if (any_hit_idx < info->stageCount)
+            any_hit = stages[any_hit_idx].nir;
+   
+         brw_nir_lower_combined_intersection_any_hit(intersection, any_hit,
+                                                     devinfo);
+   
+         result = compile_upload_rt_shader(pipeline, intersection,
+                                           &stages[intersection_idx],
+                                           &group->intersection,
+                                           group_ctx);
+         if (result != VK_SUCCESS) {
+            ralloc_free(pipeline_ctx);
+            return result;
+         }
+   
+         uint32_t stack_size =
+            brw_bs_prog_data_const(group->intersection->prog_data)->max_stack_size;
+         stack_max[MESA_SHADER_INTERSECTION] =
+            MAX2(stack_max[MESA_SHADER_INTERSECTION], stack_size);
+   
+         ralloc_free(group_ctx);
+         break;
+      }
+   
+      default:
+         unreachable("Invalid ray tracing shader group type");
+      }
+   }
 
    ralloc_free(pipeline_ctx);
 

@@ -2717,40 +2717,43 @@ ray_tracing_pipeline_create(
       return result;
    }
 
-   // for (uint32_t i = 0; i < pipeline->group_count; i++) {
-   //    struct anv_rt_shader_group *group = &pipeline->groups[i];
-   //
-   //    switch (group->type) {
-   //    case VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR: {
-   //       struct GEN_RT_GENERAL_SBT_HANDLE sh = {};
-   //       sh.General = anv_shader_bin_get_bsr(group->general, 32);
-   //       GEN_RT_GENERAL_SBT_HANDLE_pack(NULL, group->handle, &sh);
-   //       break;
-   //    }
-   //
-   //    case VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR: {
-   //       struct GEN_RT_TRIANGLES_SBT_HANDLE sh = {};
-   //       if (group->closest_hit)
-   //          sh.ClosestHit = anv_shader_bin_get_bsr(group->closest_hit, 32);
-   //       if (group->any_hit)
-   //          sh.AnyHit = anv_shader_bin_get_bsr(group->any_hit, 24);
-   //       GEN_RT_TRIANGLES_SBT_HANDLE_pack(NULL, group->handle, &sh);
-   //       break;
-   //    }
-   //
-   //    case VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR: {
-   //       struct GEN_RT_PROCEDURAL_SBT_HANDLE sh = {};
-   //       if (group->closest_hit)
-   //          sh.ClosestHit = anv_shader_bin_get_bsr(group->closest_hit, 32);
-   //       sh.Intersection = anv_shader_bin_get_bsr(group->intersection, 24);
-   //       GEN_RT_PROCEDURAL_SBT_HANDLE_pack(NULL, group->handle, &sh);
-   //       break;
-   //    }
-   //
-   //    default:
-   //       unreachable("Invalid shader group type");
-   //    }
-   // }
+   for (uint32_t i = 0; i < pipeline->group_count; i++) {
+      struct anv_rt_shader_group *group = &pipeline->groups[i];
+   
+      switch (group->type) {
+      case VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR: {
+         struct GENERAL_SBT sh;
+         sh.General = (uint64_t)(group->general);
+         // GEN_RT_GENERAL_SBT_HANDLE_pack(NULL, group->handle, (struct GEN_RT_GENERAL_SBT_HANDLE*)&sh);
+         memcpy(group->handle, &sh, sizeof(struct GENERAL_SBT));
+         break;
+      }
+   
+      case VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR: {
+         struct TRIANGLES_SBT sh;
+         if (group->closest_hit)
+            sh.ClosestHit = (uint64_t)(group->closest_hit);
+         if (group->any_hit)
+            sh.AnyHit = (uint64_t)(group->any_hit);
+         // GEN_RT_TRIANGLES_SBT_HANDLE_pack(NULL, group->handle, (struct GEN_RT_TRIANGLES_SBT_HANDLE*)&sh);
+         memcpy(group->handle, &sh, sizeof(struct TRIANGLES_SBT));
+         break;
+      }
+   
+      case VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR: {
+         struct PROCEDURAL_SBT sh;
+         if (group->closest_hit)
+            sh.ClosestHit = (uint64_t)(group->closest_hit);
+         sh.Intersection = (uint64_t)(group->intersection);
+         // GEN_RT_PROCEDURAL_SBT_HANDLE_pack(NULL, group->handle, (struct GEN_RT_PROCEDURAL_SBT_HANDLE*)&sh);
+         memcpy(group->handle, &sh, sizeof(struct PROCEDURAL_SBT));
+         break;
+      }
+   
+      default:
+         unreachable("Invalid shader group type");
+      }
+   }
 
    gpgpusim_setPipelineInfo(pCreateInfo);
    *pPipeline = anv_pipeline_to_handle(&pipeline->base);
