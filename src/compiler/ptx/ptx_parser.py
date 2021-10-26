@@ -94,6 +94,9 @@ class PTXDecleration (PTXLine):
             self.parse(self.command)
     
     def parse(self, command):
+        print('###')
+        print(command)
+        print('###')
         self.command = command
         firstWord = command.split(None, 1)[0]
         if firstWord == '.reg':
@@ -171,6 +174,7 @@ class FunctionalType(Enum, metaclass=MetaEnum):
     image_deref_store = 'image_deref_store'
     exit = 'exit'
     ret = 'ret'
+    phi = 'phi'
     Other = auto()
 
 class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line that does sth like mov (eg it's not decleration)
@@ -232,6 +236,18 @@ class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line t
         self.args = args
         self.command += ' ' + ', '.join(args)
         super().buildString()
+    
+
+    def is_load_const(self):
+        if self.functionalType != FunctionalType.mov:
+            return False
+        if len(self.args) != 2:
+            return False
+        if self.args[0][0] != '%':
+            return False
+        if self.args[1][0] == '%':
+            return False
+        return True
 
 
 class PTXEntryPoint (PTXLine):
@@ -246,7 +262,7 @@ class PTXShader:
         self.lines = []
         self.vectorVariables = list()
         for line in f:
-            # print('parsing line %s: %s' % (lineNO, line))
+            print('parsing line %s: %s' % (lineNO, line))
             ptxLine = PTXLine.createNewLine(line)
             if ptxLine.instructionClass == InstructionClass.VariableDeclaration and ptxLine.declarationType == DeclarationType.Register:
                 if ptxLine.isVector():
@@ -276,3 +292,41 @@ class PTXShader:
         for line in self.lines:
             f.write(line.fullLine)
         f.close()
+    
+    def addToEndOfBlock(self, ptxLines, blockName):
+        index = 0
+        for index in range(len(self.lines)):
+            line = self.lines[index]
+            if blockName in line.fullLine and 'end_block' in line.fullLine:
+                break
+        
+        while index > 0 and self.lines[index - 1].instructionClass == InstructionClass.Empty:
+            index -= 1
+        
+        self.lines[index:index] = ptxLines
+    
+
+    def addToStartOfBlock(self, ptxLines, blockName):
+        index = 0
+        for index in range(len(self.lines)):
+            line = self.lines[index]
+            if blockName in line.fullLine and 'start_block' in line.fullLine:
+                break
+        
+        while index < len(self.lines) - 1 and self.lines[index + 1].instructionClass == InstructionClass.Empty:
+            index += 1
+        
+        self.lines[index:index] = ptxLines
+    
+
+    def addToStart(self, ptxLines):
+        index = 0
+        for index in range(len(self.lines)):
+            line = self.lines[index]
+            if 'start_block' in line.fullLine:
+                break
+        
+        while index < len(self.lines) - 1 and self.lines[index + 1].instructionClass == InstructionClass.Empty:
+            index += 1
+        
+        self.lines[index:index] = ptxLines

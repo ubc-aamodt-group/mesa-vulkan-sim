@@ -443,6 +443,53 @@ def translate_exit(ptx_shader):
         line.buildString(FunctionalType.ret, ())
 
 
+def translate_phi(ptx_shader):
+    for index in range(len(ptx_shader.lines)):
+        line = ptx_shader.lines[index]
+        if line.instructionClass != InstructionClass.Functional:
+            continue
+
+        if line.functionalType != FunctionalType.phi:
+            continue
+
+        dst, blockName0, src0, blockName1, src1 = line.args
+        
+        dstDecleration, dstIndex = ptx_shader.findDeclaration(dst)
+        src0Decleration, _ = ptx_shader.findDeclaration(src0)
+        src1Decleration, _ = ptx_shader.findDeclaration(src1)
+
+        if src0Decleration.variableType == src1Decleration.variableType:
+            variableType = src0Decleration.variableType
+        else: # this happens because of load_const types are unknown
+            if src0Decleration.variableType[0:2] == '.f':
+                variableType = src1Decleration.variableType
+            elif src1Decleration.variableType[0:2] == '.f':
+                variableType = src0Decleration.variableType
+            else:
+                assert 0
+
+        dstDecleration.buildString(dstDecleration.declarationType, dstDecleration.vector, variableType, dstDecleration.variableName)
+
+        src0Mov = PTXFunctionalLine()
+        src0Mov.leadingWhiteSpace = src0Decleration.leadingWhiteSpace
+        src0Mov.comment = line.comment
+        src0Mov.buildString('mov%s' % variableType, (dst, src0))
+
+        src1Mov = PTXFunctionalLine()
+        src1Mov.leadingWhiteSpace = src1Decleration.leadingWhiteSpace
+        src1Mov.comment = line.comment
+        src1Mov.buildString('mov%s' % variableType, (dst, src1))
+
+
+        ptx_shader.lines.remove(dstDecleration)
+        ptx_shader.lines.remove(line)
+
+        ptx_shader.addToStart((dstDecleration, ))
+        ptx_shader.addToEndOfBlock((src0Mov, ), blockName0)
+        ptx_shader.addToEndOfBlock((src1Mov, ), blockName1)
+
+
+
 def main():
     unique_ID = 0
     assert len(sys.argv) == 2
@@ -455,6 +502,7 @@ def main():
     translate_ray_launch_instructions(shader)
     translate_image_deref_store(shader)
     translate_exit(shader)
+    translate_phi(shader)
 
     translate_vector_operands(shader, unique_ID)
     shader.writeToFile(shaderPath)
