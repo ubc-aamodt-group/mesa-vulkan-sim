@@ -169,7 +169,7 @@ def translate_deref_instructions(ptx_shader):
             line.buildString('add.u64', (dst, src, offset))
         
         elif line.functionalType == FunctionalType.deref_array:
-            dst, need_deref, src, arrayIndex, arrayStride, type = line.args
+            dst, need_deref, src, arrayIndex, arrayStride, baseType, type = line.args
 
             declaration, _ = ptx_shader.findDeclaration(dst)
             declaration.buildString(declaration.declarationType, None, '.b64', declaration.variableName)
@@ -357,18 +357,21 @@ def translate_decl_var(ptx_shader):
     for decleration in old_declerations:
         ptx_shader.lines.remove(decleration)
     
-    for index in range(len(ptx_shader.lines)):
-        line = ptx_shader.lines[index]
-        if line.instructionClass != InstructionClass.EntryPoint:
-            continue
-        if 'main' not in line.fullLine:
-            continue
+
+    ptx_shader.addToStart(new_declerations)
+    
+    # for index in range(len(ptx_shader.lines)):
+    #     line = ptx_shader.lines[index]
+    #     if line.instructionClass != InstructionClass.EntryPoint:
+    #         continue
+    #     if 'main' not in line.fullLine:
+    #         continue
         
-        index += 1
-        for decleration in new_declerations:
-            ptx_shader.lines.insert(index + 1, decleration)
-            index += 1
-        break
+    #     index += 1
+    #     for decleration in new_declerations:
+    #         ptx_shader.lines.insert(index + 1, decleration)
+    #         index += 1
+    #     break
 
 
 def  translate_ray_launch_instructions(ptx_shader):
@@ -493,19 +496,19 @@ def translate_phi(ptx_shader):
 def main():
     unique_ID = 0
     assert len(sys.argv) == 2
-    shaderPath = sys.argv[1]
-    shader = PTXShader(shaderPath)
-    translate_descriptor_set_instructions(shader)
-    translate_deref_instructions(shader)
-    translate_trace_ray(shader)
-    translate_decl_var(shader)
-    translate_ray_launch_instructions(shader)
-    translate_image_deref_store(shader)
-    translate_exit(shader)
-    translate_phi(shader)
+    # shaderPath = sys.argv[1]
+    # shader = PTXShader(shaderPath)
+    # translate_descriptor_set_instructions(shader)
+    # translate_deref_instructions(shader)
+    # translate_trace_ray(shader)
+    # translate_decl_var(shader)
+    # translate_ray_launch_instructions(shader)
+    # translate_image_deref_store(shader)
+    # translate_exit(shader)
+    # translate_phi(shader)
 
-    translate_vector_operands(shader, unique_ID)
-    shader.writeToFile(shaderPath)
+    # translate_vector_operands(shader, unique_ID)
+    # shader.writeToFile(shaderPath)
 
 
 main()

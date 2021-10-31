@@ -320,13 +320,23 @@ class PTXShader:
     
 
     def addToStart(self, ptxLines):
-        index = 0
         for index in range(len(self.lines)):
             line = self.lines[index]
-            if 'start_block' in line.fullLine:
-                break
-        
-        while index < len(self.lines) - 1 and self.lines[index + 1].instructionClass == InstructionClass.Empty:
+            if line.instructionClass != InstructionClass.EntryPoint:
+                continue
+            if 'main' not in line.fullLine:
+                continue
+            
             index += 1
+            self.lines[index:index] = ptxLines
+
+        # index = 0
+        # for index in range(len(self.lines)):
+        #     line = self.lines[index]
+        #     if 'start_block' in line.fullLine:
+        #         break
         
-        self.lines[index:index] = ptxLines
+        # while index < len(self.lines) - 1 and self.lines[index + 1].instructionClass == InstructionClass.Empty:
+        #     index += 1
+        
+        # self.lines[index:index] = ptxLines

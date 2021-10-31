@@ -1701,6 +1701,7 @@ typedef enum {
    INT,  // signed int
    FLOAT,
    BITS,
+   PREDICATE,
    UNDEF
 } val_type;
 
@@ -1924,6 +1925,10 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
       }
       fprintf(fp, "%s ", info->name); // Intrinsic function name
    }
+   
+   // fprintf(fp, "%s%s, %d", is_parent_pointer ? ", ptr, " : ", not_ptr, ",
+   //            glsl_get_struct_elem_name(parent->type, instr->strct.index), glsl_get_struct_field_offset(parent->type, instr->strct.index));
+
    else if (!strcmp(info->name, "store_deref")){ // get address / pointer of a variable used for writing / storing
       if (info->has_dest) {
          ssa_register_info[instr->dest.ssa.index].type = FLOAT;
@@ -2397,51 +2402,50 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "ige")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
-         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, INT, instr->dest.dest.ssa.bit_size);
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, BITS, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";");
          fprintf(fp, "\n");
          print_tabs(tabs, fp);
+         fprintf(fp, "setp.ge.s%d ", instr->src[0].src.ssa->bit_size);
 
-         fprintf(fp, "setp.ge.s%d ", instr->dest.dest.ssa.bit_size);
-
-         ssa_register_info[instr->dest.dest.ssa.index].type = INT;
+         ssa_register_info[instr->dest.dest.ssa.index].type = BITS;
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "ieq")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
-         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, INT, instr->dest.dest.ssa.bit_size);
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, BITS, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";");
          fprintf(fp, "\n");
          print_tabs(tabs, fp);
 
-         fprintf(fp, "setp.eq.s%d ", instr->dest.dest.ssa.bit_size);
+         fprintf(fp, "setp.eq.s%d ", instr->src[0].src.ssa->bit_size);
 
-         ssa_register_info[instr->dest.dest.ssa.index].type = INT;
+         ssa_register_info[instr->dest.dest.ssa.index].type = BITS;
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "ine")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
-         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, INT, instr->dest.dest.ssa.bit_size);
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, BITS, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";");
          fprintf(fp, "\n");
          print_tabs(tabs, fp);
 
-         fprintf(fp, "setp.ne.s%d ", instr->dest.dest.ssa.bit_size);
+         fprintf(fp, "setp.ne.s%d ", instr->src[0].src.ssa->bit_size);
 
-         ssa_register_info[instr->dest.dest.ssa.index].type = INT;
+         ssa_register_info[instr->dest.dest.ssa.index].type = BITS;
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "flt")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
-         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, FLOAT, instr->dest.dest.ssa.bit_size);
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, BITS, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";");
          fprintf(fp, "\n");
          print_tabs(tabs, fp);
 
-         fprintf(fp, "setp.lt.f%d ", instr->dest.dest.ssa.bit_size);
+         fprintf(fp, "setp.lt.f%d ", instr->src[0].src.ssa->bit_size);
 
-         ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
+         ssa_register_info[instr->dest.dest.ssa.index].type = BITS;
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "fsqrt")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
@@ -2555,6 +2559,51 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
 }
 
 
+static const char*
+glsl_base_type_to_ptx_type(enum glsl_base_type glsl_type)
+{
+   switch(glsl_type)
+   {
+      case GLSL_TYPE_UINT:
+         return "u32";
+      case GLSL_TYPE_INT:
+         return "s32";
+      case GLSL_TYPE_FLOAT:
+         return "f32";
+      case GLSL_TYPE_FLOAT16:
+         return "f16";
+      case GLSL_TYPE_DOUBLE:
+         return "f64";
+      case GLSL_TYPE_UINT8:
+         return "u8";
+      case GLSL_TYPE_INT8:
+         return "s8";
+      case GLSL_TYPE_UINT16:
+         return "u16";
+      case GLSL_TYPE_INT16:
+         return "s16";
+      case GLSL_TYPE_UINT64:
+         return "u64";
+      case GLSL_TYPE_INT64:
+         return "s64";
+      case GLSL_TYPE_BOOL:
+      case GLSL_TYPE_SAMPLER:
+      case GLSL_TYPE_IMAGE:
+      case GLSL_TYPE_ATOMIC_UINT:
+      case GLSL_TYPE_STRUCT:
+      case GLSL_TYPE_INTERFACE:
+      case GLSL_TYPE_ARRAY:
+      case GLSL_TYPE_VOID:
+      case GLSL_TYPE_SUBROUTINE:
+      case GLSL_TYPE_FUNCTION:
+      case GLSL_TYPE_ERROR:
+      default:
+         assert(0);
+         return NULL;
+   }
+}
+
+
 static void
 print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_state *state)
 {
@@ -2618,15 +2667,17 @@ print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_st
    case nir_deref_type_struct:
       //fprintf(fp, "%s%s", is_parent_pointer ? "->" : ".",
       //        glsl_get_struct_elem_name(parent->type, instr->strct.index));
-      fprintf(fp, "%s%s, %d", is_parent_pointer ? ", ptr, " : ", not_ptr, ",
-              glsl_get_struct_elem_name(parent->type, instr->strct.index), glsl_get_struct_field_offset(parent->type, instr->strct.index));
+      fprintf(fp, "%s%s, %d, %s", is_parent_pointer ? ", ptr, " : ", not_ptr, ",
+              glsl_get_struct_elem_name(parent->type, instr->strct.index), glsl_get_struct_field_offset(parent->type, instr->strct.index),
+              glsl_base_type_to_ptx_type(glsl_get_base_type(parent->type)));
       break;
 
    case nir_deref_type_array:
    case nir_deref_type_ptr_as_array: {
       if (nir_src_is_const(instr->arr.index)) {
          //fprintf(fp, "[%"PRId64"]", nir_src_as_int(instr->arr.index));
-         fprintf(fp, ", %"PRId64", %u", nir_src_as_int(instr->arr.index), nir_deref_instr_array_stride(instr));
+         fprintf(fp, ", %"PRId64", %u, %s", nir_src_as_int(instr->arr.index), nir_deref_instr_array_stride(instr), 
+            glsl_base_type_to_ptx_type(glsl_get_base_type(parent->type)));
       } else {
          assert(0); //unimplemented. need to calculate array index before accessing?
          fprintf(fp, "[");
@@ -3218,7 +3269,7 @@ print_phi_instr_as_ptx(nir_phi_instr *instr, print_state *state, ssa_reg_info *s
 {
    FILE *fp = state->fp;
 
-   // val_type type = UNDEF;
+   val_type type = BITS; //TODO: fix this
    // nir_foreach_phi_src(src, instr) {
    //    if(type == UNDEF)
    //       type = ssa_register_info[src->src.ssa->index].type;
@@ -3230,7 +3281,7 @@ print_phi_instr_as_ptx(nir_phi_instr *instr, print_state *state, ssa_reg_info *s
    //    }
    // }
 
-   print_ptx_reg_decl(state, instr->dest.ssa.num_components, UNDEF, instr->dest.ssa.bit_size);
+   print_ptx_reg_decl(state, instr->dest.ssa.num_components, type, instr->dest.ssa.bit_size);
    print_dest_as_ptx_no_pos(&instr->dest, state);
    fprintf(fp, ";");
    fprintf(fp, "\n");
@@ -3246,8 +3297,12 @@ print_phi_instr_as_ptx(nir_phi_instr *instr, print_state *state, ssa_reg_info *s
       fprintf(fp, "block_%u, ", src->pred->index);
       print_src_as_ptx(&src->src, state);
    }
-   ssa_register_info[instr->dest.ssa.index].type = UNDEF;
    fprintf(fp, ";");
+
+   ssa_register_info[instr->dest.ssa.index].type = type;
+   ssa_register_info[instr->dest.ssa.index].num_components = instr->dest.ssa.num_components;
+   ssa_register_info[instr->dest.ssa.index].num_bits = instr->dest.ssa.bit_size;
+   ssa_register_info[instr->dest.ssa.index].ssa_idx = instr->dest.ssa.index;
 
    // Original NIR
    print_tabs(tabs, fp);
