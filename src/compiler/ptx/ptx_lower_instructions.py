@@ -161,7 +161,7 @@ def translate_deref_instructions(ptx_shader):
             line.buildString('mov.b64', (dst, src))
         
         elif line.functionalType == FunctionalType.deref_struct:
-            dst, need_deref, src, ptr, fieldName, offset, type = line.args
+            dst, need_deref, src, ptr, fieldName, offset, baseType, type = line.args
 
             declaration, _ = ptx_shader.findDeclaration(dst)
             declaration.buildString(declaration.declarationType, None, '.b64', declaration.variableName)
@@ -496,19 +496,19 @@ def translate_phi(ptx_shader):
 def main():
     unique_ID = 0
     assert len(sys.argv) == 2
-    # shaderPath = sys.argv[1]
-    # shader = PTXShader(shaderPath)
-    # translate_descriptor_set_instructions(shader)
-    # translate_deref_instructions(shader)
-    # translate_trace_ray(shader)
-    # translate_decl_var(shader)
-    # translate_ray_launch_instructions(shader)
-    # translate_image_deref_store(shader)
-    # translate_exit(shader)
-    # translate_phi(shader)
+    shaderPath = sys.argv[1]
+    shader = PTXShader(shaderPath)
+    translate_descriptor_set_instructions(shader)
+    translate_deref_instructions(shader)
+    translate_trace_ray(shader)
+    translate_decl_var(shader)
+    translate_ray_launch_instructions(shader)
+    translate_image_deref_store(shader)
+    translate_exit(shader)
+    translate_phi(shader)
 
-    # translate_vector_operands(shader, unique_ID)
-    # shader.writeToFile(shaderPath)
+    translate_vector_operands(shader, unique_ID)
+    shader.writeToFile(shaderPath)
 
 
 main()

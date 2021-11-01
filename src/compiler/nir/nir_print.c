@@ -2586,12 +2586,13 @@ glsl_base_type_to_ptx_type(enum glsl_base_type glsl_type)
          return "u64";
       case GLSL_TYPE_INT64:
          return "s64";
+      case GLSL_TYPE_INTERFACE:
+         return "b64";
       case GLSL_TYPE_BOOL:
       case GLSL_TYPE_SAMPLER:
       case GLSL_TYPE_IMAGE:
       case GLSL_TYPE_ATOMIC_UINT:
       case GLSL_TYPE_STRUCT:
-      case GLSL_TYPE_INTERFACE:
       case GLSL_TYPE_ARRAY:
       case GLSL_TYPE_VOID:
       case GLSL_TYPE_SUBROUTINE:
