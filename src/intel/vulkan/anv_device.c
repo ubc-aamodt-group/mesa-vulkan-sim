@@ -137,20 +137,21 @@ anv_compute_heap_size(int fd, uint64_t gtt_size)
 static VkResult
 anv_physical_device_init_heaps(struct anv_physical_device *device, int fd)
 {
-   if (anv_gem_get_context_param(fd, 0, I915_CONTEXT_PARAM_GTT_SIZE,
-                                 &device->gtt_size) == -1) {
-      /* If, for whatever reason, we can't actually get the GTT size from the
-       * kernel (too old?) fall back to the aperture size.
-       */
-      anv_perf_warn(NULL, NULL,
-                    "Failed to get I915_CONTEXT_PARAM_GTT_SIZE: %m");
+   device->gtt_size = 281474976710656ULL;
+   // if (anv_gem_get_context_param(fd, 0, I915_CONTEXT_PARAM_GTT_SIZE,
+   //                               &device->gtt_size) == -1) {
+   //    /* If, for whatever reason, we can't actually get the GTT size from the
+   //     * kernel (too old?) fall back to the aperture size.
+   //     */
+   //    anv_perf_warn(NULL, NULL,
+   //                  "Failed to get I915_CONTEXT_PARAM_GTT_SIZE: %m");
 
-      if (gen_get_aperture_size(fd, &device->gtt_size) == -1) {
-         return vk_errorfi(device->instance, NULL,
-                           VK_ERROR_INITIALIZATION_FAILED,
-                           "failed to get aperture size: %m");
-      }
-   }
+   //    if (gen_get_aperture_size(fd, &device->gtt_size) == -1) {
+   //       return vk_errorfi(device->instance, NULL,
+   //                         VK_ERROR_INITIALIZATION_FAILED,
+   //                         "failed to get aperture size: %m");
+   //    }
+   // }
 
    /* We only allow 48-bit addresses with softpin because knowing the actual
     * address is required for the vertex cache flush workaround.
@@ -304,26 +305,63 @@ anv_physical_device_try_create(struct anv_instance *instance,
    const char *primary_path = drm_device->nodes[DRM_NODE_PRIMARY];
    const char *path = drm_device->nodes[DRM_NODE_RENDER];
    VkResult result;
-   int fd;
+   int fd = -1;
    int master_fd = -1;
 
    brw_process_intel_debug_variable();
 
-   fd = open(path, O_RDWR | O_CLOEXEC);
-   if (fd < 0) {
-      if (errno == ENOMEM) {
-         return vk_errorfi(instance, NULL, VK_ERROR_OUT_OF_HOST_MEMORY,
-                        "Unable to open device %s: out of memory", path);
-      }
-      return vk_errorfi(instance, NULL, VK_ERROR_INCOMPATIBLE_DRIVER,
-                        "Unable to open device %s: %m", path);
-   }
+   // fd = open(path, O_RDWR | O_CLOEXEC);
+   // if (fd < 0) {
+   //    if (errno == ENOMEM) {
+   //       return vk_errorfi(instance, NULL, VK_ERROR_OUT_OF_HOST_MEMORY,
+   //                      "Unable to open device %s: out of memory", path);
+   //    }
+   //    return vk_errorfi(instance, NULL, VK_ERROR_INCOMPATIBLE_DRIVER,
+   //                      "Unable to open device %s: %m", path);
+   // }
 
    struct gen_device_info devinfo;
-   if (!gen_get_device_info_from_fd(fd, &devinfo)) {
-      result = vk_error(VK_ERROR_INCOMPATIBLE_DRIVER);
-      goto fail_fd;
+   // if (!gen_get_device_info_from_fd(fd, &devinfo)) {
+   //    result = vk_error(VK_ERROR_INCOMPATIBLE_DRIVER);
+   //    goto fail_fd;
+   // }
+
+   // reading devinfo from a file
+   {
+      char *mesa_root = getenv("MESA_ROOT");
+      char devinfoPath[200];
+      snprintf(devinfoPath, sizeof(devinfoPath), "%s/src/intel/vulkan/devinfo.struct", mesa_root);
+      FILE *devinfofile;
+      devinfofile = fopen (devinfoPath, "r");
+      if (devinfofile == NULL)
+      {
+         fprintf(stderr, "\nError opening file\n");
+         exit (1);
+      }
+
+      if(fread(&devinfo, sizeof(struct gen_device_info), 1, devinfofile) == 0)
+         printf("error reading file !\n");
+
+      fclose (devinfofile);
    }
+
+   // writing devinfo to a file
+   // {
+   //    FILE *devinfofile;
+   //    devinfofile = fopen ("devinfo.struct", "w");
+   //    if (devinfofile == NULL)
+   //    {
+   //       fprintf(stderr, "\nError opened file\n");
+   //       exit (1);
+   //    }
+
+   //    fwrite (&devinfo, sizeof(struct gen_device_info), 1, devinfofile);
+
+   //    if(fwrite == 0)
+   //       printf("error writing file !\n");
+      
+   //    fclose (devinfofile);
+   // }
 
    const char *device_name = gen_get_device_name(devinfo.chipset_id);
 
@@ -368,50 +406,48 @@ anv_physical_device_try_create(struct anv_instance *instance,
    device->pci_info.function = drm_device->businfo.pci->func;
 
    device->cmd_parser_version = -1;
-   if (device->info.gen == 7) {
-      device->cmd_parser_version =
-         anv_gem_get_param(fd, I915_PARAM_CMD_PARSER_VERSION);
-      if (device->cmd_parser_version == -1) {
-         result = vk_errorfi(device->instance, NULL,
-                             VK_ERROR_INITIALIZATION_FAILED,
-                             "failed to get command parser version");
-         goto fail_alloc;
-      }
-   }
+   // if (device->info.gen == 7) {
+   //    device->cmd_parser_version =
+   //       anv_gem_get_param(fd, I915_PARAM_CMD_PARSER_VERSION);
+   //    if (device->cmd_parser_version == -1) {
+   //       result = vk_errorfi(device->instance, NULL,
+   //                           VK_ERROR_INITIALIZATION_FAILED,
+   //                           "failed to get command parser version");
+   //       goto fail_alloc;
+   //    }
+   // }
 
-   if (!anv_gem_get_param(fd, I915_PARAM_HAS_WAIT_TIMEOUT)) {
-      result = vk_errorfi(device->instance, NULL,
-                          VK_ERROR_INITIALIZATION_FAILED,
-                          "kernel missing gem wait");
-      goto fail_alloc;
-   }
+   // if (!anv_gem_get_param(fd, I915_PARAM_HAS_WAIT_TIMEOUT)) {
+   //    result = vk_errorfi(device->instance, NULL,
+   //                        VK_ERROR_INITIALIZATION_FAILED,
+   //                        "kernel missing gem wait");
+   //    goto fail_alloc;
+   // }
 
-   if (!anv_gem_get_param(fd, I915_PARAM_HAS_EXECBUF2)) {
-      result = vk_errorfi(device->instance, NULL,
-                          VK_ERROR_INITIALIZATION_FAILED,
-                          "kernel missing execbuf2");
-      goto fail_alloc;
-   }
+   // if (!anv_gem_get_param(fd, I915_PARAM_HAS_EXECBUF2)) {
+   //    result = vk_errorfi(device->instance, NULL,
+   //                        VK_ERROR_INITIALIZATION_FAILED,
+   //                        "kernel missing execbuf2");
+   //    goto fail_alloc;
+   // }
 
-   if (!device->info.has_llc &&
-       anv_gem_get_param(fd, I915_PARAM_MMAP_VERSION) < 1) {
-      result = vk_errorfi(device->instance, NULL,
-                          VK_ERROR_INITIALIZATION_FAILED,
-                          "kernel missing wc mmap");
-      goto fail_alloc;
-   }
+   // if (!device->info.has_llc &&
+   //     anv_gem_get_param(fd, I915_PARAM_MMAP_VERSION) < 1) {
+   //    result = vk_errorfi(device->instance, NULL,
+   //                        VK_ERROR_INITIALIZATION_FAILED,
+   //                        "kernel missing wc mmap");
+   //    goto fail_alloc;
+   // }
 
-   device->has_softpin = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_SOFTPIN);
-   device->has_exec_async = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_ASYNC);
-   device->has_exec_capture = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_CAPTURE);
-   device->has_exec_fence = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_FENCE);
-   device->has_syncobj = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_FENCE_ARRAY);
-   device->has_syncobj_wait = device->has_syncobj &&
-                              anv_gem_supports_syncobj_wait(fd);
-   device->has_syncobj_wait_available =
-      anv_gem_get_drm_cap(fd, DRM_CAP_SYNCOBJ_TIMELINE) != 0;
+   device->has_softpin = true;
+   device->has_exec_async = true;
+   device->has_exec_capture = true;
+   device->has_exec_fence = true;
+   device->has_syncobj = true;
+   device->has_syncobj_wait = true;
+   device->has_syncobj_wait_available = true;
 
-   device->has_context_priority = anv_gem_has_context_priority(fd);
+   device->has_context_priority = true;
 
    result = anv_physical_device_init_heaps(device, fd);
    if (result != VK_SUCCESS)
@@ -420,11 +456,9 @@ anv_physical_device_try_create(struct anv_instance *instance,
    device->use_softpin = device->has_softpin &&
                          device->supports_48bit_addresses;
 
-   device->has_context_isolation =
-      anv_gem_get_param(fd, I915_PARAM_HAS_CONTEXT_ISOLATION);
+   device->has_context_isolation = true;
 
-   device->has_exec_timeline =
-      anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_TIMELINE_FENCES);
+   device->has_exec_timeline = true;
    if (env_var_as_boolean("ANV_QUEUE_THREAD_DISABLE", false))
       device->has_exec_timeline = false;
 
@@ -461,22 +495,20 @@ anv_physical_device_try_create(struct anv_instance *instance,
 
    /* Check if we can read the GPU timestamp register from the CPU */
    uint64_t u64_ignore;
-   device->has_reg_timestamp = anv_gem_reg_read(fd, TIMESTAMP | I915_REG_READ_8B_WA,
-                                                &u64_ignore) == 0;
+   device->has_reg_timestamp = true;
 
    uint64_t avail_mem;
-   device->has_mem_available = os_get_available_system_memory(&avail_mem);
+   device->has_mem_available = 110668062720;
 
    device->always_flush_cache =
       driQueryOptionb(&instance->dri_options, "always_flush_cache");
 
-   device->has_mmap_offset =
-      anv_gem_get_param(fd, I915_PARAM_MMAP_GTT_VERSION) >= 4;
+   device->has_mmap_offset = true;
 
    /* GENs prior to 8 do not support EU/Subslice info */
    if (device->info.gen >= 8) {
-      device->subslice_total = anv_gem_get_param(fd, I915_PARAM_SUBSLICE_TOTAL);
-      device->eu_total = anv_gem_get_param(fd, I915_PARAM_EU_TOTAL);
+      device->subslice_total = 3;
+      device->eu_total = 24;
 
       /* Without this information, we cannot get the right Braswell
        * brandstrings, and we have to use conservative numbers for GPGPU on
@@ -525,8 +557,7 @@ anv_physical_device_try_create(struct anv_instance *instance,
     *    reserved, and the CPU's memory controller performs all address
     *    swizzling modifications."
     */
-   bool swizzled =
-      device->info.gen < 8 && anv_gem_get_bit6_swizzle(fd, I915_TILING_X);
+   bool swizzled = false;
 
    isl_device_init(&device->isl_dev, &device->info, swizzled);
 
@@ -536,25 +567,25 @@ anv_physical_device_try_create(struct anv_instance *instance,
 
    anv_physical_device_init_disk_cache(device);
 
-   if (instance->enabled_extensions.KHR_display) {
-      master_fd = open(primary_path, O_RDWR | O_CLOEXEC);
-      if (master_fd >= 0) {
-         /* prod the device with a GETPARAM call which will fail if
-          * we don't have permission to even render on this device
-          */
-         if (anv_gem_get_param(master_fd, I915_PARAM_CHIPSET_ID) == 0) {
-            close(master_fd);
-            master_fd = -1;
-         }
-      }
-   }
+   // if (instance->enabled_extensions.KHR_display) {
+   //    master_fd = open(primary_path, O_RDWR | O_CLOEXEC);
+   //    if (master_fd >= 0) {
+   //       /* prod the device with a GETPARAM call which will fail if
+   //        * we don't have permission to even render on this device
+   //        */
+   //       if (anv_gem_get_param(master_fd, I915_PARAM_CHIPSET_ID) == 0) {
+   //          close(master_fd);
+   //          master_fd = -1;
+   //       }
+   //    }
+   // }
    device->master_fd = master_fd;
 
    result = anv_init_wsi(device);
    if (result != VK_SUCCESS)
       goto fail_disk_cache;
 
-   device->perf = anv_get_perf(&device->info, fd);
+   device->perf = NULL;
 
    anv_physical_device_get_supported_extensions(device,
                                                 &device->supported_extensions);
@@ -814,7 +845,33 @@ anv_enumerate_physical_devices(struct anv_instance *instance)
 
    /* TODO: Check for more devices ? */
    drmDevicePtr devices[8];
-   int max_devices;
+   int max_devices = 1;
+
+   // drmDevice physicalDevice;
+   // physicalDevice.nodes[0] = "/dev/dri/card0";
+   // physicalDevice.nodes[1] = "";
+   // physicalDevice.nodes[2] = "/dev/dri/renderD128";
+   // physicalDevice.nodes[3] = "";
+   // physicalDevice.available_nodes = 5;
+   // physicalDevice.bustype = 0;
+
+   // drmPciBusInfo pciBusInfo;
+   // pciBusInfo.domain = 0;
+   // pciBusInfo.bus = 0;
+   // pciBusInfo.dev = 2;
+   // pciBusInfo.func = 0;
+
+   // drmPciDeviceInfo pciDeviceInfo;
+   // pciDeviceInfo.vendor_id = 32902;
+   // pciDeviceInfo.device_id = 22811;
+   // pciDeviceInfo.subvendor_id = 4163;
+   // pciDeviceInfo.subdevice_id = 6512;
+   // pciDeviceInfo.revision_id = 255;
+
+   // physicalDevice.businfo.pci = &pciBusInfo;
+   // physicalDevice.deviceinfo.pci = &pciDeviceInfo;
+
+   // devices[0] = &physicalDevice;
 
    max_devices = drmGetDevices2(0, devices, ARRAY_SIZE(devices));
    if (max_devices < 1)
