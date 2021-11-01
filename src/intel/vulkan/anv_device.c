@@ -847,33 +847,37 @@ anv_enumerate_physical_devices(struct anv_instance *instance)
    drmDevicePtr devices[8];
    int max_devices = 1;
 
-   // drmDevice physicalDevice;
-   // physicalDevice.nodes[0] = "/dev/dri/card0";
-   // physicalDevice.nodes[1] = "";
-   // physicalDevice.nodes[2] = "/dev/dri/renderD128";
-   // physicalDevice.nodes[3] = "";
-   // physicalDevice.available_nodes = 5;
-   // physicalDevice.bustype = 0;
+   drmDevice physicalDevice;
+   char node0[50] = "/dev/dri/card0";
+   char nullNode[5] = "";
+   char node2[50] = "/dev/dri/renderD128";
+   physicalDevice.nodes = (char**)malloc(4 * sizeof(char*));
+   physicalDevice.nodes[0] = node0;
+   physicalDevice.nodes[1] = nullNode;
+   physicalDevice.nodes[2] = node2;
+   physicalDevice.nodes[3] = nullNode;
+   physicalDevice.available_nodes = 5;
+   physicalDevice.bustype = 0;
 
-   // drmPciBusInfo pciBusInfo;
-   // pciBusInfo.domain = 0;
-   // pciBusInfo.bus = 0;
-   // pciBusInfo.dev = 2;
-   // pciBusInfo.func = 0;
+   drmPciBusInfo pciBusInfo;
+   pciBusInfo.domain = 0;
+   pciBusInfo.bus = 0;
+   pciBusInfo.dev = 2;
+   pciBusInfo.func = 0;
 
-   // drmPciDeviceInfo pciDeviceInfo;
-   // pciDeviceInfo.vendor_id = 32902;
-   // pciDeviceInfo.device_id = 22811;
-   // pciDeviceInfo.subvendor_id = 4163;
-   // pciDeviceInfo.subdevice_id = 6512;
-   // pciDeviceInfo.revision_id = 255;
+   drmPciDeviceInfo pciDeviceInfo;
+   pciDeviceInfo.vendor_id = 32902;
+   pciDeviceInfo.device_id = 22811;
+   pciDeviceInfo.subvendor_id = 4163;
+   pciDeviceInfo.subdevice_id = 6512;
+   pciDeviceInfo.revision_id = 255;
 
-   // physicalDevice.businfo.pci = &pciBusInfo;
-   // physicalDevice.deviceinfo.pci = &pciDeviceInfo;
+   physicalDevice.businfo.pci = &pciBusInfo;
+   physicalDevice.deviceinfo.pci = &pciDeviceInfo;
 
-   // devices[0] = &physicalDevice;
+   devices[0] = &physicalDevice;
 
-   max_devices = drmGetDevices2(0, devices, ARRAY_SIZE(devices));
+   // max_devices = drmGetDevices2(0, devices, ARRAY_SIZE(devices));
    if (max_devices < 1)
       return VK_SUCCESS;
 
@@ -899,7 +903,7 @@ anv_enumerate_physical_devices(struct anv_instance *instance)
          list_addtail(&pdevice->link, &instance->physical_devices);
       }
    }
-   drmFreeDevices(devices, max_devices);
+   // drmFreeDevices(devices, max_devices);
 
    /* If we successfully enumerated any devices, call it success */
    return result;
