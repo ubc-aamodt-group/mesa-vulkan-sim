@@ -26,6 +26,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include "util/mesa-sha1.h"
 #include "vk_util.h"
@@ -1591,6 +1593,79 @@ anv_descriptor_set_write_acceleration_structure(struct anv_device *device,
 }
 
 
+static void dump_descriptor_set(uint32_t setID, uint32_t descID, void *address, uint32_t size, VkDescriptorType type)
+{
+   FILE *fp;
+   char *mesa_root = getenv("MESA_ROOT");
+   char *filePath = "gpgpusimShaders/";
+   char *extension = ".vkdescrptorsetdata";
+
+   int VkDescriptorTypeNum;
+
+   switch (type)
+   {
+      case VK_DESCRIPTOR_TYPE_SAMPLER:
+         VkDescriptorTypeNum = 0;
+         break;
+      case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+         VkDescriptorTypeNum = 1;
+         break;
+      case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+         VkDescriptorTypeNum = 2;
+         break;
+      case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+         VkDescriptorTypeNum = 3;
+         break;
+      case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+         VkDescriptorTypeNum = 4;
+         break;
+      case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+         VkDescriptorTypeNum = 5;
+         break;
+      case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+         VkDescriptorTypeNum = 6;
+         break;
+      case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+         VkDescriptorTypeNum = 7;
+         break;
+      case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
+         VkDescriptorTypeNum = 8;
+         break;
+      case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+         VkDescriptorTypeNum = 9;
+         break;
+      case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+         VkDescriptorTypeNum = 10;
+         break;
+      case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT:
+         VkDescriptorTypeNum = 1000138000;
+         break;
+      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+         VkDescriptorTypeNum = 1000150000;
+         break;
+      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV:
+         VkDescriptorTypeNum = 1000165000;
+         break;
+      case VK_DESCRIPTOR_TYPE_MUTABLE_VALVE:
+         VkDescriptorTypeNum = 1000351000;
+         break;
+      case VK_DESCRIPTOR_TYPE_MAX_ENUM:
+         VkDescriptorTypeNum = 0x7FFFFFF;
+         break;
+      default:
+         abort(); // should not be here!
+   }
+
+   char fullPath[200];
+   snprintf(fullPath, sizeof(fullPath), "%s%s%d_%d_%d_%d%s", mesa_root, filePath, setID, descID, size, VkDescriptorTypeNum, extension);
+   // File name format: setID_descID_SizeInBytes_VkDescriptorType.vkdescrptorsetdata
+
+   fp = fopen(fullPath, "wb+");
+   fwrite(address, 1, size, fp);
+   fclose(fp);
+}
+
+
 static void update_gpgpusim_descriptor_sets(struct anv_descriptor_set *set)
 {
    for(int i = 0; i < set->descriptor_count; i++)
@@ -1620,6 +1695,7 @@ static void update_gpgpusim_descriptor_sets(struct anv_descriptor_set *set)
             struct anv_image * image = image_view->image;
             void * address = anv_address_map(image->planes[0].address);
             gpgpusim_setDescriptorSet(0, i, address, 0, set->descriptors[i].type);
+            dump_descriptor_set(0, i, address, 0, set->descriptors[i].type);
          }
          // else{
          //    assert(0);
@@ -1650,6 +1726,7 @@ static void update_gpgpusim_descriptor_sets(struct anv_descriptor_set *set)
          {
             struct anv_buffer_view *bview = &set->buffer_views[bind_layout->buffer_view_index];
             gpgpusim_setDescriptorSet(0, i, anv_address_map(bview->address), bview->range, set->descriptors[i].type);
+            dump_descriptor_set(0, i, anv_address_map(bview->address), bview->range, set->descriptors[i].type);
          }
          
          break;
@@ -1665,6 +1742,7 @@ static void update_gpgpusim_descriptor_sets(struct anv_descriptor_set *set)
          void *desc_map = set->desc_mem.map + bind_layout->descriptor_offset;
          struct anv_address_range_descriptor *desc_data = desc_map;
          gpgpusim_setDescriptorSet(0, i, (void *)(desc_data->address), desc_data->range, set->descriptors[i].type);
+         dump_descriptor_set(0, i, (void *)(desc_data->address), desc_data->range, set->descriptors[i].type);
          break;
       }
 
