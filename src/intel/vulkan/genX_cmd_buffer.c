@@ -4821,6 +4821,8 @@ static void *find_host_address(struct anv_device *device, const VkDeviceAddress 
    return bo->map + (addr - bo->offset);
 }
 
+static int trace_rays_call_count = 0;
+
 static void
 cmd_buffer_trace_rays(struct anv_cmd_buffer *cmd_buffer,
                       const VkStridedDeviceAddressRegionKHR *raygen_sbt,
@@ -4839,6 +4841,52 @@ cmd_buffer_trace_rays(struct anv_cmd_buffer *cmd_buffer,
    void *callable_addr = find_host_address(cmd_buffer->device, callable_sbt->deviceAddress);
    gpgpusim_vkCmdTraceRaysKHR(raygen_addr, miss_addr, hit_addr, callable_addr,
             is_indirect, launch_width, launch_height, launch_depth, launch_size_addr);
+
+   FILE *fp;
+   char *mesa_root = getenv("MESA_ROOT");
+   char *filePath = "gpgpusimShaders/";
+
+   char call_params_filename [200];
+   snprintf(call_params_filename, sizeof(call_params_filename), "%s%s%d.callparams", mesa_root, filePath, trace_rays_call_count);
+   fp = fopen(call_params_filename, "w+");
+   fprintf(fp, "%d,%d,%d,%d,%lu", is_indirect, launch_width, launch_height, launch_depth, launch_size_addr);
+   fclose(fp);
+
+   // TODO: Is the size always 32?
+   if (raygen_addr) {
+      char raygen_sbt_filename [200];
+      snprintf(raygen_sbt_filename, sizeof(raygen_sbt_filename), "%s%s%d.raygensbt", mesa_root, filePath, trace_rays_call_count);
+      fp = fopen(raygen_sbt_filename, "wb+");
+      fwrite(raygen_addr, 1, 32, fp); // max is 32 bytes according to struct anv_rt_shader_group.handle
+      fclose(fp);
+   }
+
+   if (miss_addr) {
+      char miss_sbt_filename [200];
+      snprintf(miss_sbt_filename, sizeof(miss_sbt_filename), "%s%s%d.misssbt", mesa_root, filePath, trace_rays_call_count);
+      fp = fopen(miss_sbt_filename, "wb+");
+      fwrite(miss_addr, 1, 32, fp); // max is 32 bytes according to struct anv_rt_shader_group.handle
+      fclose(fp);
+   }
+
+   if (hit_addr) {
+      char hit_sbt_filename [200];
+      snprintf(hit_sbt_filename, sizeof(hit_sbt_filename), "%s%s%d.hitsbt", mesa_root, filePath, trace_rays_call_count);
+      fp = fopen(hit_sbt_filename, "wb+");
+      fwrite(hit_addr, 1, 32, fp); // max is 32 bytes according to struct anv_rt_shader_group.handle
+      fclose(fp);
+   }
+
+   if (callable_addr) {
+      char callable_sbt_filename [200];
+      snprintf(callable_sbt_filename, sizeof(callable_sbt_filename), "%s%s%d.callablesbt", mesa_root, filePath, trace_rays_call_count);
+      fp = fopen(callable_sbt_filename, "wb+");
+      fwrite(callable_addr, 1, 32, fp); // max is 32 bytes according to struct anv_rt_shader_group.handle
+      fclose(fp);
+   }
+   
+   trace_rays_call_count++;
+
    // struct anv_cmd_ray_tracing_state *rt = &cmd_buffer->state.rt;
    // struct anv_ray_tracing_pipeline *pipeline = rt->pipeline;
    //
