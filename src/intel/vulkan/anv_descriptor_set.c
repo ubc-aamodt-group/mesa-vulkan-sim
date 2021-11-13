@@ -1665,6 +1665,36 @@ static void dump_descriptor_set(uint32_t setID, uint32_t descID, void *address, 
    fclose(fp);
 }
 
+static void dump_descriptor_set_for_AS(uint32_t setID, uint32_t descID, void *address, uint32_t desc_size, VkDescriptorType type, uint32_t desired_range)
+{
+   FILE *fp;
+   char *mesa_root = getenv("MESA_ROOT");
+   char *filePath = "gpgpusimShaders/";
+   char *extension = ".vkdescrptorsetdata";
+
+   int VkDescriptorTypeNum;
+
+   switch (type)
+   {
+      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+         VkDescriptorTypeNum = 1000150000;
+         break;
+      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV:
+         VkDescriptorTypeNum = 1000165000;
+         break;
+      default:
+         abort(); // should not be here!
+   }
+
+   char fullPath[200];
+   snprintf(fullPath, sizeof(fullPath), "%s%s%d_%d_%d_%d_%d%s", mesa_root, filePath, setID, descID, desc_size, VkDescriptorTypeNum, desired_range, extension);
+   // File name format: setID_descID_SizeInBytes_VkDescriptorType.vkdescrptorsetdata
+
+   fp = fopen(fullPath, "wb+");
+   fwrite(address-(uint64_t)desired_range, 1, desc_size + desired_range*2, fp);
+   fclose(fp);
+}
+
 
 static void update_gpgpusim_descriptor_sets(struct anv_descriptor_set *set)
 {
@@ -1742,7 +1772,7 @@ static void update_gpgpusim_descriptor_sets(struct anv_descriptor_set *set)
          void *desc_map = set->desc_mem.map + bind_layout->descriptor_offset;
          struct anv_address_range_descriptor *desc_data = desc_map;
          gpgpusim_setDescriptorSet(0, i, (void *)(desc_data->address), desc_data->range, set->descriptors[i].type);
-         dump_descriptor_set(0, i, (void *)(desc_data->address), desc_data->range, set->descriptors[i].type);
+         dump_descriptor_set_for_AS(0, i, (void *)(desc_data->address), desc_data->range, set->descriptors[i].type, 1024);
          break;
       }
 
