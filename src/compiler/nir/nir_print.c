@@ -1746,6 +1746,9 @@ print_ptx_reg_decl(print_state *state, int vec_length, val_type type, int num_bi
       case BITS:
          fprintf(fp, ".b%d", num_bits); // i guess
          break;
+      case PREDICATE:
+         fprintf(fp, ".pred");
+         break;
       case UNDEF:
          fprintf(fp, ".x%d", num_bits);
          break;
@@ -1838,6 +1841,28 @@ print_dest_as_ptx_no_pos(nir_dest *dest, print_state *state)
       print_ssa_use_as_ptx(&dest->ssa, state);
    else
       print_reg_dest(&dest->reg, state);
+}
+
+static char*
+val_type_to_str(val_type type)
+{
+   switch (type)
+   {
+   case UINT:
+      return "u";
+   case INT:
+      return "s";
+   case FLOAT:
+      return "f";
+   case BITS:
+      return "b";
+   case PREDICATE:
+      return "pred";
+   
+   default:
+      break;
+   }
+   return "";
 }
 
 
@@ -1938,6 +1963,7 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
          print_tabs(tabs, fp);
       }
       fprintf(fp, "%s ", info->name); // Intrinsic function name
+      // fprintf(fp, "%s%d, ", val_type_to_str(ssa_register_info[instr->src[1].ssa->index].type), ssa_register_info[instr->src[1].ssa->index].num_bits);
    }
    else if (!strcmp(info->name, "image_deref_store")){
       if (info->has_dest) {
@@ -1958,6 +1984,59 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
          print_tabs(tabs, fp);
       }
       fprintf(fp, "%s ", info->name); // Intrinsic function name
+   }
+   else if (!strcmp(info->name, "load_ray_instance_custom_index")){
+      if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = UINT;
+         print_ptx_reg_decl(state, instr->dest.ssa.num_components, UINT, instr->dest.ssa.bit_size);
+         print_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";\n");
+         print_tabs(tabs, fp);
+      }
+      fprintf(fp, "%s ", info->name); // Intrinsic function name
+   }
+   else if (!strcmp(info->name, "load_primitive_id")){
+      if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = UINT;
+         print_ptx_reg_decl(state, instr->dest.ssa.num_components, UINT, instr->dest.ssa.bit_size);
+         print_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";\n");
+         print_tabs(tabs, fp);
+      }
+      fprintf(fp, "%s ", info->name); // Intrinsic function name
+   }
+   else if (!strcmp(info->name, "load_ray_world_to_object")){
+      if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = FLOAT;
+         print_ptx_reg_decl(state, instr->dest.ssa.num_components, FLOAT, instr->dest.ssa.bit_size);
+         print_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";\n");
+         print_tabs(tabs, fp);
+      }
+      fprintf(fp, "%s ", info->name); // Intrinsic function name
+   }
+   else if (!strcmp(info->name, "load_ray_object_to_world")){
+      if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = FLOAT;
+         print_ptx_reg_decl(state, instr->dest.ssa.num_components, FLOAT, instr->dest.ssa.bit_size);
+         print_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";\n");
+         print_tabs(tabs, fp);
+      }
+      fprintf(fp, "%s ", info->name); // Intrinsic function name
+   }
+   else if (!strcmp(info->name, "load_ray_world_direction")){
+      if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = FLOAT;
+         print_ptx_reg_decl(state, instr->dest.ssa.num_components, FLOAT, instr->dest.ssa.bit_size);
+         print_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";\n");
+         print_tabs(tabs, fp);
+      }
+      fprintf(fp, "%s ", info->name); // Intrinsic function name
+   }
+   else {
+      fprintf(fp, "// untranslated %s instruction. ", info->name);
    }
          
 
@@ -2340,6 +2419,18 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
 
          ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
       } 
+      else if (!strcmp(nir_op_infos[instr->op].name, "i2i64")){
+         //fprintf(fp, ".reg .f32 ");
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, UINT, instr->dest.dest.ssa.bit_size);
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";");
+         fprintf(fp, "\n");
+         print_tabs(tabs, fp);
+
+         fprintf(fp, "cvt.s64.s32 ");
+
+         ssa_register_info[instr->dest.dest.ssa.index].type = UINT;
+      } 
       else if (!strcmp(nir_op_infos[instr->op].name, "fadd")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
          print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, FLOAT, instr->dest.dest.ssa.bit_size);
@@ -2400,20 +2491,44 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
 
          ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
       }
+      else if (!strcmp(nir_op_infos[instr->op].name, "fmax")) {
+         //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, FLOAT, instr->dest.dest.ssa.bit_size);
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";");
+         fprintf(fp, "\n");
+         print_tabs(tabs, fp);
+
+         fprintf(fp, "max.f%d ", instr->dest.dest.ssa.bit_size);
+
+         ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
+      }
+      else if (!strcmp(nir_op_infos[instr->op].name, "fpow")) {
+         //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, FLOAT, instr->dest.dest.ssa.bit_size);
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";");
+         fprintf(fp, "\n");
+         print_tabs(tabs, fp);
+
+         fprintf(fp, "fpow ");
+
+         ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
+      }
       else if (!strcmp(nir_op_infos[instr->op].name, "ige")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
-         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, BITS, instr->dest.dest.ssa.bit_size);
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, PREDICATE, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";");
          fprintf(fp, "\n");
          print_tabs(tabs, fp);
          fprintf(fp, "setp.ge.s%d ", instr->src[0].src.ssa->bit_size);
 
-         ssa_register_info[instr->dest.dest.ssa.index].type = BITS;
+         ssa_register_info[instr->dest.dest.ssa.index].type = PREDICATE;
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "ieq")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
-         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, BITS, instr->dest.dest.ssa.bit_size);
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, PREDICATE, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";");
          fprintf(fp, "\n");
@@ -2421,11 +2536,11 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
 
          fprintf(fp, "setp.eq.s%d ", instr->src[0].src.ssa->bit_size);
 
-         ssa_register_info[instr->dest.dest.ssa.index].type = BITS;
+         ssa_register_info[instr->dest.dest.ssa.index].type = PREDICATE;
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "ine")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
-         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, BITS, instr->dest.dest.ssa.bit_size);
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, PREDICATE, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";");
          fprintf(fp, "\n");
@@ -2433,11 +2548,11 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
 
          fprintf(fp, "setp.ne.s%d ", instr->src[0].src.ssa->bit_size);
 
-         ssa_register_info[instr->dest.dest.ssa.index].type = BITS;
+         ssa_register_info[instr->dest.dest.ssa.index].type = PREDICATE;
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "flt")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
-         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, BITS, instr->dest.dest.ssa.bit_size);
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, PREDICATE, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";");
          fprintf(fp, "\n");
@@ -2445,7 +2560,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
 
          fprintf(fp, "setp.lt.f%d ", instr->src[0].src.ssa->bit_size);
 
-         ssa_register_info[instr->dest.dest.ssa.index].type = BITS;
+         ssa_register_info[instr->dest.dest.ssa.index].type = PREDICATE;
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "fsqrt")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
@@ -2586,24 +2701,22 @@ glsl_base_type_to_ptx_type(enum glsl_base_type glsl_type)
          return "u64";
       case GLSL_TYPE_INT64:
          return "s64";
-      case GLSL_TYPE_INTERFACE:
-         return "b64";
       case GLSL_TYPE_BOOL:
+         return "b1";
+      case GLSL_TYPE_INTERFACE:
+      case GLSL_TYPE_STRUCT:
+      case GLSL_TYPE_ARRAY:
       case GLSL_TYPE_SAMPLER:
       case GLSL_TYPE_IMAGE:
       case GLSL_TYPE_ATOMIC_UINT:
-      case GLSL_TYPE_STRUCT:
-      case GLSL_TYPE_ARRAY:
       case GLSL_TYPE_VOID:
       case GLSL_TYPE_SUBROUTINE:
       case GLSL_TYPE_FUNCTION:
       case GLSL_TYPE_ERROR:
       default:
-         assert(0);
-         return NULL;
+         return "xx";
    }
 }
-
 
 static void
 print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_state *state)
@@ -2611,10 +2724,12 @@ print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_st
    FILE *fp = state->fp;
 
    if (instr->deref_type == nir_deref_type_var) {
-      fprintf(fp, "%s", get_var_name(instr->var, state));
+      fprintf(fp, "%s, %s", get_var_name(instr->var, state), glsl_base_type_to_ptx_type(glsl_get_base_type(instr->type)));
+      // fprintf(fp, "%s", glsl_base_type_to_ptx_type(glsl_get_base_type(instr->type)));
       return;
    } else if (instr->deref_type == nir_deref_type_cast) {
-      fprintf(fp, "%s, ", glsl_get_type_name(instr->type));
+      // fprintf(fp, "%s, ", glsl_get_type_name(instr->type));
+      fprintf(fp, "%s, ", glsl_base_type_to_ptx_type(glsl_get_base_type(instr->type)));
       // For this type in NIR it prints something like CameraProperties*
       // However, we should put the size of the CameraProperties struct into a magic register and load the size from it
       // drop the * since its already a pointer type
@@ -2669,8 +2784,8 @@ print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_st
       //fprintf(fp, "%s%s", is_parent_pointer ? "->" : ".",
       //        glsl_get_struct_elem_name(parent->type, instr->strct.index));
       fprintf(fp, "%s%s, %d, %s", is_parent_pointer ? ", ptr, " : ", not_ptr, ",
-              glsl_get_struct_elem_name(parent->type, instr->strct.index), glsl_get_struct_field_offset(parent->type, instr->strct.index),
-              glsl_base_type_to_ptx_type(glsl_get_base_type(parent->type)));
+              glsl_get_struct_elem_name(parent->type, instr->strct.index), get_struct_field_offset_for_ptx(parent->type, instr->strct.index),
+              glsl_base_type_to_ptx_type(glsl_get_base_type(instr->type)));
       break;
 
    case nir_deref_type_array:
@@ -2678,12 +2793,13 @@ print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_st
       if (nir_src_is_const(instr->arr.index)) {
          //fprintf(fp, "[%"PRId64"]", nir_src_as_int(instr->arr.index));
          fprintf(fp, ", %"PRId64", %u, %s", nir_src_as_int(instr->arr.index), nir_deref_instr_array_stride(instr), 
-            glsl_base_type_to_ptx_type(glsl_get_base_type(parent->type)));
+            glsl_base_type_to_ptx_type(glsl_get_base_type(instr->type)));
       } else {
-         assert(0); //unimplemented. need to calculate array index before accessing?
-         fprintf(fp, "[");
+         fprintf(fp, ", ");
          print_src_as_ptx(&instr->arr.index, state);
-         fprintf(fp, "]");
+         
+         fprintf(fp, ", %u, %s", nir_deref_instr_array_stride(instr), 
+            glsl_base_type_to_ptx_type(glsl_get_base_type(instr->type)));
       }
       break;
    }
@@ -2820,6 +2936,19 @@ print_load_const_instr_as_ptx(nir_load_const_instr *instr, print_state *state, s
 
    // PTX here
    // Reg Decl
+
+   int ptx_vec_len = 1;
+   if (instr->def.num_components == 2){
+      ptx_vec_len = 2;
+   }
+   else if (instr->def.num_components > 2 && instr->def.num_components <= 4){
+      ptx_vec_len = 4;
+   }
+   else if (instr->def.num_components > 4){
+      abort();
+   }
+
+   
    switch (instr->def.bit_size) {
       case 64:
          //fprintf(fp, ".reg .f64 "); // reg declaration
@@ -2858,18 +2987,6 @@ print_load_const_instr_as_ptx(nir_load_const_instr *instr, print_state *state, s
          break;
    }
    fprintf(fp, "\n\t");
-
-
-   int ptx_vec_len = 1;
-   if (instr->def.num_components == 2){
-      ptx_vec_len = 2;
-   }
-   else if (instr->def.num_components > 2 && instr->def.num_components <= 4){
-      ptx_vec_len = 4;
-   }
-   else if (instr->def.num_components > 4){
-      abort();
-   }
 
    if(ptx_vec_len > 1)
    {
@@ -3005,30 +3122,8 @@ print_load_const_instr_as_ptx(nir_load_const_instr *instr, print_state *state, s
    // Operand value in vectorized form
    if(ptx_vec_len == 1)
    {
-      fprintf(fp, "mov");
-      switch (instr->def.bit_size) {
-      case 64:
-         fprintf(fp, ".f64 ");
-         print_ssa_use_as_ptx(&instr->def, state); //dst
-         break;
-      case 32:
-         fprintf(fp, ".f32 ");
-         print_ssa_use_as_ptx(&instr->def, state); //dst
-         break;
-      case 16:
-         fprintf(fp, ".b16 ");
-         print_ssa_use_as_ptx(&instr->def, state); //dst
-         break;
-      case 8:
-         fprintf(fp, ".b8 ");
-         print_ssa_use_as_ptx(&instr->def, state); //dst
-         fprintf(fp, ", ");
-         break;
-      case 1:
-         fprintf(fp, ".b1 ");
-         print_ssa_use_as_ptx(&instr->def, state); //dst
-         break;
-      }
+      fprintf(fp, "load_const ");
+      print_ssa_use_as_ptx(&instr->def, state);
 
       if (instr->def.num_components > 1) {
          fprintf(fp, ", {");
@@ -3235,7 +3330,7 @@ print_jump_instr_as_ptx(nir_jump_instr *instr, print_state *state)
 
    switch (instr->type) {
    case nir_jump_break:
-      fprintf(fp, "bra loop_%d_exit;", loopID);
+      fprintf(fp, "bra loop_%d_exit;", loopID - 1);
       break;
 
    case nir_jump_continue:
@@ -3461,47 +3556,48 @@ print_loop_as_ptx(nir_loop *loop, print_state *state, ssa_reg_info *ssa_register
 {
    FILE *fp = state->fp;
 
+   uint32_t currentID = loopID++;
    print_tabs(tabs, fp);
-   fprintf(fp, "loop_%d: {\n", loopID);
+   fprintf(fp, "loop_%d: \n", currentID);
    foreach_list_typed(nir_cf_node, node, node, &loop->body) {
       print_cf_node_as_ptx(node, state, ssa_register_info, tabs + 1);
    }
    print_tabs(tabs + 1, fp);
-   fprintf(fp, "bra loop_%d;\n", loopID);
+   fprintf(fp, "bra loop_%d;\n", currentID);
    print_tabs(tabs, fp);
-   fprintf(fp, "}\n");
+   fprintf(fp, "\n");
    print_tabs(tabs, fp);
-   fprintf(fp, "loop_%d_exit:\n", loopID);
-   loopID++;
+   fprintf(fp, "loop_%d_exit:\n", currentID);
 }
 
 static void
 print_if_as_ptx(nir_if *if_stmt, print_state *state, ssa_reg_info *ssa_register_info, unsigned tabs)
 {
    FILE *fp = state->fp;
+
+   uint32_t currentID = ifID++;
    print_tabs(tabs, fp);
    fprintf(fp, "//if\n");
 
    print_tabs(tabs, fp);
    fprintf(fp, "@!");
    print_src_as_ptx(&if_stmt->condition, state);
-   fprintf(fp, " bra else_%d;\n", ifID);
+   fprintf(fp, " bra else_%d;\n", currentID);
 
    print_tabs(tabs, fp);
-   fprintf(fp, "{\n");
+   fprintf(fp, "\n");
    foreach_list_typed(nir_cf_node, node, node, &if_stmt->then_list) {
       print_cf_node_as_ptx(node, state, ssa_register_info, tabs + 1);
    }
    print_tabs(tabs, fp);
-   fprintf(fp, "}\n");
+   fprintf(fp, "\n");
    print_tabs(tabs, fp);
-   fprintf(fp, "else_%d: {\n", ifID);
+   fprintf(fp, "else_%d: \n", currentID);
    foreach_list_typed(nir_cf_node, node, node, &if_stmt->else_list) {
       print_cf_node_as_ptx(node, state, ssa_register_info, tabs + 1);
    }
    print_tabs(tabs, fp);
-   fprintf(fp, "}\n");
-   ifID++;
+   fprintf(fp, "\n");
 }
 
 static void

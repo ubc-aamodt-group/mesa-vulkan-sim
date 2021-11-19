@@ -153,10 +153,11 @@ def translate_deref_instructions(ptx_shader):
             continue
 
         if line.functionalType == FunctionalType.deref_cast:
-            dst, structName, src, type = line.args
+            dst, baseType, src, type = line.args
 
             declaration, _ = ptx_shader.findDeclaration(dst)
             declaration.buildString(declaration.declarationType, None, '.b64', declaration.variableName)
+            declaration.pointerVariableType = '.' + baseType
 
             line.buildString('mov.b64', (dst, src))
         
@@ -165,6 +166,7 @@ def translate_deref_instructions(ptx_shader):
 
             declaration, _ = ptx_shader.findDeclaration(dst)
             declaration.buildString(declaration.declarationType, None, '.b64', declaration.variableName)
+            declaration.pointerVariableType = '.' + baseType
 
             line.buildString('add.u64', (dst, src, offset))
         
@@ -173,14 +175,69 @@ def translate_deref_instructions(ptx_shader):
 
             declaration, _ = ptx_shader.findDeclaration(dst)
             declaration.buildString(declaration.declarationType, None, '.b64', declaration.variableName)
+            declaration.pointerVariableType = '.' + baseType
 
-            line.buildString('add.u64', (dst, src, str(int(arrayIndex) * int(arrayStride))))
+            if arrayIndex[0] != '%': # const array index
+                line.buildString('add.u64', (dst, src, str(int(arrayIndex) * int(arrayStride))))
+            else: # reg array index
+
+                # exit(-1)
+                newLines = list()
+
+                indexRegName_32 = dst + '_array_index_32'
+                indexRegName_64 = dst + '_array_index_64'
+
+                newDeclaration_32 = PTXDecleration()
+                newDeclaration_32.leadingWhiteSpace = declaration.leadingWhiteSpace
+                newDeclaration_32.buildString(DeclarationType.Register, None, '.u32', indexRegName_32)
+
+                newDeclaration_64 = PTXDecleration()
+                newDeclaration_64.leadingWhiteSpace = declaration.leadingWhiteSpace
+                newDeclaration_64.buildString(DeclarationType.Register, None, '.u64', indexRegName_64)
+
+                indexDeclaration, _ = ptx_shader.findDeclaration(arrayIndex)
+
+                newSet = PTXFunctionalLine()
+                newSet.leadingWhiteSpace = declaration.leadingWhiteSpace
+                if indexDeclaration.variableType == '.u32':
+                    newSet.buildString('mov.u32', (indexRegName_32, arrayIndex))
+                else:
+                    variableType = indexDeclaration.variableType
+                    if variableType[1] == 'b':
+                        variableType = '.u' + variableType[2:]
+                    newSet.buildString('cvt.u32%s' % variableType, (indexRegName_32, arrayIndex))
+
+
+                newMult = PTXFunctionalLine()
+                newMult.leadingWhiteSpace = declaration.leadingWhiteSpace
+                newMult.buildString('mul.wide.u32', (indexRegName_64, indexRegName_32, arrayStride))
+
+                newAdd = PTXFunctionalLine()
+                newAdd.leadingWhiteSpace = declaration.leadingWhiteSpace
+                newAdd.comment = line.comment
+                newAdd.buildString('add.u64', (dst, src, indexRegName_64))
+
+                ptx_shader.lines.remove(line)
+                ptx_shader.lines[index:index] = (newDeclaration_32, newDeclaration_64, newSet, newMult, newAdd)
+
         
         elif line.functionalType == FunctionalType.load_deref:
             dst = line.args[0]
             ptr = line.args[1]
 
             declaration, declerationLine = ptx_shader.findDeclaration(dst)
+            srcDeclaration, _ = ptx_shader.findDeclaration(ptr)
+
+            print(line.fullLine)
+
+            # assert srcDeclaration.pointerVariableType[:2] == '.b' or srcDeclaration.pointerVariableType[:2] == '.f'
+
+            assert srcDeclaration.pointerVariableType[2:] == declaration.variableType[2:]
+            declaration.buildString(declaration.declarationType, declaration.vector, srcDeclaration.pointerVariableType, declaration.variableName)
+
+            # if srcDeclaration.pointerVariableType == None:
+            #     exit(-1)
+
             if not declaration.isVector():
                 line.buildString('ld.global%s' % (declaration.variableType), (dst, '[%s]' % ptr))
             else:
@@ -190,6 +247,7 @@ def translate_deref_instructions(ptx_shader):
                 for i in range(declaration.vectorSize()):
                     newFunctional = PTXFunctionalLine()
                     newFunctional.leadingWhiteSpace = declaration.leadingWhiteSpace
+                    # print('#432 ' + declaration.fullLine)
                     newFunctional.buildString('ld.global%s' % declaration.variableType, (declaration.variableName + '_' + str(i), '[' + ptr + ' + ' + str(int(i * declaration.bitCount() / 8)) + ']'))
                     newLines.append(newFunctional)
                 
@@ -225,12 +283,13 @@ def translate_deref_instructions(ptx_shader):
         
 
         elif line.functionalType == FunctionalType.deref_var:
-            dst, src, type = line.args
+            dst, src, baseType, type = line.args
             
             declaration, declerationLine = ptx_shader.findDeclaration(dst)
             assert not declaration.isVector()
             assert declaration.declarationType == DeclarationType.Register
             declaration.buildString(DeclarationType.Register, None, '.b64', declaration.variableName)
+            declaration.pointerVariableType = '.' + baseType
 
             line.buildString('mov.b64', (dst, '%' + src))
 
@@ -357,7 +416,7 @@ def translate_decl_var(ptx_shader):
     for decleration in old_declerations:
         ptx_shader.lines.remove(decleration)
     
-
+    new_declerations.append(PTXLine('\n'))
     ptx_shader.addToStart(new_declerations)
     
     # for index in range(len(ptx_shader.lines)):
@@ -374,7 +433,7 @@ def translate_decl_var(ptx_shader):
     #     break
 
 
-def  translate_ray_launch_instructions(ptx_shader):
+def translate_load_GL_instructions(ptx_shader):
     skip_lines = -1
     for index in range(len(ptx_shader.lines)):
         if index <= skip_lines:
@@ -382,6 +441,7 @@ def  translate_ray_launch_instructions(ptx_shader):
         line = ptx_shader.lines[index]
         if line.instructionClass != InstructionClass.Functional:
             continue
+
         if line.functionalType == FunctionalType.load_ray_launch_id or line.functionalType == FunctionalType.load_ray_launch_size:
             dst = line.args[0]
 
@@ -415,6 +475,27 @@ def  translate_ray_launch_instructions(ptx_shader):
             # ptx_shader.lines.insert(index + 5, loadZero)
             # ptx_shader.lines[index + 6: index + 6] = wrapMovs[:3]
             # skip_lines = index + 7
+        
+        
+        elif line.functionalType == FunctionalType.load_ray_world_to_object or line.functionalType == FunctionalType.load_ray_object_to_world:
+            dst, loadIndex = line.args
+
+            newRegNames, _, _, _ = unwrapp_vector(ptx_shader, dst, dst)
+
+            line.buildString(line.functionalType, newRegNames[:3] + [loadIndex, ])
+        
+
+        elif line.functionalType == FunctionalType.load_ray_world_direction:
+            dst = line.args[0]
+
+            newRegNames, _, _, _ = unwrapp_vector(ptx_shader, dst, dst)
+            line.buildString(line.functionalType, newRegNames[:3])
+
+
+
+
+
+
 
 def translate_image_deref_store(ptx_shader):
     for index in range(len(ptx_shader.lines)):
@@ -487,10 +568,148 @@ def translate_phi(ptx_shader):
         ptx_shader.lines.remove(dstDecleration)
         ptx_shader.lines.remove(line)
 
-        ptx_shader.addToStart((dstDecleration, ))
+        ptx_shader.addToStart((dstDecleration, PTXLine('\n')))
         ptx_shader.addToEndOfBlock((src0Mov, ), blockName0)
         ptx_shader.addToEndOfBlock((src1Mov, ), blockName1)
 
+
+def translate_load_const(ptx_shader):
+    for index in range(len(ptx_shader.lines)):
+        line = ptx_shader.lines[index]
+        if line.instructionClass != InstructionClass.Functional:
+            continue
+
+        if line.functionalType != FunctionalType.load_const:
+            continue
+
+        dst, const = line.args
+        declaration, _ = ptx_shader.findDeclaration(dst)
+        declaration.isLoadConst = True
+
+        line.buildString("mov%s" % (declaration.variableType), (dst, const))
+
+
+        newVariableType = '.b' + declaration.variableType[2:]
+
+        newDeclaration = PTXDecleration()
+        newDeclaration.leadingWhiteSpace = declaration.leadingWhiteSpace
+        newDeclaration.buildString(DeclarationType.Register, None, newVariableType, dst + '_bits')
+
+        newMov = PTXFunctionalLine()
+        newMov.leadingWhiteSpace = line.leadingWhiteSpace
+        newMov.buildString("mov%s" % (declaration.variableType), (dst + '_bits', const))
+
+        ptx_shader.lines[index + 1:index + 1] = (newDeclaration, newMov)
+
+
+
+
+def translate_const_operands(ptx_shader):
+    for index in range(len(ptx_shader.lines)):
+        line = ptx_shader.lines[index]
+        if line.instructionClass != InstructionClass.Functional:
+            continue
+
+        if line.command[:3] == 'mov':
+
+            movType = line.command[3:]
+
+            dst, src = line.args
+
+            print(line.fullLine)
+            
+            if src[0] == '%':
+                declaration, _ = ptx_shader.findDeclaration(src)                
+
+                if movType[:2] != '.f' and declaration.isLoadConst:
+                    line.buildString(line.command.split()[0], (dst, src + '_bits'))
+        
+        elif line.command[:4] == 'setp':
+            dst, src1, src2 = line.args
+
+            type = '.' + line.command.split()[0].split('.')[2]
+
+            if type[:2] != '.f':
+                if src1[0] == '%':
+                    declaration, _ = ptx_shader.findDeclaration(src1)
+                    if declaration.isLoadConst:
+                        line.buildString(line.command.split()[0], (dst, src1 + '_bits', src2))
+            
+                if src2[0] == '%':
+                    declaration, _ = ptx_shader.findDeclaration(src2)
+                    if declaration.isLoadConst:
+                        line.buildString(line.command.split()[0], (dst, src1, src2 + '_bits'))
+        
+        elif line.command[:3] == 'add':
+            dst, src1, src2 = line.args
+
+            type = line.command[3:]
+
+            if type[:2] != '.f':
+                if src1[0] == '%':
+                    declaration, _ = ptx_shader.findDeclaration(src1)
+                    if declaration.isLoadConst:
+                        line.buildString(line.command.split()[0], (dst, src1 + '_bits', src2))
+            
+                if src2[0] == '%':
+                    declaration, _ = ptx_shader.findDeclaration(src2)
+                    if declaration.isLoadConst:
+                        line.buildString(line.command.split()[0], (dst, src1, src2 + '_bits'))
+
+
+        
+def translate_f1_to_pred(ptx_shader):
+    for index in range(len(ptx_shader.lines)):
+        line = ptx_shader.lines[index]
+        # if line.instructionClass == InstructionClass.VariableDeclaration:
+
+        #     if line.declarationType == DeclarationType.Register:
+
+        #         if line.variableType == '.f1':
+        #             line.buildString(DeclarationType.Register, line.vector, '.pred', line.variableName)
+        
+
+        if line.instructionClass == InstructionClass.Functional:
+
+            if line.command.split()[0] == 'ld.global.b1':
+                
+                dst, ptr = line.args
+                declaration, _ = ptx_shader.findDeclaration(dst)
+
+                assert declaration.variableType == '.b1'
+
+                newDeclaration = PTXDecleration()
+                newDeclaration.leadingWhiteSpace = line.leadingWhiteSpace
+                newDeclaration.buildString(DeclarationType.Register, None, '.u16', declaration.variableName + '_u16')
+
+                newLoad = PTXFunctionalLine()
+                newLoad.leadingWhiteSpace = line.leadingWhiteSpace
+                newLoad.buildString('ld.global.u16', (dst + '_u16', ptr))
+
+                newAnd = PTXFunctionalLine()
+                newAnd.leadingWhiteSpace = line.leadingWhiteSpace
+                newAnd.buildString('and.b16', (dst + '_u16', dst + '_u16', '%const1_u16'))
+
+                newSetp = PTXFunctionalLine()
+                newSetp.leadingWhiteSpace = line.leadingWhiteSpace
+                newSetp.buildString('setp.eq.u16', (dst, dst + '_u16', '%const1_u16'))
+
+
+                declaration.buildString(declaration.declarationType, declaration.vector, '.pred', declaration.variableName)
+                ptx_shader.lines.remove(line)
+                ptx_shader.lines[index:index] = (newDeclaration, newLoad, newAnd, newSetp)
+            
+
+def add_consts(ptx_shader):
+    newDeclaration = PTXDecleration()
+    newDeclaration.leadingWhiteSpace = '\t'
+    newDeclaration.buildString(DeclarationType.Register, None, '.u16', '%const1_u16')
+
+    newMov = PTXFunctionalLine()
+    newMov.leadingWhiteSpace = '\t'
+    newMov.buildString('mov.u16', ('%const1_u16', '1'))
+
+    ptx_shader.addToStart((newDeclaration, newMov, PTXLine('\n')))
 
 
 def main():
@@ -498,16 +717,23 @@ def main():
     assert len(sys.argv) == 2
     shaderPath = sys.argv[1]
     shader = PTXShader(shaderPath)
+    
+    add_consts(shader)
+
+    translate_load_const(shader)
     translate_descriptor_set_instructions(shader)
     translate_deref_instructions(shader)
     translate_trace_ray(shader)
     translate_decl_var(shader)
-    translate_ray_launch_instructions(shader)
+    translate_load_GL_instructions(shader)
     translate_image_deref_store(shader)
     translate_exit(shader)
     translate_phi(shader)
 
     translate_vector_operands(shader, unique_ID)
+    translate_const_operands(shader)
+
+    translate_f1_to_pred(shader)
     shader.writeToFile(shaderPath)
 
 

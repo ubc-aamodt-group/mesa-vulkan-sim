@@ -94,9 +94,9 @@ class PTXDecleration (PTXLine):
             self.parse(self.command)
     
     def parse(self, command):
-        print('###')
-        print(command)
-        print('###')
+        # print('###')
+        # print(command)
+        # print('###')
         self.command = command
         firstWord = command.split(None, 1)[0]
         if firstWord == '.reg':
@@ -123,9 +123,13 @@ class PTXDecleration (PTXLine):
             args = args[index + 2:]
         else:
             args = None
+        
+        self.pointerVariableType = None
+        self.isLoadConst = False
     
     def buildString(self, declarationType, vector, variableType, variableName):
         assert declarationType != DeclarationType.Other
+        self.instructionClass = InstructionClass.VariableDeclaration
 
         self.declarationType = declarationType
         self.vector = vector
@@ -137,6 +141,10 @@ class PTXDecleration (PTXLine):
         else:
             vector = ' ' + self.vector
         self.command = '%s%s %s %s' % (declarationType.value, vector, variableType, variableName)
+
+        self.pointerVariableType = None
+        self.isLoadConst = False
+
         super().buildString()
     
     def isVector(self):
@@ -175,6 +183,10 @@ class FunctionalType(Enum, metaclass=MetaEnum):
     exit = 'exit'
     ret = 'ret'
     phi = 'phi'
+    load_const = 'load_const'
+    load_ray_world_to_object = 'load_ray_world_to_object'
+    load_ray_object_to_world = 'load_ray_object_to_world'
+    load_ray_world_direction = 'load_ray_world_direction'
     Other = auto()
 
 class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line that does sth like mov (eg it's not decleration)
@@ -221,6 +233,7 @@ class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line t
             self.args = []
     
     def buildString(self, function=None, args=None):
+        self.instructionClass = InstructionClass.Functional
         if function is None:
             function = self.functionalType
         if args is None:
@@ -238,16 +251,16 @@ class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line t
         super().buildString()
     
 
-    def is_load_const(self):
-        if self.functionalType != FunctionalType.mov:
-            return False
-        if len(self.args) != 2:
-            return False
-        if self.args[0][0] != '%':
-            return False
-        if self.args[1][0] == '%':
-            return False
-        return True
+    # def is_load_const(self):
+    #     if self.functionalType != FunctionalType.mov:
+    #         return False
+    #     if len(self.args) != 2:
+    #         return False
+    #     if self.args[0][0] != '%':
+    #         return False
+    #     if self.args[1][0] == '%':
+    #         return False
+    #     return True
 
 
 class PTXEntryPoint (PTXLine):
