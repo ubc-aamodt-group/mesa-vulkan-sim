@@ -1691,7 +1691,7 @@ static void dump_descriptor_set_for_AS(uint32_t setID, uint32_t descID, void *ad
    // File name format: setID_descID_SizeInBytes_VkDescriptorType.vkdescrptorsetdata
 
    fp = fopen(fullPath, "wb+");
-   fwrite(address-(uint64_t)desired_range, 1, desc_size + desired_range*2, fp);
+   fwrite(address-(uint64_t)desired_range, 1, desc_size + desired_range, fp);
    fclose(fp);
 }
 
@@ -1772,7 +1772,7 @@ static void update_gpgpusim_descriptor_sets(struct anv_descriptor_set *set)
          void *desc_map = set->desc_mem.map + bind_layout->descriptor_offset;
          struct anv_address_range_descriptor *desc_data = desc_map;
          gpgpusim_setDescriptorSet(0, i, (void *)(desc_data->address), desc_data->range, set->descriptors[i].type);
-         dump_descriptor_set_for_AS(0, i, (void *)(desc_data->address), desc_data->range, set->descriptors[i].type, 1024);
+         dump_descriptor_set_for_AS(0, i, (void *)(desc_data->address), desc_data->range, set->descriptors[i].type, 576);
          break;
       }
 
