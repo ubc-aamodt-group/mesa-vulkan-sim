@@ -187,6 +187,7 @@ class FunctionalType(Enum, metaclass=MetaEnum):
     load_ray_world_to_object = 'load_ray_world_to_object'
     load_ray_object_to_world = 'load_ray_object_to_world'
     load_ray_world_direction = 'load_ray_world_direction'
+    fpow = 'fpow'
     Other = auto()
 
 class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line that does sth like mov (eg it's not decleration)

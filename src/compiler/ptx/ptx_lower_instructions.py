@@ -712,6 +712,37 @@ def add_consts(ptx_shader):
     ptx_shader.addToStart((newDeclaration, newMov, PTXLine('\n')))
 
 
+
+def translate_ALU(ptx_shader):
+    for index in range(len(ptx_shader.lines)):
+        line = ptx_shader.lines[index]
+        
+        if line.instructionClass != InstructionClass.Functional:
+            continue
+
+        if line.functionalType == FunctionalType.fpow:
+            dst, src1, src2 = line.args # dst = src1 ^ src2 ?
+
+            declaration, _ = ptx_shader.findDeclaration(dst)
+            assert declaration.variableType == '.f32'
+
+            logLine = PTXFunctionalLine()
+            logLine.leadingWhiteSpace = line.leadingWhiteSpace
+            logLine.buildString('lg2.approx.f32', (dst, src1))
+
+            mulLine = PTXFunctionalLine()
+            mulLine.leadingWhiteSpace = line.leadingWhiteSpace
+            mulLine.buildString('mul.f32', (dst, dst, src2))
+
+            expLine = PTXFunctionalLine()
+            expLine.leadingWhiteSpace = line.leadingWhiteSpace
+            expLine.buildString('ex2.approx.f32', (dst, dst))
+
+            ptx_shader.lines.remove(line)
+            ptx_shader.lines[index:index] = (logLine, mulLine, expLine)
+
+
+
 def main():
     unique_ID = 0
     assert len(sys.argv) == 2
@@ -732,6 +763,8 @@ def main():
 
     translate_vector_operands(shader, unique_ID)
     translate_const_operands(shader)
+
+    translate_ALU(shader)
 
     translate_f1_to_pred(shader)
     shader.writeToFile(shaderPath)

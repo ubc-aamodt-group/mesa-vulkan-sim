@@ -26,7 +26,7 @@ dep_embree = declare_dependency(
     include_directories : include_directories(embree_header_dir))
 
 gpgpusim_lib = 'cudart'
-gpgpusim_lib_dir = '/home/tommy/new-emerald/vulkan_gpgpusim/gpgpu-sim_emerald/lib/gcc-9.3.0/cuda-10010/debug'
+gpgpusim_lib_dir = '/home/mrs/emerald-ray-tracing/gpgpu-sim_emerald/lib/gcc-9.3.0/cuda-11000/debug'
 dep_gpgpusim = declare_dependency(
     link_args : ['-L' + gpgpusim_lib_dir, '-l' + gpgpusim_lib])
 
