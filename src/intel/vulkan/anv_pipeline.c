@@ -2584,10 +2584,10 @@ static void translate_nir_to_ptx(nir_shader *shader, char* shaderPath)
 
    strcpy(shaderPath, fullPath);
 
-   if(1){ // debugging: print out current nir shader
-      nir_print_shader(shader, stderr);
-      nir_translate_shader_to_ptx(shader, stderr, NULL);
-   }
+   // if(1){ // debugging: print out current nir shader
+   //    nir_print_shader(shader, stderr);
+   //    nir_translate_shader_to_ptx(shader, stderr, NULL);
+   // }
 }
 
 

@@ -87,8 +87,8 @@ def translate_vector_operands(ptx_shader, unique_ID):
         line = ptx_shader.lines[index]
 
         if line.instructionClass == InstructionClass.Functional:
-            print("#######################")
-            print(line.fullLine)
+            # print("#######################")
+            # print(line.fullLine)
 
             for argIndex in range(len(line.args)):
                 arg = line.args[argIndex]
@@ -108,8 +108,8 @@ def translate_vector_operands(ptx_shader, unique_ID):
             if not line.isVector():
                 continue
 
-            print("#######################")
-            print(line.fullLine)
+            # print("#######################")
+            # print(line.fullLine)
 
             newLines = list()
             for i in range(line.vectorSize()):
@@ -228,7 +228,7 @@ def translate_deref_instructions(ptx_shader):
             declaration, declerationLine = ptx_shader.findDeclaration(dst)
             srcDeclaration, _ = ptx_shader.findDeclaration(ptr)
 
-            print(line.fullLine)
+            # print(line.fullLine)
 
             # assert srcDeclaration.pointerVariableType[:2] == '.b' or srcDeclaration.pointerVariableType[:2] == '.f'
 
@@ -260,8 +260,9 @@ def translate_deref_instructions(ptx_shader):
         elif line.functionalType == FunctionalType.store_deref:
             # print("################")
             # print(line.fullLine)
-            dst = line.args[1]
-            ptr = line.args[0]
+            ptr, dst, wrmask, access = line.args
+            # dst = line.args[1]
+            # ptr = line.args[0]
 
             declaration, declerationLine = ptx_shader.findDeclaration(dst)
             if not declaration.isVector():
@@ -271,6 +272,8 @@ def translate_deref_instructions(ptx_shader):
 
                 # load into each register
                 for i in range(declaration.vectorSize()):
+                    if int(wrmask) & (1 << i) == 0:
+                        continue
                     newFunctional = PTXFunctionalLine()
                     newFunctional.leadingWhiteSpace = declaration.leadingWhiteSpace
                     newFunctional.buildString('st.global%s' % declaration.variableType, ('[' + ptr  + ' + ' + str(int(i * declaration.bitCount() / 8)) + ']', declaration.variableName + '_' + str(i)))
@@ -337,34 +340,36 @@ def translate_trace_ray(ptx_shader):
         originRegNames = [origin + '_' + str(i) for i in range(3)]
         directionRegNames = [direction + '_' + str(i) for i in range(3)]
 
-        hitDeclaration = PTXDecleration()
-        hitDeclaration.leadingWhiteSpace = line.leadingWhiteSpace
-        hitDeclaration.buildString(DeclarationType.Register, None, '.u32', 'hit_geometry')
+        runClosestHitDeclaration = PTXDecleration()
+        runClosestHitDeclaration.leadingWhiteSpace = line.leadingWhiteSpace
+        runClosestHitDeclaration.buildString(DeclarationType.Register, None, '.u32', '%run_closest_hit')
+
+        runMissDeclaration = PTXDecleration()
+        runMissDeclaration.leadingWhiteSpace = line.leadingWhiteSpace
+        runMissDeclaration.buildString(DeclarationType.Register, None, '.u32', '%run_miss')
 
         args[8:9] = directionRegNames[:3]
         args[6:7] = originRegNames[:3]
-        args.append('hit_geometry')
+        args.append('%run_closest_hit')
+        args.append('%run_miss')
         line.buildString(line.functionalType, args)
 
         call_closest_hit = PTXFunctionalLine()
         call_closest_hit.leadingWhiteSpace = line.leadingWhiteSpace
-        call_closest_hit.condition = '@!hit_geometry'
+        call_closest_hit.condition = '@!%run_closest_hit'
         call_closest_hit.buildString(FunctionalType.call_closest_hit_shader, ())
 
         call_miss = PTXFunctionalLine()
         call_miss.leadingWhiteSpace = line.leadingWhiteSpace
-        call_miss.condition = '@hit_geometry'
+        call_miss.condition = '@!%run_miss'
         call_miss.buildString(FunctionalType.call_miss_shader, ())
 
-        ptx_shader.lines.insert(index, hitDeclaration)
-        # ptx_shader.lines[index + 1:index + 1] = originDeclarations
-        # ptx_shader.lines[index + 5:index + 5] = directionDeclarations
-        # ptx_shader.lines[index + 9:index + 9] = originMovs[:3]
-        # ptx_shader.lines[index + 12:index + 12] = directionMovs[:3]
-        ptx_shader.lines.insert(index + 2, call_closest_hit)
-        ptx_shader.lines.insert(index + 3, call_miss)
+        ptx_shader.lines.insert(index, runClosestHitDeclaration)
+        ptx_shader.lines.insert(index + 1, runMissDeclaration)
+        ptx_shader.lines.insert(index + 3, call_closest_hit)
+        ptx_shader.lines.insert(index + 4, call_miss)
 
-        print(ptx_shader.lines[index + 2].fullLine)
+        # print(ptx_shader.lines[index + 2].fullLine)
 
         skip_lines = index + 16
 
@@ -389,12 +394,17 @@ def translate_decl_var(ptx_shader):
         # print(line.args)
         # exit(-1)
 
-        name, bit_size, vector_number, variable_type, storage_qualifier_type, driver_location, binding = line.args
+        name, size, vector_number, variable_type, storage_qualifier_type, driver_location, binding = line.args
         name = '%' + name
 
         newReg = PTXDecleration()
         newReg.leadingWhiteSpace = '\t'
         newReg.buildString(DeclarationType.Register, None, '.b64', name)
+
+        if int(vector_number) != 0:
+            allocation_size = int(size) * int(vector_number)
+        else:
+            allocation_size = int(size)
 
 
         if int(storage_qualifier_type) == 16: ## uniform type
@@ -406,7 +416,7 @@ def translate_decl_var(ptx_shader):
             newLine = PTXFunctionalLine()
             newLine.leadingWhiteSpace = '\t'
             newLine.comment = line.comment
-            newLine.buildString('rt_alloc_mem', (name, str(int(int(bit_size) * int(vector_number) / 8)), str(storage_qualifier_type)))
+            newLine.buildString('rt_alloc_mem', (name, str(allocation_size), str(storage_qualifier_type)))
 
         new_declerations.append(newReg)
         # new_declerations.append(newSizeSet)

@@ -3586,18 +3586,24 @@ print_if_as_ptx(nir_if *if_stmt, print_state *state, ssa_reg_info *ssa_register_
 
    print_tabs(tabs, fp);
    fprintf(fp, "\n");
+   
    foreach_list_typed(nir_cf_node, node, node, &if_stmt->then_list) {
       print_cf_node_as_ptx(node, state, ssa_register_info, tabs + 1);
    }
+   print_tabs(tabs + 1, fp);
+   fprintf(fp, "bra end_if_%d;\n", currentID);
+   
    print_tabs(tabs, fp);
    fprintf(fp, "\n");
    print_tabs(tabs, fp);
    fprintf(fp, "else_%d: \n", currentID);
+
    foreach_list_typed(nir_cf_node, node, node, &if_stmt->else_list) {
       print_cf_node_as_ptx(node, state, ssa_register_info, tabs + 1);
    }
+
    print_tabs(tabs, fp);
-   fprintf(fp, "\n");
+   fprintf(fp, "end_if_%d:\n", currentID);
 }
 
 static void
@@ -3747,7 +3753,13 @@ print_var_decl_as_ptx(nir_variable *var, print_state *state)
 
    // PTX Code
    // The variables here are probably treated as magic variables
-   fprintf(fp, "decl_var %s, %d, %d, %d, %d, %u, %u;\t", var->name, glsl_get_bit_size(var->type), glsl_get_vector_elements(var->type), 
+   int size = 0;
+   if(glsl_get_base_type(var->type) == GLSL_TYPE_STRUCT)
+      size = get_struct_size_for_ptx(var->type);
+   else
+      size = glsl_get_bit_size(var->type) / 8;
+
+   fprintf(fp, "decl_var %s, %d, %d, %d, %d, %u, %u;\t", var->name, size, glsl_get_vector_elements(var->type), 
                   glsl_get_base_type(var->type), var->data.mode, var->data.driver_location, var->data.binding);
 
    // if ((var->data.mode == nir_var_shader_temp) ||
@@ -3893,6 +3905,7 @@ print_var_decl_as_ptx(nir_variable *var, print_state *state)
    print_annotation(state, var);
 }
 
+static uint32_t functionID = 0; //TODO: when shaders are registered, function name is calculated seperately, combine them into one ID
 
 static void
 print_ptx_function_impl(nir_function_impl *impl, print_state *state, gl_shader_stage stage)
@@ -3925,6 +3938,8 @@ print_ptx_function_impl(nir_function_impl *impl, print_state *state, gl_shader_s
       default:
          unreachable("Invalid shader type");
    }
+
+   fprintf(fp, "_func%d", functionID++);
 
    fprintf(fp, "_%s ", impl->function->name);
    fprintf(fp, "() "); // any shader inputs would go here
@@ -4058,6 +4073,7 @@ nir_translate_shader_to_ptx(nir_shader *shader, FILE *fp, char *filePath)
    char *mesa_root = getenv("MESA_ROOT");
    snprintf(command, sizeof(command), "python3 %s/src/compiler/ptx/ptx_lower_instructions.py %s", mesa_root, filePath);
    int result = system(command);
+
    if (result != 0)
    {
       printf("MESA: ERROR ** while translating nir to PTX %d\n", result);

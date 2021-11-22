@@ -98,9 +98,26 @@ get_struct_field_offset_for_ptx(const struct glsl_type *type,
       const struct glsl_type * field_type = type->fields.structure[i].type;
       // assert(!field_type->is_struct());
       // assert(!field_type->is_array());
-      offset += field_type->explicit_size();
+      int field_size = field_type->explicit_size();
+      assert(field_size > 0);
+      offset += field_size;
    }
    return offset;
+}
+
+int
+get_struct_size_for_ptx(const struct glsl_type *type)
+{  
+   assert(glsl_get_base_type(type) == GLSL_TYPE_STRUCT);
+   int size = 0;
+   for(int i = 0; i < type->length; i++)
+   {
+      const struct glsl_type * field_type = type->fields.structure[i].type;
+      int field_size = field_type->explicit_size();
+      assert(field_size > 0);
+      size += field_size;
+   }
+   return size;
 }
 
 const struct glsl_struct_field *

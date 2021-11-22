@@ -52,6 +52,9 @@ int glsl_get_struct_field_offset(const struct glsl_type *type,
 int get_struct_field_offset_for_ptx(const struct glsl_type *type,
                               unsigned index);
 
+int
+get_struct_size_for_ptx(const struct glsl_type *type);
+
 const struct glsl_struct_field *
 glsl_get_struct_field_data(const struct glsl_type *type, unsigned index);
 

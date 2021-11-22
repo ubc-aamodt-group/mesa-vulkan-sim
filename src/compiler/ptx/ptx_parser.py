@@ -34,7 +34,10 @@ class PTXLine:
         self.condition = ''
     
     def buildString(self):
-        self.fullLine = self.condition + self.leadingWhiteSpace + self.command
+        if len(self.condition) > 0:
+            self.fullLine = self.leadingWhiteSpace + self.condition + ' ' + self.command
+        else:
+            self.fullLine = self.leadingWhiteSpace + self.command
         if len(self.comment) > 0:
             self.fullLine += '; //' + self.comment
         else:
@@ -188,6 +191,7 @@ class FunctionalType(Enum, metaclass=MetaEnum):
     load_ray_object_to_world = 'load_ray_object_to_world'
     load_ray_world_direction = 'load_ray_world_direction'
     fpow = 'fpow'
+    bra = 'bra'
     Other = auto()
 
 class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line that does sth like mov (eg it's not decleration)
@@ -314,8 +318,24 @@ class PTXShader:
             if blockName in line.fullLine and 'end_block' in line.fullLine:
                 break
         
-        while index > 0 and self.lines[index - 1].instructionClass == InstructionClass.Empty:
+        if index > 0 and self.lines[index - 1].instructionClass == InstructionClass.Empty:
             index -= 1
+
+        braExists = False
+        braIndex = index
+        while braIndex >= 0:
+            if 'start_block' in self.lines[braIndex].fullLine:
+                break
+            elif self.lines[braIndex].instructionClass == InstructionClass.Empty:
+                braIndex -= 1
+            elif self.lines[braIndex].instructionClass == InstructionClass.Functional and self.lines[braIndex].functionalType == FunctionalType.bra:
+                braExists = True
+                break
+            else:
+                break
+        
+        if braExists:
+            index = braIndex
         
         self.lines[index:index] = ptxLines
     
