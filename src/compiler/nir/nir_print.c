@@ -1948,7 +1948,7 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
          fprintf(fp, ";\n");
          print_tabs(tabs, fp);
       }
-      fprintf(fp, "%s ", info->name); // Intrinsic function name
+      fprintf(fp, "%s %d, ", info->name, instr->dest.ssa.num_components); // Intrinsic function name
    }
    
    // fprintf(fp, "%s%s, %d", is_parent_pointer ? ", ptr, " : ", not_ptr, ",
@@ -3758,6 +3758,12 @@ print_var_decl_as_ptx(nir_variable *var, print_state *state)
       size = get_struct_size_for_ptx(var->type);
    else
       size = glsl_get_bit_size(var->type) / 8;
+   
+   if(glsl_get_bit_size(var->type) % 8 != 0)
+      size++;
+   
+   if(size < 4)
+      size = 4;
 
    fprintf(fp, "decl_var %s, %d, %d, %d, %d, %u, %u;\t", var->name, size, glsl_get_vector_elements(var->type), 
                   glsl_get_base_type(var->type), var->data.mode, var->data.driver_location, var->data.binding);

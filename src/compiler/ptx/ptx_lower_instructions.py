@@ -222,8 +222,7 @@ def translate_deref_instructions(ptx_shader):
 
         
         elif line.functionalType == FunctionalType.load_deref:
-            dst = line.args[0]
-            ptr = line.args[1]
+            vectorCount, dst, ptr, access = line.args
 
             declaration, declerationLine = ptx_shader.findDeclaration(dst)
             srcDeclaration, _ = ptx_shader.findDeclaration(ptr)
@@ -245,6 +244,8 @@ def translate_deref_instructions(ptx_shader):
 
                 # load into each register
                 for i in range(declaration.vectorSize()):
+                    if int(vectorCount) > 0 and i >= int(vectorCount):
+                        break
                     newFunctional = PTXFunctionalLine()
                     newFunctional.leadingWhiteSpace = declaration.leadingWhiteSpace
                     # print('#432 ' + declaration.fullLine)
