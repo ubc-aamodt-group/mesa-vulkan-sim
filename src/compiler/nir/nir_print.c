@@ -2447,7 +2447,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "i2i64")){
          //fprintf(fp, ".reg .f32 ");
-         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, UINT, instr->dest.dest.ssa.bit_size);
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, INT, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";");
          fprintf(fp, "\n");
@@ -2455,7 +2455,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
 
          fprintf(fp, "cvt.s64.s32 ");
 
-         ssa_register_info[instr->dest.dest.ssa.index].type = UINT;
+         ssa_register_info[instr->dest.dest.ssa.index].type = INT;
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "fadd")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
@@ -2523,7 +2523,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "ior")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
-         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, instr->dest.dest.ssa.bit_size == 1 ? PREDICATE : INT, instr->dest.dest.ssa.bit_size);
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, instr->dest.dest.ssa.bit_size == 1 ? PREDICATE : UINT, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";");
          fprintf(fp, "\n");
@@ -2535,11 +2535,11 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
             fprintf(fp, "or.s%d ", instr->dest.dest.ssa.bit_size);
          }
 
-         ssa_register_info[instr->dest.dest.ssa.index].type = instr->dest.dest.ssa.bit_size == 1 ? PREDICATE : INT;
+         ssa_register_info[instr->dest.dest.ssa.index].type = instr->dest.dest.ssa.bit_size == 1 ? PREDICATE : UINT;
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "ixor")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
-         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, instr->dest.dest.ssa.bit_size == 1 ? PREDICATE : INT, instr->dest.dest.ssa.bit_size);
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, instr->dest.dest.ssa.bit_size == 1 ? PREDICATE : UINT, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";");
          fprintf(fp, "\n");
@@ -2551,11 +2551,11 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
             fprintf(fp, "xor.s%d ", instr->dest.dest.ssa.bit_size);
          }
 
-         ssa_register_info[instr->dest.dest.ssa.index].type = instr->dest.dest.ssa.bit_size == 1 ? PREDICATE : INT;
+         ssa_register_info[instr->dest.dest.ssa.index].type = instr->dest.dest.ssa.bit_size == 1 ? PREDICATE : UINT;
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "iand")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
-         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, instr->dest.dest.ssa.bit_size == 1 ? PREDICATE : INT, instr->dest.dest.ssa.bit_size);
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, instr->dest.dest.ssa.bit_size == 1 ? PREDICATE : UINT, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";");
          fprintf(fp, "\n");
@@ -2567,7 +2567,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
             fprintf(fp, "and.s%d ", instr->dest.dest.ssa.bit_size);
          }
 
-         ssa_register_info[instr->dest.dest.ssa.index].type = instr->dest.dest.ssa.bit_size == 1 ? PREDICATE : INT;
+         ssa_register_info[instr->dest.dest.ssa.index].type = instr->dest.dest.ssa.bit_size == 1 ? PREDICATE : UINT;
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "ineg")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
@@ -2750,7 +2750,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "ushr")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
-         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, INT, instr->dest.dest.ssa.bit_size);
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, UINT, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";");
          fprintf(fp, "\n");
@@ -2758,7 +2758,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
 
          fprintf(fp, "shr.u%d ", instr->dest.dest.ssa.bit_size);
 
-         ssa_register_info[instr->dest.dest.ssa.index].type = INT;
+         ssa_register_info[instr->dest.dest.ssa.index].type = UINT;
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "fsat")) {
          //fprintf(fp, ".reg .f%d ", instr->dest.dest.ssa.bit_size);
