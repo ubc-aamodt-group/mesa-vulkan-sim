@@ -2476,7 +2476,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          fprintf(fp, "\n");
          print_tabs(tabs, fp);
 
-         fprintf(fp, "cvt.rn.s32");
+         fprintf(fp, "cvt.s32");
          fprintf(fp, ".u%d ", instr->dest.dest.ssa.bit_size);
 
          ssa_register_info[instr->dest.dest.ssa.index].type = INT;
@@ -2852,7 +2852,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
             fprintf(fp, "\n");
             print_tabs(tabs, fp);
             // Convert ssa_1 to ssa_1_cvt
-            fprintf(fp, "cvt.rn.u%d.", instr->dest.dest.ssa.bit_size);
+            fprintf(fp, "cvt.u%d.", instr->dest.dest.ssa.bit_size);
             print_type_decl(ssa_reg_type, num_bits, state);
             fprintf(fp, " ");
             print_alu_src_as_ptx(instr, 1, state);
@@ -2874,7 +2874,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
             fprintf(fp, "\n");
             print_tabs(tabs, fp);
 
-            fprintf(fp, "cvt.rn.u%d.", instr->dest.dest.ssa.bit_size);
+            fprintf(fp, "cvt.u%d.", instr->dest.dest.ssa.bit_size);
             print_type_decl(ssa_reg_type, num_bits, state);
             fprintf(fp, " ");
             print_alu_src_as_ptx(instr, 2, state);
