@@ -2035,6 +2035,18 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
       }
       fprintf(fp, "%s ", info->name); // Intrinsic function name
    }
+   else if (!strcmp(info->name, "shader_clock")){
+      // The argument 2 probably means memory_scope=SUBGROUP
+      // Store lower 32 bits in dst.x and upper 32 bits in dst.y
+      if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = UINT;
+         print_ptx_reg_decl(state, instr->dest.ssa.num_components, UINT, instr->dest.ssa.bit_size);
+         print_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";\n");
+         print_tabs(tabs, fp);
+      }
+      fprintf(fp, "%s ", info->name); // Intrinsic function name
+   }
    else {
       fprintf(fp, "// untranslated %s instruction. ", info->name);
    }
@@ -2896,7 +2908,9 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ", ");
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ", ");
          print_alu_src_as_ptx(instr, 0, state);
+         fprintf(fp, ";");
 
          ssa_register_info[instr->dest.dest.ssa.index].type = UINT;
       }
