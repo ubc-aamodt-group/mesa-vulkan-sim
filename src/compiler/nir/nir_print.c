@@ -1965,6 +1965,16 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
       fprintf(fp, "%s ", info->name); // Intrinsic function name
       // fprintf(fp, "%s%d, ", val_type_to_str(ssa_register_info[instr->src[1].ssa->index].type), ssa_register_info[instr->src[1].ssa->index].num_bits);
    }
+   else if (!strcmp(info->name, "image_deref_load")){
+      if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = FLOAT; // feel free to change the type, its used in the shader as imageLoad
+         print_ptx_reg_decl(state, instr->dest.ssa.num_components, FLOAT, instr->dest.ssa.bit_size);
+         print_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";\n");
+         print_tabs(tabs, fp);
+      }
+      fprintf(fp, "%s ", info->name); // Intrinsic function name
+   }
    else if (!strcmp(info->name, "image_deref_store")){
       if (info->has_dest) {
          ssa_register_info[instr->dest.ssa.index].type = BITS;
