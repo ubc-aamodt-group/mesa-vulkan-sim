@@ -2814,29 +2814,54 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          assert(ssa_register_info[instr->src[0].src.ssa->index].type == PREDICATE);
 
          // Check src1 and src2 types. If they don't match the dest type, then convert to UINT
-         int src_reg_idx = instr->src[1].src.ssa->index;
-         val_type ssa_reg_type = ssa_register_info[src_reg_idx].type;
-         int num_bits = ssa_register_info[src_reg_idx].num_bits;
+         int src_reg_idx;
+         val_type ssa_reg_type;
+         int num_bits;
 
-         fprintf(fp, "cvt.u%d.", instr->dest.dest.ssa.bit_size);
-         print_type_decl(ssa_reg_type, num_bits, state);
-         fprintf(fp, " ");
-         print_alu_src_as_ptx(instr, 1, state);
-         fprintf(fp, ";");
-         fprintf(fp, "\n");
-         print_tabs(tabs, fp);
+         src_reg_idx = instr->src[1].src.ssa->index;
+         ssa_reg_type = ssa_register_info[src_reg_idx].type;
+         num_bits = ssa_register_info[src_reg_idx].num_bits;
+
+         if (ssa_reg_type != UINT) {
+            // Declare temp reg for conversion
+            fprintf(fp, ".reg .u%d ", num_bits);
+            print_alu_src_as_ptx(instr, 1, state);
+            fprintf(fp, "_cvt;");
+            fprintf(fp, "\n");
+            print_tabs(tabs, fp);
+            // Convert ssa_1 to ssa_1_cvt
+            fprintf(fp, "cvt.rn.u%d.", instr->dest.dest.ssa.bit_size);
+            print_type_decl(ssa_reg_type, num_bits, state);
+            fprintf(fp, " ");
+            print_alu_src_as_ptx(instr, 1, state);
+            fprintf(fp, "_cvt, ");
+            print_alu_src_as_ptx(instr, 1, state);
+            fprintf(fp, ";");
+            fprintf(fp, "\n");
+            print_tabs(tabs, fp);
+         }
 
          src_reg_idx = instr->src[2].src.ssa->index;
          ssa_reg_type = ssa_register_info[src_reg_idx].type;
          num_bits = ssa_register_info[src_reg_idx].num_bits;
 
-         fprintf(fp, "cvt.u%d.", instr->dest.dest.ssa.bit_size);
-         print_type_decl(ssa_reg_type, num_bits, state);
-         fprintf(fp, " ");
-         print_alu_src_as_ptx(instr, 2, state);
-         fprintf(fp, ";");
-         fprintf(fp, "\n");
-         print_tabs(tabs, fp);
+         if (ssa_reg_type != UINT) {
+            fprintf(fp, ".reg .u%d ", num_bits);
+            print_alu_src_as_ptx(instr, 2, state);
+            fprintf(fp, "_cvt;");
+            fprintf(fp, "\n");
+            print_tabs(tabs, fp);
+
+            fprintf(fp, "cvt.rn.u%d.", instr->dest.dest.ssa.bit_size);
+            print_type_decl(ssa_reg_type, num_bits, state);
+            fprintf(fp, " ");
+            print_alu_src_as_ptx(instr, 2, state);
+            fprintf(fp, "_cvt, ");
+            print_alu_src_as_ptx(instr, 2, state);
+            fprintf(fp, ";");
+            fprintf(fp, "\n");
+            print_tabs(tabs, fp);
+         }
 
          // bcsel translation
          print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, UINT, instr->dest.dest.ssa.bit_size);
