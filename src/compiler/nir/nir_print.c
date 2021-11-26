@@ -2874,27 +2874,56 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
 
          ssa_register_info[instr->dest.dest.ssa.index].type = UINT;
       }
+      else if (!strcmp(nir_op_infos[instr->op].name, "pack_64_2x32_split")) {
+         // cant use cvt.pack since it doesnt support 64 bit dest
+         // Not sure if need to make a temp dest reg as .b64 then convert that to .u64 to the dest
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, UINT, instr->dest.dest.ssa.bit_size);
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";");
+         fprintf(fp, "\n");
+         print_tabs(tabs, fp);
+
+         // dest = src1 << 32
+         fprintf(fp, "sfl.b%d ", instr->dest.dest.ssa.bit_size);
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ", ");
+         print_alu_src_as_ptx(instr, 1, state);
+         fprintf(fp, ", 32;\n");
+         print_tabs(tabs, fp);
+         
+         // dest = dest | src0
+         fprintf(fp, "or.b%d ", instr->dest.dest.ssa.bit_size);
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ", ");
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         print_alu_src_as_ptx(instr, 0, state);
+
+         ssa_register_info[instr->dest.dest.ssa.index].type = UINT;
+      }
       else {
          fprintf(fp, "// Untranslated NIR instruction ");
       }
 
-      for (unsigned i = 0; i < instr->dest.dest.ssa.num_components; i++) {
-         // Src and Dst Operands
-         print_alu_dest_as_ptx(&instr->dest, state, i);
-         fprintf(fp, ", ");
-         for (unsigned j = 0; j < nir_op_infos[instr->op].num_inputs; j++) {
-            if (j != 0)
-               fprintf(fp, ", ");
+      if (strcmp(nir_op_infos[instr->op].name, "pack_64_2x32_split")) { // add custom instructions that dont follow the typical translation here
+         // Prints the rest of the instruction
+         for (unsigned i = 0; i < instr->dest.dest.ssa.num_components; i++) {
+            // Src and Dst Operands
+            print_alu_dest_as_ptx(&instr->dest, state, i);
+            fprintf(fp, ", ");
+            for (unsigned j = 0; j < nir_op_infos[instr->op].num_inputs; j++) {
+               if (j != 0)
+                  fprintf(fp, ", ");
 
-            print_alu_src_as_ptx(instr, j, state);
+               print_alu_src_as_ptx(instr, j, state);
+            }
          }
-      }
 
-      if (!strcmp(nir_op_infos[instr->op].name, "fsat")) { // since fsat is translated as adding 0 to itself
-         fprintf(fp, ", 0F00000000");
-      }
+         if (!strcmp(nir_op_infos[instr->op].name, "fsat")) { // since fsat is translated as adding 0 to itself
+            fprintf(fp, ", 0F00000000");
+         }
 
-      fprintf(fp, ";");
+         fprintf(fp, ";");
+      }
    }
    else { // Special case to handle vec2, vec3, etc...
      int src_reg_idx = instr->src[0].src.ssa->index;
