@@ -547,11 +547,17 @@ def translate_phi(ptx_shader):
         if line.functionalType != FunctionalType.phi:
             continue
 
-        dst, blockName0, src0, blockName1, src1 = line.args
+        if len(line.args) == 5:
+            dst, blockName0, src0, blockName1, src1 = line.args
+        elif len(line.args) == 7:
+            dst, blockName0, src0, blockName1, src1, blockName2, src2 = line.args
         
         dstDecleration, dstIndex = ptx_shader.findDeclaration(dst)
         src0Decleration, _ = ptx_shader.findDeclaration(src0)
         src1Decleration, _ = ptx_shader.findDeclaration(src1)
+
+        if len(line.args) == 7:
+            src2Decleration, _ = ptx_shader.findDeclaration(src2)
 
         if src0Decleration.variableType == src1Decleration.variableType:
             variableType = src0Decleration.variableType
@@ -560,6 +566,8 @@ def translate_phi(ptx_shader):
                 variableType = src1Decleration.variableType
             elif src1Decleration.variableType[0:2] == '.f':
                 variableType = src0Decleration.variableType
+            elif src0Decleration.variableType[0:2] == '.u' and src1Decleration.variableType[0:2] == '.s':
+                variableType = src1Decleration.variableType #lets go with .s for now
             else:
                 assert 0
 
@@ -575,6 +583,12 @@ def translate_phi(ptx_shader):
         src1Mov.comment = line.comment
         src1Mov.buildString('mov%s' % variableType, (dst, src1))
 
+        if len(line.args) == 7:
+            src2Mov = PTXFunctionalLine()
+            src2Mov.leadingWhiteSpace = src2Decleration.leadingWhiteSpace
+            src2Mov.comment = line.comment
+            src2Mov.buildString('mov%s' % variableType, (dst, src2))
+
 
         ptx_shader.lines.remove(dstDecleration)
         ptx_shader.lines.remove(line)
@@ -582,6 +596,9 @@ def translate_phi(ptx_shader):
         ptx_shader.addToStart((dstDecleration, PTXLine('\n')))
         ptx_shader.addToEndOfBlock((src0Mov, ), blockName0)
         ptx_shader.addToEndOfBlock((src1Mov, ), blockName1)
+
+        if len(line.args) == 7:
+            ptx_shader.addToEndOfBlock((src2Mov, ), blockName2)
 
 
 def translate_load_const(ptx_shader):

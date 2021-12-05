@@ -2558,7 +2558,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          if (instr->dest.dest.ssa.bit_size == 1){
             fprintf(fp, "not.pred ");
          } else {
-            fprintf(fp, "not.s%d ", instr->dest.dest.ssa.bit_size);
+            fprintf(fp, "not.b%d ", instr->dest.dest.ssa.bit_size);
          }
 
          ssa_register_info[instr->dest.dest.ssa.index].type = instr->dest.dest.ssa.bit_size == 1 ? PREDICATE : INT;
@@ -2573,7 +2573,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          if (instr->dest.dest.ssa.bit_size == 1){
             fprintf(fp, "or.pred ");
          } else {
-            fprintf(fp, "or.s%d ", instr->dest.dest.ssa.bit_size);
+            fprintf(fp, "or.b%d ", instr->dest.dest.ssa.bit_size);
          }
 
          ssa_register_info[instr->dest.dest.ssa.index].type = instr->dest.dest.ssa.bit_size == 1 ? PREDICATE : UINT;
@@ -2588,7 +2588,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          if (instr->dest.dest.ssa.bit_size == 1){
             fprintf(fp, "xor.pred ");
          } else {
-            fprintf(fp, "xor.s%d ", instr->dest.dest.ssa.bit_size);
+            fprintf(fp, "xor.b%d ", instr->dest.dest.ssa.bit_size);
          }
 
          ssa_register_info[instr->dest.dest.ssa.index].type = instr->dest.dest.ssa.bit_size == 1 ? PREDICATE : UINT;
@@ -2603,7 +2603,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          if (instr->dest.dest.ssa.bit_size == 1){
             fprintf(fp, "and.pred ");
          } else {
-            fprintf(fp, "and.s%d ", instr->dest.dest.ssa.bit_size);
+            fprintf(fp, "and.b%d ", instr->dest.dest.ssa.bit_size);
          }
 
          ssa_register_info[instr->dest.dest.ssa.index].type = instr->dest.dest.ssa.bit_size == 1 ? PREDICATE : UINT;
@@ -2615,7 +2615,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          fprintf(fp, "\n");
          print_tabs(tabs, fp);
 
-         fprintf(fp, "neg.s%d ", instr->dest.dest.ssa.bit_size);
+         fprintf(fp, "neg.b%d ", instr->dest.dest.ssa.bit_size);
 
          ssa_register_info[instr->dest.dest.ssa.index].type = INT;
       }
@@ -2768,7 +2768,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          fprintf(fp, "\n");
          print_tabs(tabs, fp);
 
-         fprintf(fp, "shl.s%d ", instr->dest.dest.ssa.bit_size);
+         fprintf(fp, "shl.b%d ", instr->dest.dest.ssa.bit_size);
 
          ssa_register_info[instr->dest.dest.ssa.index].type = INT;
       }
@@ -3424,7 +3424,7 @@ print_load_const_instr_as_ptx(nir_load_const_instr *instr, print_state *state, s
          if (i > instr->def.num_components-1){
             switch (instr->def.bit_size) {
             case 64:
-               fprintf(fp, "0D%16" PRIx64, (uint64_t)0); // 0D stands for hex float representation
+               fprintf(fp, "0D%#016" PRIx64, (uint64_t)0); // 0D stands for hex float representation
                break;
             case 32:
                fprintf(fp, "0F%08x", (uint32_t)0); // 0F stands for hex float representation
@@ -3444,7 +3444,7 @@ print_load_const_instr_as_ptx(nir_load_const_instr *instr, print_state *state, s
          else {
             switch (instr->def.bit_size) {
             case 64:
-               fprintf(fp, "0D%16" PRIx64, instr->value[i].u64); // 0D stands for hex float representation
+               fprintf(fp, "0D%#016" PRIx64, instr->value[i].u64); // 0D stands for hex float representation
                break;
             case 32:
                fprintf(fp, "0F%08x", instr->value[i].u32); // 0F stands for hex float representation
@@ -3490,7 +3490,7 @@ print_load_const_instr_as_ptx(nir_load_const_instr *instr, print_state *state, s
             if (i > instr->def.num_components-1){
                switch (instr->def.bit_size) {
                case 64:
-                  fprintf(fp, "0D%16" PRIx64, (uint64_t)0); // 0D stands for hex float representation
+                  fprintf(fp, "0D%#016" PRIx64, (uint64_t)0); // 0D stands for hex float representation
                   break;
                case 32:
                   fprintf(fp, "0F%08x", (uint32_t)0); // 0F stands for hex float representation
@@ -3510,7 +3510,7 @@ print_load_const_instr_as_ptx(nir_load_const_instr *instr, print_state *state, s
             else {
                switch (instr->def.bit_size) {
                case 64:
-                  fprintf(fp, "0D%16" PRIx64, instr->value[i].u64); // 0D stands for hex float representation
+                  fprintf(fp, "0D%#016" PRIx64, instr->value[i].u64); // 0D stands for hex float representation
                   break;
                case 32:
                   fprintf(fp, "0F%08x", instr->value[i].u32); // 0F stands for hex float representation
@@ -3575,7 +3575,7 @@ print_load_const_instr_as_ptx(nir_load_const_instr *instr, print_state *state, s
    //       fprintf(fp, "mov.f64 ");
    //       print_ssa_def_as_ptx(&instr->def, state, i); //dst
    //       fprintf(fp, ", ");
-   //       fprintf(fp, "0D%16" PRIx64, instr->value[i].u64); // 0D stands for hex float representation
+   //       fprintf(fp, "0D%#016" PRIx64, instr->value[i].u64); // 0D stands for hex float representation
    //       break;
    //    case 32:
    //       fprintf(fp, "\n\t");
