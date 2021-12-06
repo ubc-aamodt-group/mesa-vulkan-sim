@@ -355,24 +355,78 @@ def translate_trace_ray(ptx_shader):
         args.append('%run_miss')
         line.buildString(line.functionalType, args)
 
+
+        skip_closest_hit_declaration = PTXDecleration()
+        skip_closest_hit_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+        skip_closest_hit_declaration.buildString(DeclarationType.Register, None, '.pred', '%skip_closest_hit')
+
+        call_closest_hit_setp = PTXFunctionalLine()
+        call_closest_hit_setp.leadingWhiteSpace = line.leadingWhiteSpace
+        call_closest_hit_setp.buildString('setp.eq.u32', ('%skip_closest_hit', '%run_closest_hit', '%const0_u32'))
+
+        call_closest_hit_bra = PTXFunctionalLine()
+        call_closest_hit_bra.leadingWhiteSpace = line.leadingWhiteSpace
+        call_closest_hit_bra.condition = '@%skip_closest_hit'
+        call_closest_hit_bra.buildString(FunctionalType.bra, ('skip_closest_hit_label', ))
+
         call_closest_hit = PTXFunctionalLine()
         call_closest_hit.leadingWhiteSpace = line.leadingWhiteSpace
-        call_closest_hit.condition = '@!%run_closest_hit'
         call_closest_hit.buildString(FunctionalType.call_closest_hit_shader, ())
+
+        skip_closest_hit_label = PTXLine('')
+        skip_closest_hit_label.fullLine = line.leadingWhiteSpace + 'skip_closest_hit_label:\n'
+
+
+        skip_miss_declaration = PTXDecleration()
+        skip_miss_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+        skip_miss_declaration.buildString(DeclarationType.Register, None, '.pred', '%skip_miss')
+
+        call_miss_setp = PTXFunctionalLine()
+        call_miss_setp.leadingWhiteSpace = line.leadingWhiteSpace
+        call_miss_setp.buildString('setp.eq.u32', ('%skip_miss', '%run_miss', '%const0_u32'))
+        
+        call_miss_bra = PTXFunctionalLine()
+        call_miss_bra.leadingWhiteSpace = line.leadingWhiteSpace
+        call_miss_bra.condition = '@%skip_miss'
+        call_miss_bra.buildString(FunctionalType.bra, ('skip_miss_label', ))
 
         call_miss = PTXFunctionalLine()
         call_miss.leadingWhiteSpace = line.leadingWhiteSpace
-        call_miss.condition = '@!%run_miss'
         call_miss.buildString(FunctionalType.call_miss_shader, ())
 
-        ptx_shader.lines.insert(index, runClosestHitDeclaration)
-        ptx_shader.lines.insert(index + 1, runMissDeclaration)
-        ptx_shader.lines.insert(index + 3, call_closest_hit)
-        ptx_shader.lines.insert(index + 4, call_miss)
+        skip_miss_label = PTXLine('')
+        skip_miss_label.fullLine = line.leadingWhiteSpace + 'skip_miss_label:\n'
 
-        # print(ptx_shader.lines[index + 2].fullLine)
 
+        end_trace_ray = PTXFunctionalLine()
+        end_trace_ray.leadingWhiteSpace = line.leadingWhiteSpace
+        end_trace_ray.buildString(FunctionalType.end_trace_ray, ())
+
+
+        ptx_shader.lines[index:index + 1] = (runClosestHitDeclaration, runMissDeclaration, line, PTXLine('\n'), \
+            skip_closest_hit_declaration, call_closest_hit_setp, call_closest_hit_bra, call_closest_hit, skip_closest_hit_label, PTXLine('\n'),\
+            skip_miss_declaration, call_miss_setp, call_miss_bra, call_miss, skip_miss_label, PTXLine('\n'),\
+            end_trace_ray)
+        
         skip_lines = index + 16
+
+
+        # call_closest_hit = PTXFunctionalLine()
+        # call_closest_hit.leadingWhiteSpace = line.leadingWhiteSpace
+        # call_closest_hit.condition = '@!%run_closest_hit'
+        # call_closest_hit.buildString(FunctionalType.call_closest_hit_shader, ())
+
+        # call_miss = PTXFunctionalLine()
+        # call_miss.leadingWhiteSpace = line.leadingWhiteSpace
+        # call_miss.condition = '@!%run_miss'
+        # call_miss.buildString(FunctionalType.call_miss_shader, ())
+
+        # ptx_shader.lines.insert(index, runClosestHitDeclaration)
+        # ptx_shader.lines.insert(index + 1, runMissDeclaration)
+        # ptx_shader.lines.insert(index + 3, call_closest_hit)
+        # ptx_shader.lines.insert(index + 4, call_miss)
+
+        # skip_lines = index + 16
 
 
 def translate_decl_var(ptx_shader):
@@ -712,15 +766,28 @@ def translate_f1_to_pred(ptx_shader):
             
 
 def add_consts(ptx_shader):
-    newDeclaration = PTXDecleration()
-    newDeclaration.leadingWhiteSpace = '\t'
-    newDeclaration.buildString(DeclarationType.Register, None, '.u16', '%const1_u16')
+    const1_u16_Declaration = PTXDecleration()
+    const1_u16_Declaration.leadingWhiteSpace = '\t'
+    const1_u16_Declaration.buildString(DeclarationType.Register, None, '.u16', '%const1_u16')
 
-    newMov = PTXFunctionalLine()
-    newMov.leadingWhiteSpace = '\t'
-    newMov.buildString('mov.u16', ('%const1_u16', '1'))
+    const1_u16_Mov = PTXFunctionalLine()
+    const1_u16_Mov.leadingWhiteSpace = '\t'
+    const1_u16_Mov.buildString('mov.u16', ('%const1_u16', '1'))
 
-    ptx_shader.addToStart((newDeclaration, newMov, PTXLine('\n')))
+    ptx_shader.addToStart((const1_u16_Declaration, const1_u16_Mov, PTXLine('\n')))
+
+
+
+    const0_u32_Declaration = PTXDecleration()
+    const0_u32_Declaration.leadingWhiteSpace = '\t'
+    const0_u32_Declaration.buildString(DeclarationType.Register, None, '.u32', '%const0_u32')
+
+    const0_u32_Mov = PTXFunctionalLine()
+    const0_u32_Mov.leadingWhiteSpace = '\t'
+    const0_u32_Mov.buildString('mov.u32', ('%const0_u32', '0'))
+
+    ptx_shader.addToStart((const0_u32_Declaration, const0_u32_Mov, PTXLine('\n')))
+
 
 
 
