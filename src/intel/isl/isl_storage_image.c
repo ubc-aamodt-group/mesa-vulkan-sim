@@ -172,6 +172,16 @@ isl_lower_storage_image_format(const struct gen_device_info *devinfo,
               devinfo->gen >= 8 || devinfo->is_haswell ?
               ISL_FORMAT_R8G8B8A8_UINT : ISL_FORMAT_R32_UINT);
 
+   case ISL_FORMAT_B8G8R8A8_UNORM:
+      return (devinfo->gen >= 11 ? format :
+              devinfo->gen >= 8 || devinfo->is_haswell ?
+              ISL_FORMAT_B8G8R8A8_UNORM : ISL_FORMAT_R32_UINT);
+
+   case ISL_FORMAT_B8G8R8A8_UNORM_SRGB:
+      return (devinfo->gen >= 11 ? format :
+              devinfo->gen >= 8 || devinfo->is_haswell ?
+              ISL_FORMAT_B8G8R8A8_UNORM_SRGB : ISL_FORMAT_R32_UINT);
+
    case ISL_FORMAT_R16G16_UNORM:
    case ISL_FORMAT_R16G16_SNORM:
       return (devinfo->gen >= 11 ? format :
