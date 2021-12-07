@@ -1027,10 +1027,6 @@ pack_node(struct anv_bvh_node *node, bool is_root, void *out,
          bil.WorldToObjectm12 = w2o4x4[9];
          bil.WorldToObjectm22 = w2o4x4[10];
          bil.WorldToObjectm32 = w2o4x4[11];
-         assert(w2o4x4[12] == 0.0f);
-         assert(w2o4x4[13] == 0.0f);
-         assert(w2o4x4[14] == 0.0f);
-         assert(w2o4x4[15] == 1.0f);
 
          bil.ObjectToWorldm00 = o2w4x4[0];
          bil.ObjectToWorldm10 = o2w4x4[1];
@@ -1044,10 +1040,6 @@ pack_node(struct anv_bvh_node *node, bool is_root, void *out,
          bil.ObjectToWorldm12 = o2w4x4[9];
          bil.ObjectToWorldm22 = o2w4x4[10];
          bil.ObjectToWorldm32 = o2w4x4[11];
-         assert(o2w4x4[12] == 0.0f);
-         assert(o2w4x4[13] == 0.0f);
-         assert(o2w4x4[14] == 0.0f);
-         assert(o2w4x4[15] == 1.0f);
 
          GEN_RT_BVH_INSTANCE_LEAF_pack(NULL, out, &bil);
          break;

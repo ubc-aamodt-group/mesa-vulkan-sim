@@ -2504,6 +2504,17 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
 
          ssa_register_info[instr->dest.dest.ssa.index].type = INT;
       }
+      else if (!strcmp(nir_op_infos[instr->op].name, "f2u32")){
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, UINT, instr->dest.dest.ssa.bit_size);
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";");
+         fprintf(fp, "\n");
+         print_tabs(tabs, fp);
+
+         fprintf(fp, "cvt.u32.f32 ");
+
+         ssa_register_info[instr->dest.dest.ssa.index].type = UINT;
+      }
       else if (!strcmp(nir_op_infos[instr->op].name, "fadd")) {
          print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, FLOAT, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
@@ -2652,6 +2663,28 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
 
          ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
       }
+      else if (!strcmp(nir_op_infos[instr->op].name, "fmin")) {
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, FLOAT, instr->dest.dest.ssa.bit_size);
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";");
+         fprintf(fp, "\n");
+         print_tabs(tabs, fp);
+
+         fprintf(fp, "min.f%d ", instr->dest.dest.ssa.bit_size);
+
+         ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
+      }
+      else if (!strcmp(nir_op_infos[instr->op].name, "fabs")) {
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, FLOAT, instr->dest.dest.ssa.bit_size);
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";");
+         fprintf(fp, "\n");
+         print_tabs(tabs, fp);
+
+         fprintf(fp, "abs.f%d ", instr->dest.dest.ssa.bit_size);
+
+         ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
+      }
       else if (!strcmp(nir_op_infos[instr->op].name, "fpow")) {
          print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, FLOAT, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
@@ -2660,6 +2693,17 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          print_tabs(tabs, fp);
 
          fprintf(fp, "fpow ");
+
+         ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
+      }
+      else if (!strcmp(nir_op_infos[instr->op].name, "flrp")) {
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, FLOAT, instr->dest.dest.ssa.bit_size);
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";");
+         fprintf(fp, "\n");
+         print_tabs(tabs, fp);
+
+         fprintf(fp, "flrp ");
 
          ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
       }
@@ -2833,66 +2877,13 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          }
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "bcsel")) {
-         assert(ssa_register_info[instr->src[0].src.ssa->index].type == PREDICATE);
-
-         // Check src1 and src2 types. If they don't match the dest type, then convert to UINT
-         int src_reg_idx;
-         val_type ssa_reg_type;
-         int num_bits;
-
-         src_reg_idx = instr->src[1].src.ssa->index;
-         ssa_reg_type = ssa_register_info[src_reg_idx].type;
-         num_bits = ssa_register_info[src_reg_idx].num_bits;
-
-         if (ssa_reg_type != UINT) {
-            // Declare temp reg for conversion
-            fprintf(fp, ".reg .u%d ", num_bits);
-            print_alu_src_as_ptx(instr, 1, state);
-            fprintf(fp, "_cvt;");
-            fprintf(fp, "\n");
-            print_tabs(tabs, fp);
-            // Convert ssa_1 to ssa_1_cvt
-            fprintf(fp, "cvt.u%d.", instr->dest.dest.ssa.bit_size);
-            print_type_decl(ssa_reg_type, num_bits, state);
-            fprintf(fp, " ");
-            print_alu_src_as_ptx(instr, 1, state);
-            fprintf(fp, "_cvt, ");
-            print_alu_src_as_ptx(instr, 1, state);
-            fprintf(fp, ";");
-            fprintf(fp, "\n");
-            print_tabs(tabs, fp);
-         }
-
-         src_reg_idx = instr->src[2].src.ssa->index;
-         ssa_reg_type = ssa_register_info[src_reg_idx].type;
-         num_bits = ssa_register_info[src_reg_idx].num_bits;
-
-         if (ssa_reg_type != UINT) {
-            fprintf(fp, ".reg .u%d ", num_bits);
-            print_alu_src_as_ptx(instr, 2, state);
-            fprintf(fp, "_cvt;");
-            fprintf(fp, "\n");
-            print_tabs(tabs, fp);
-
-            fprintf(fp, "cvt.u%d.", instr->dest.dest.ssa.bit_size);
-            print_type_decl(ssa_reg_type, num_bits, state);
-            fprintf(fp, " ");
-            print_alu_src_as_ptx(instr, 2, state);
-            fprintf(fp, "_cvt, ");
-            print_alu_src_as_ptx(instr, 2, state);
-            fprintf(fp, ";");
-            fprintf(fp, "\n");
-            print_tabs(tabs, fp);
-         }
-
-         // bcsel translation
          print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, UINT, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";");
          fprintf(fp, "\n");
          print_tabs(tabs, fp);
 
-         fprintf(fp, "selp.u%d ", instr->dest.dest.ssa.bit_size);
+         fprintf(fp, "selp ");
 
          ssa_register_info[instr->dest.dest.ssa.index].type = UINT;
       }

@@ -191,6 +191,7 @@ class FunctionalType(Enum, metaclass=MetaEnum):
     load_ray_object_to_world = 'load_ray_object_to_world'
     load_ray_world_direction = 'load_ray_world_direction'
     fpow = 'fpow'
+    flrp = 'flrp'
     bra = 'bra'
     end_trace_ray = 'end_trace_ray'
     Other = auto()
