@@ -855,10 +855,14 @@ VkResult anv_CreateDescriptorPool(
       descriptor_bo_size += 32 * inline_info->maxInlineUniformBlockBindings;
    descriptor_bo_size = ALIGN(descriptor_bo_size, 4096);
 
+   // const size_t pool_size =
+   //    pCreateInfo->maxSets * sizeof(struct anv_descriptor_set) +
+   //    descriptor_count * sizeof(struct anv_descriptor) +
+   //    buffer_view_count * sizeof(struct anv_buffer_view);
    const size_t pool_size =
       pCreateInfo->maxSets * sizeof(struct anv_descriptor_set) +
       descriptor_count * sizeof(struct anv_descriptor) +
-      buffer_view_count * sizeof(struct anv_buffer_view);
+      buffer_view_count * sizeof(struct anv_buffer_view) + 4096; //MRS_TODO: why + 4096 is needed?
    const size_t total_size = sizeof(*pool) + pool_size;
 
    pool = vk_alloc2(&device->vk.alloc, pAllocator, total_size, 8,
@@ -1593,85 +1597,91 @@ anv_descriptor_set_write_acceleration_structure(struct anv_device *device,
 
 static void update_gpgpusim_descriptor_sets(struct anv_descriptor_set *set)
 {
-   for(int i = 0; i < set->descriptor_count; i++)
-   {
-      switch (set->descriptors[i].type)
-      {
-      case VK_DESCRIPTOR_TYPE_SAMPLER:
-      case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
-      case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-      case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-      case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
-      {
-         const struct anv_descriptor_set_binding_layout *bind_layout = &set->layout->binding[i];
-         struct anv_descriptor *desc = &set->descriptors[bind_layout->descriptor_index];
-         void *desc_map = set->desc_mem.map + bind_layout->descriptor_offset;
+   gpgpusim_setDescriptorSet(set);
 
-         if (bind_layout->data & ANV_DESCRIPTOR_SAMPLED_IMAGE) {
-            struct anv_sampled_image_descriptor *desc_data = desc_map;
-            uint32_t count = MAX2(1, bind_layout->max_plane_count);
-         }
+   // for(int i = 0; i < set->descriptor_count; i++)
+   // {
+   //    switch (set->descriptors[i].type)
+   //    {
+   //    case VK_DESCRIPTOR_TYPE_SAMPLER:
+   //    case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+   //    case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+   //    case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+   //    case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+   //    {
+   //       const struct anv_descriptor_set_binding_layout *bind_layout = &set->layout->binding[i];
+   //       struct anv_descriptor *desc = &set->descriptors[bind_layout->descriptor_index];
+   //       void *desc_map = set->desc_mem.map + bind_layout->descriptor_offset;
 
-         else if(bind_layout->data & ANV_DESCRIPTOR_STORAGE_IMAGE) {
-            struct anv_storage_image_descriptor* desc_data = desc_map;
-            struct anv_image_view *image_view = set->descriptors[i].image_view;
-            if(image_view == NULL)
-               break;
-            struct anv_image * image = image_view->image;
-            void * address = anv_address_map(image->planes[0].address);
-            gpgpusim_setDescriptorSet(0, i, address, 0, set->descriptors[i].type);
-         }
-         // else{
-         //    assert(0);
-         // }
-         break;
-      }
+   //       if (bind_layout->data & ANV_DESCRIPTOR_SAMPLED_IMAGE) {
+   //          // assert(0);
+   //          struct anv_sampled_image_descriptor *desc_data = desc_map;
+   //          uint32_t count = MAX2(1, bind_layout->max_plane_count);
+   //       }
 
-      case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-      case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-         break;
+   //       else if(bind_layout->data & ANV_DESCRIPTOR_STORAGE_IMAGE) {
+   //          struct anv_storage_image_descriptor* desc_data = desc_map;
+   //          struct anv_image_view *image_view = set->descriptors[i].image_view;
+   //          if(image_view == NULL)
+   //             break;
+   //          struct anv_image * image = image_view->image;
+   //          void * address = anv_address_map(image->planes[0].address);
+   //          gpgpusim_setDescriptor(0, i, address, 0, set->descriptors[i].type);
+   //       }
+   //       else{
+   //          // assert(0);
+   //       }
+   //       break;
+   //    }
 
-      case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-      case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-      case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
-      case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
-      {
-         const struct anv_descriptor_set_binding_layout *bind_layout = &set->layout->binding[i];
-         struct anv_descriptor *desc = &set->descriptors[bind_layout->descriptor_index];
-         void *desc_map = set->desc_mem.map + bind_layout->descriptor_offset;
+   //    case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+   //    case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+   //       assert(0);
+   //       break;
 
-         if (set->descriptors[i].type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC ||
-               set->descriptors[i].type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC)
-         {
-            assert(0);
-            // in this case it is stored in set->descriptors[i].buffer (look at set->descriptors[i].offset etc when got here and implement)
-         }
-         else
-         {
-            struct anv_buffer_view *bview = &set->buffer_views[bind_layout->buffer_view_index];
-            gpgpusim_setDescriptorSet(0, i, anv_address_map(bview->address), bview->range, set->descriptors[i].type);
-         }
+   //    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+   //    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+   //    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
+   //    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+   //    {
+   //       const struct anv_descriptor_set_binding_layout *bind_layout = &set->layout->binding[i];
+   //       struct anv_descriptor *desc = &set->descriptors[bind_layout->descriptor_index];
+   //       void *desc_map = set->desc_mem.map + bind_layout->descriptor_offset;
+
+   //       if (set->descriptors[i].type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC ||
+   //             set->descriptors[i].type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC)
+   //       {
+   //          // MRS_TODO: account for set->descriptors[i].offset?
+   //          gpgpusim_setDescriptor(0, i, anv_address_map(set->descriptors[i].buffer->address), set->descriptors[i].buffer->size, set->descriptors[i].type);
+   //       }
+   //       else
+   //       {
+   //          struct anv_buffer_view *bview = &set->buffer_views[bind_layout->buffer_view_index];
+   //          gpgpusim_setDescriptor(0, i, anv_address_map(bview->address), bview->range, set->descriptors[i].type);
+   //       }
          
-         break;
-      }
+   //       break;
+   //    }
 
-      case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT:
-         break;
+   //    case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT:
+   //       assert(0);
+   //       break;
 
-      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
-      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV:
-      {
-         struct anv_descriptor_set_binding_layout *bind_layout = &set->layout->binding[i];
-         void *desc_map = set->desc_mem.map + bind_layout->descriptor_offset;
-         struct anv_address_range_descriptor *desc_data = desc_map;
-         gpgpusim_setDescriptorSet(0, i, (void *)(desc_data->address), desc_data->range, set->descriptors[i].type);
-         break;
-      }
+   //    case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+   //    case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV:
+   //    {
+   //       struct anv_descriptor_set_binding_layout *bind_layout = &set->layout->binding[i];
+   //       void *desc_map = set->desc_mem.map + bind_layout->descriptor_offset;
+   //       struct anv_address_range_descriptor *desc_data = desc_map;
+   //       gpgpusim_setDescriptor(0, i, (void *)(desc_data->address), desc_data->range, set->descriptors[i].type);
+   //       break;
+   //    }
 
-      default:
-         break;
-      }
-   }
+   //    default:
+   //       assert(0);
+   //       break;
+   //    }
+   // }
 }
 
 

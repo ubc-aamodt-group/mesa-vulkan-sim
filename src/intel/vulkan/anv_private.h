@@ -2183,7 +2183,7 @@ void
 anv_descriptor_set_write_template(struct anv_device *device,
                                   struct anv_descriptor_set *set,
                                   struct anv_state_stream *alloc_stream,
-                                  const struct anv_descriptor_update_template *template,
+                                  const struct anv_descriptor_update_template *_template,
                                   const void *data);
 
 VkResult

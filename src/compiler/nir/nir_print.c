@@ -2045,6 +2045,26 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
       }
       fprintf(fp, "%s ", info->name); // Intrinsic function name
    }
+   else if (!strcmp(info->name, "load_ray_world_origin")){
+      if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = FLOAT;
+         print_ptx_reg_decl(state, instr->dest.ssa.num_components, FLOAT, instr->dest.ssa.bit_size);
+         print_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";\n");
+         print_tabs(tabs, fp);
+      }
+      fprintf(fp, "%s ", info->name); // Intrinsic function name
+   }
+   else if (!strcmp(info->name, "load_ray_t_max")){
+      if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = FLOAT;
+         print_ptx_reg_decl(state, instr->dest.ssa.num_components, FLOAT, instr->dest.ssa.bit_size);
+         print_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";\n");
+         print_tabs(tabs, fp);
+      }
+      fprintf(fp, "%s ", info->name); // Intrinsic function name
+   }
    else if (!strcmp(info->name, "shader_clock")){
       // The argument 2 probably means memory_scope=SUBGROUP
       // Store lower 32 bits in dst.x and upper 32 bits in dst.y
@@ -2511,7 +2531,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          fprintf(fp, "\n");
          print_tabs(tabs, fp);
 
-         fprintf(fp, "cvt.u32.f32 ");
+         fprintf(fp, "cvt.rni.u32.f32 ");
 
          ssa_register_info[instr->dest.dest.ssa.index].type = UINT;
       }
@@ -2555,7 +2575,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          fprintf(fp, "\n");
          print_tabs(tabs, fp);
 
-         fprintf(fp, "mul.s%d ", instr->dest.dest.ssa.bit_size);
+         fprintf(fp, "mul.lo.s%d ", instr->dest.dest.ssa.bit_size);
 
          ssa_register_info[instr->dest.dest.ssa.index].type = INT;
       }
@@ -2877,15 +2897,15 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          }
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "bcsel")) {
-         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, UINT, instr->dest.dest.ssa.bit_size);
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, FLOAT, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";");
          fprintf(fp, "\n");
          print_tabs(tabs, fp);
 
-         fprintf(fp, "selp ");
+         fprintf(fp, "bcsel ");
 
-         ssa_register_info[instr->dest.dest.ssa.index].type = UINT;
+         ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "pack_64_2x32_split")) {
          // cant use cvt.pack since it doesnt support 64 bit dest
@@ -3265,6 +3285,260 @@ print_deref_instr_as_ptx(nir_deref_instr *instr, print_state *state, ssa_reg_inf
       fprintf(fp, " /* ptr_stride=%u, align_mul=%u, align_offset=%u */",
               instr->cast.ptr_stride,
               instr->cast.align_mul, instr->cast.align_offset);
+   }
+}
+
+
+static void
+print_tex_instr_as_ptx(nir_tex_instr *instr, print_state *state)
+{
+   FILE *fp = state->fp;
+
+   // PTX Code
+   print_ptx_reg_decl(state, instr->dest.ssa.num_components, FLOAT, instr->dest.ssa.bit_size);
+   print_dest_as_ptx_no_pos(&instr->dest, state);
+   fprintf(fp, ";\n\t");
+
+   assert(instr->op == nir_texop_txl);
+
+   switch (instr->op) {
+   case nir_texop_tex:
+      fprintf(fp, "tex ");
+      break;
+   case nir_texop_txb:
+      fprintf(fp, "txb ");
+      break;
+   case nir_texop_txl:
+      fprintf(fp, "txl ");
+      break;
+   case nir_texop_txd:
+      fprintf(fp, "txd ");
+      break;
+   case nir_texop_txf:
+      fprintf(fp, "txf ");
+      break;
+   case nir_texop_txf_ms:
+      fprintf(fp, "txf_ms ");
+      break;
+   case nir_texop_txf_ms_fb:
+      fprintf(fp, "txf_ms_fb ");
+      break;
+   case nir_texop_txf_ms_mcs:
+      fprintf(fp, "txf_ms_mcs ");
+      break;
+   case nir_texop_txs:
+      fprintf(fp, "txs ");
+      break;
+   case nir_texop_lod:
+      fprintf(fp, "lod ");
+      break;
+   case nir_texop_tg4:
+      fprintf(fp, "tg4 ");
+      break;
+   case nir_texop_query_levels:
+      fprintf(fp, "query_levels ");
+      break;
+   case nir_texop_texture_samples:
+      fprintf(fp, "texture_samples ");
+      break;
+   case nir_texop_samples_identical:
+      fprintf(fp, "samples_identical ");
+      break;
+   case nir_texop_tex_prefetch:
+      fprintf(fp, "tex (pre-dispatchable) ");
+      break;
+   case nir_texop_fragment_fetch:
+      fprintf(fp, "fragment_fetch ");
+      break;
+   case nir_texop_fragment_mask_fetch:
+      fprintf(fp, "fragment_mask_fetch ");
+      break;
+   default:
+      unreachable("Invalid texture operation");
+      break;
+   }
+
+   print_dest_as_ptx_no_pos(&instr->dest, state);
+
+   for (unsigned i = 0; i < instr->num_srcs; i++) {
+      fprintf(fp, ", ");
+      print_src_as_ptx(&instr->src[i].src, state);
+   }
+
+   fprintf(fp, ";");
+
+
+   
+   // Original NIR
+   fprintf(fp, "\t// ");
+   print_dest(&instr->dest, state);
+
+   fprintf(fp, " = (");
+   print_alu_type(instr->dest_type, state);
+   fprintf(fp, ")");
+
+   switch (instr->op) {
+   case nir_texop_tex:
+      fprintf(fp, "tex ");
+      break;
+   case nir_texop_txb:
+      fprintf(fp, "txb ");
+      break;
+   case nir_texop_txl:
+      fprintf(fp, "txl ");
+      break;
+   case nir_texop_txd:
+      fprintf(fp, "txd ");
+      break;
+   case nir_texop_txf:
+      fprintf(fp, "txf ");
+      break;
+   case nir_texop_txf_ms:
+      fprintf(fp, "txf_ms ");
+      break;
+   case nir_texop_txf_ms_fb:
+      fprintf(fp, "txf_ms_fb ");
+      break;
+   case nir_texop_txf_ms_mcs:
+      fprintf(fp, "txf_ms_mcs ");
+      break;
+   case nir_texop_txs:
+      fprintf(fp, "txs ");
+      break;
+   case nir_texop_lod:
+      fprintf(fp, "lod ");
+      break;
+   case nir_texop_tg4:
+      fprintf(fp, "tg4 ");
+      break;
+   case nir_texop_query_levels:
+      fprintf(fp, "query_levels ");
+      break;
+   case nir_texop_texture_samples:
+      fprintf(fp, "texture_samples ");
+      break;
+   case nir_texop_samples_identical:
+      fprintf(fp, "samples_identical ");
+      break;
+   case nir_texop_tex_prefetch:
+      fprintf(fp, "tex (pre-dispatchable) ");
+      break;
+   case nir_texop_fragment_fetch:
+      fprintf(fp, "fragment_fetch ");
+      break;
+   case nir_texop_fragment_mask_fetch:
+      fprintf(fp, "fragment_mask_fetch ");
+      break;
+   default:
+      unreachable("Invalid texture operation");
+      break;
+   }
+
+   bool has_texture_deref = false, has_sampler_deref = false;
+   for (unsigned i = 0; i < instr->num_srcs; i++) {
+      if (i > 0) {
+         fprintf(fp, ", ");
+      }
+
+      print_src(&instr->src[i].src, state);
+      fprintf(fp, " ");
+
+      switch(instr->src[i].src_type) {
+      case nir_tex_src_coord:
+         fprintf(fp, "(coord)");
+         break;
+      case nir_tex_src_projector:
+         fprintf(fp, "(projector)");
+         break;
+      case nir_tex_src_comparator:
+         fprintf(fp, "(comparator)");
+         break;
+      case nir_tex_src_offset:
+         fprintf(fp, "(offset)");
+         break;
+      case nir_tex_src_bias:
+         fprintf(fp, "(bias)");
+         break;
+      case nir_tex_src_lod:
+         fprintf(fp, "(lod)");
+         break;
+      case nir_tex_src_min_lod:
+         fprintf(fp, "(min_lod)");
+         break;
+      case nir_tex_src_ms_index:
+         fprintf(fp, "(ms_index)");
+         break;
+      case nir_tex_src_ms_mcs:
+         fprintf(fp, "(ms_mcs)");
+         break;
+      case nir_tex_src_ddx:
+         fprintf(fp, "(ddx)");
+         break;
+      case nir_tex_src_ddy:
+         fprintf(fp, "(ddy)");
+         break;
+      case nir_tex_src_texture_deref:
+         has_texture_deref = true;
+         fprintf(fp, "(texture_deref)");
+         break;
+      case nir_tex_src_sampler_deref:
+         has_sampler_deref = true;
+         fprintf(fp, "(sampler_deref)");
+         break;
+      case nir_tex_src_texture_offset:
+         fprintf(fp, "(texture_offset)");
+         break;
+      case nir_tex_src_sampler_offset:
+         fprintf(fp, "(sampler_offset)");
+         break;
+      case nir_tex_src_texture_handle:
+         fprintf(fp, "(texture_handle)");
+         break;
+      case nir_tex_src_sampler_handle:
+         fprintf(fp, "(sampler_handle)");
+         break;
+      case nir_tex_src_plane:
+         fprintf(fp, "(plane)");
+         break;
+
+      default:
+         unreachable("Invalid texture source type");
+         break;
+      }
+   }
+
+   if (instr->op == nir_texop_tg4) {
+      fprintf(fp, ", %u (gather_component)", instr->component);
+   }
+
+   if (nir_tex_instr_has_explicit_tg4_offsets(instr)) {
+      fprintf(fp, ", { (%i, %i)", instr->tg4_offsets[0][0], instr->tg4_offsets[0][1]);
+      for (unsigned i = 1; i < 4; ++i)
+         fprintf(fp, ", (%i, %i)", instr->tg4_offsets[i][0],
+                 instr->tg4_offsets[i][1]);
+      fprintf(fp, " } (offsets)");
+   }
+
+   if (instr->op != nir_texop_txf_ms_fb) {
+      if (!has_texture_deref) {
+         fprintf(fp, ", %u (texture)", instr->texture_index);
+      }
+
+      if (!has_sampler_deref) {
+         fprintf(fp, ", %u (sampler)", instr->sampler_index);
+      }
+   }
+
+   if (instr->texture_non_uniform) {
+      fprintf(fp, ", texture non-uniform");
+   }
+
+   if (instr->sampler_non_uniform) {
+      fprintf(fp, ", sampler non-uniform");
+   }
+
+   if (instr->is_sparse) {
+      fprintf(fp, ", sparse");
    }
 }
 
@@ -3792,8 +4066,7 @@ print_instr_as_ptx(const nir_instr *instr, print_state *state, unsigned tabs, ss
       break;
 
    case nir_instr_type_tex:
-      assert(0);
-      print_tex_instr(nir_instr_as_tex(instr), state);
+      print_tex_instr_as_ptx(nir_instr_as_tex(instr), state);
       break;
 
    case nir_instr_type_load_const: ;
@@ -4093,14 +4366,27 @@ print_var_decl_as_ptx(nir_variable *var, print_state *state)
 
    // PTX Code
    // The variables here are probably treated as magic variables
-   int size = 0;
-   if(glsl_get_base_type(var->type) == GLSL_TYPE_STRUCT)
-      size = get_struct_size_for_ptx(var->type);
-   else
-      size = glsl_get_bit_size(var->type) / 8;
+   unsigned size = 0;
+   unsigned align = 0;
+
+   glsl_get_natural_size_align_bytes(var->type, &size, &align);
+
+   //TODO: check to see if the new one above creates different resutls
+   // This is what used to work forthings other than arrays
+   // if(glsl_get_base_type(var->type) == GLSL_TYPE_STRUCT)
+   //    size = get_struct_size_for_ptx(var->type);
+   // else
+   //    size = glsl_get_bit_size(var->type) / 8;
    
-   if(glsl_get_bit_size(var->type) % 8 != 0)
-      size++;
+   // if(glsl_get_bit_size(var->type) % 8 != 0)
+   //    size++;
+   
+
+   // else if (glsl_get_base_type(var->type) == GLSL_TYPE_ARRAY)
+   // {
+   //    glsl_array_size(var->type);
+   //    printf("this is where things go wrong\n");
+   // }
    
    if(size < 4)
       size = 4;

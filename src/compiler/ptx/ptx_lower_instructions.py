@@ -442,6 +442,8 @@ def translate_decl_var(ptx_shader):
 
         name, size, vector_number, variable_type, storage_qualifier_type, driver_location, binding = line.args
         name = '%' + name
+        # if int(vector_number) > 1:
+        #     continue
 
         newReg = PTXDecleration()
         newReg.leadingWhiteSpace = '\t'
@@ -542,6 +544,13 @@ def translate_load_GL_instructions(ptx_shader):
         
 
         elif line.functionalType == FunctionalType.load_ray_world_direction:
+            dst = line.args[0]
+
+            newRegNames, _, _, _ = unwrapp_vector(ptx_shader, dst, dst)
+            line.buildString(line.functionalType, newRegNames[:3])
+        
+
+        elif line.functionalType == FunctionalType.load_ray_world_origin:
             dst = line.args[0]
 
             newRegNames, _, _, _ = unwrapp_vector(ptx_shader, dst, dst)
@@ -734,6 +743,40 @@ def translate_const_operands(ptx_shader):
                     declaration, _ = ptx_shader.findDeclaration(src2)
                     if declaration.isLoadConst:
                         line.buildString(line.command.split()[0], (dst, src1, src2 + '_bits'))
+        
+
+        elif line.command[:3] == 'mul':
+            dst, src1, src2 = line.args
+
+            type = line.command[3:]
+
+            if type[:2] != '.f':
+                if src1[0] == '%':
+                    declaration, _ = ptx_shader.findDeclaration(src1)
+                    if declaration.isLoadConst:
+                        line.buildString(line.command.split()[0], (dst, src1 + '_bits', src2))
+            
+                if src2[0] == '%':
+                    declaration, _ = ptx_shader.findDeclaration(src2)
+                    if declaration.isLoadConst:
+                        line.buildString(line.command.split()[0], (dst, src1, src2 + '_bits'))
+
+
+        elif line.command[:3] == 'shl':
+            dst, src1, src2 = line.args
+
+            type = line.command[3:]
+            if type[:2] != '.f':
+                if src1[0] == '%':
+                    declaration, _ = ptx_shader.findDeclaration(src1)
+                    if declaration.isLoadConst:
+                        line.buildString(line.command.split()[0], (dst, src1 + '_bits', src2))
+            
+                if src2[0] == '%':
+                    declaration, _ = ptx_shader.findDeclaration(src2)
+                    if declaration.isLoadConst:
+                        line.buildString(line.command.split()[0], (dst, src1, src2 + '_bits'))
+
 
 
         
@@ -810,7 +853,7 @@ def add_consts(ptx_shader):
 
     const1_f32_mov = PTXFunctionalLine()
     const1_f32_mov.leadingWhiteSpace = '\t'
-    const1_f32_mov.buildString('mov.f32', ('%const1_f32', '1'))
+    const1_f32_mov.buildString('mov.f32', ('%const1_f32', '0F3f800000'))
 
     ptx_shader.addToStart((const1_f32_declaration, const1_f32_mov, PTXLine('\n')))
 
@@ -884,6 +927,29 @@ def translate_ALU(ptx_shader):
             add.buildString('add.f32', (dst, dst, '%temp_f32'))
 
             ptx_shader.lines[index:index + 1] = (sub, mul0, mul1, add)
+        
+
+        elif line.functionalType == FunctionalType.bcsel:
+            dst, src0, src1, src2 = line.args
+
+            line.buildString('selp.f32', (dst, src1, src2, src0))
+
+
+
+def translate_texture_instructions(ptx_shader):
+    for index in range(len(ptx_shader.lines)):
+        line = ptx_shader.lines[index]
+        
+        if line.instructionClass != InstructionClass.Functional:
+            continue
+
+        if line.functionalType == FunctionalType.txl:
+            dst, texture, sampler, coord, lod = line.args
+
+            newDstNames, _, _, _ = unwrapp_vector(ptx_shader, dst, dst)
+            newCoordNames, _, _, _ = unwrapp_vector(ptx_shader, coord, coord)
+            line.buildString(line.functionalType, [texture, sampler] + newDstNames + newCoordNames[0:2] + [lod, ])
+
 
 
 
@@ -907,6 +973,7 @@ def main():
     translate_image_deref_store(shader)
     translate_exit(shader)
     translate_phi(shader)
+    translate_texture_instructions(shader)
 
     translate_vector_operands(shader, unique_ID)
     translate_const_operands(shader)
