@@ -1594,10 +1594,36 @@ anv_descriptor_set_write_acceleration_structure(struct anv_device *device,
    memcpy(desc_map, &desc_data, sizeof(desc_data));
 }
 
-
+// uint32_t ID = 0;
 static void update_gpgpusim_descriptor_sets(struct anv_descriptor_set *set)
 {
+   // ID++;
    gpgpusim_setDescriptorSet(set);
+
+   // if(ID == 10)
+   // {
+   //    const struct anv_image *image = set->descriptors[5].image_view->image;
+   //    struct isl_surf* isl_surface = &image->planes[0].surface.isl;
+      
+   //    uint32_t start_tile_B;
+   //    uint32_t end_tile_B;
+   //    isl_surf_get_image_range_B_tile(isl_surface, 1, 0, 0, &start_tile_B, &end_tile_B);
+   //    printf("%d, %d\n", start_tile_B, end_tile_B);
+
+
+   //    uint32_t offset_B;
+   //    uint32_t x_offset_sa;
+   //    uint32_t y_offset_sa;
+   //    isl_surf_get_image_offset_B_tile_sa(isl_surface, 0, 0, 0, &offset_B, &x_offset_sa, &y_offset_sa);
+   //    printf("%d, %d, %d\n", offset_B, x_offset_sa, y_offset_sa);
+
+   //    struct isl_format_layout * format_layout = isl_format_get_layout(isl_surface->format);
+
+   //    struct isl_tile_info tile_info;
+   //    isl_surf_get_tile_info(isl_surface, &tile_info);
+
+   //    printf("\n");
+   // }
 
    // for(int i = 0; i < set->descriptor_count; i++)
    // {

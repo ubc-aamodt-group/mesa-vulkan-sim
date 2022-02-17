@@ -173,6 +173,11 @@ def translate_deref_instructions(ptx_shader):
         elif line.functionalType == FunctionalType.deref_array:
             dst, need_deref, src, arrayIndex, arrayStride, baseType, type = line.args
 
+            if baseType == 'descriptor':
+                arrayStride = str(32)
+
+            assert int(arrayStride) != 0
+
             declaration, _ = ptx_shader.findDeclaration(dst)
             declaration.buildString(declaration.declarationType, None, '.b64', declaration.variableName)
             declaration.pointerVariableType = '.' + baseType

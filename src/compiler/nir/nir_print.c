@@ -3063,11 +3063,12 @@ glsl_base_type_to_ptx_type(enum glsl_base_type glsl_type)
          return "s64";
       case GLSL_TYPE_BOOL:
          return "b1";
+      case GLSL_TYPE_SAMPLER:
+      case GLSL_TYPE_IMAGE:
+         return "descriptor";
       case GLSL_TYPE_INTERFACE:
       case GLSL_TYPE_STRUCT:
       case GLSL_TYPE_ARRAY:
-      case GLSL_TYPE_SAMPLER:
-      case GLSL_TYPE_IMAGE:
       case GLSL_TYPE_ATOMIC_UINT:
       case GLSL_TYPE_VOID:
       case GLSL_TYPE_SUBROUTINE:
@@ -3138,6 +3139,8 @@ print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_st
 
    //if (is_parent_cast || need_deref)
    //   fprintf(fp, ")");
+
+   fflush(fp);
 
    switch (instr->deref_type) {
    case nir_deref_type_struct:
