@@ -917,7 +917,7 @@ def translate_ALU(ptx_shader):
 
             sub = PTXFunctionalLine()
             sub.leadingWhiteSpace = line.leadingWhiteSpace
-            sub.buildString('sub.f32', (dst, '%const1_f32', src1))
+            sub.buildString('sub.f32', (dst, '%const1_f32', src2))
 
             mul0 = PTXFunctionalLine()
             mul0.leadingWhiteSpace = line.leadingWhiteSpace
@@ -929,6 +929,7 @@ def translate_ALU(ptx_shader):
 
             add = PTXFunctionalLine()
             add.leadingWhiteSpace = line.leadingWhiteSpace
+            add.comment = line.comment
             add.buildString('add.f32', (dst, dst, '%temp_f32'))
 
             ptx_shader.lines[index:index + 1] = (sub, mul0, mul1, add)
@@ -954,9 +955,7 @@ def translate_texture_instructions(ptx_shader):
             newDstNames, _, _, _ = unwrapp_vector(ptx_shader, dst, dst)
             newCoordNames, _, _, _ = unwrapp_vector(ptx_shader, coord, coord)
             line.buildString(line.functionalType, [texture, sampler] + newDstNames + newCoordNames[0:2] + [lod, ])
-
-
-
+            
 
 
 
