@@ -958,6 +958,19 @@ def translate_texture_instructions(ptx_shader):
             
 
 
+def translate_special_intrinsics(ptx_shader):
+    for index in range(len(ptx_shader.lines)):
+        line = ptx_shader.lines[index]
+        
+        if line.instructionClass != InstructionClass.Functional:
+            continue
+
+        if line.functionalType == FunctionalType.shader_clock:
+            dst, memory_scope = line.args
+            newRegNames, _, _, _ = unwrapp_vector(ptx_shader, dst, dst)
+            line.buildString(FunctionalType.shader_clock, newRegNames[0:2])
+
+
 
 def main():
     unique_ID = 0
@@ -978,6 +991,7 @@ def main():
     translate_exit(shader)
     translate_phi(shader)
     translate_texture_instructions(shader)
+    translate_special_intrinsics(shader)
 
     translate_vector_operands(shader, unique_ID)
     translate_const_operands(shader)
