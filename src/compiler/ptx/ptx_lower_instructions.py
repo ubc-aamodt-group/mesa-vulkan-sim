@@ -567,21 +567,29 @@ def translate_load_GL_instructions(ptx_shader):
 
 
 
-def translate_image_deref_store(ptx_shader):
+def translate_image_deref(ptx_shader):
     for index in range(len(ptx_shader.lines)):
         line = ptx_shader.lines[index]
 
         if line.instructionClass != InstructionClass.Functional:
             continue
 
-        if line.functionalType != FunctionalType.image_deref_store:
-            continue
+        if line.functionalType == FunctionalType.image_deref_store:
+            image, arg2, arg3, hitValue, arg5, arg6, arg7 = line.args
+            args = line.args
+            args[3:4] = [(hitValue + '_' + str(i)) for i in range(4)]
+            args[1:2] = [(arg2 + '_' + str(i)) for i in range(4)]
+            line.buildString(line.functionalType, args)
+        
+        elif line.functionalType == FunctionalType.image_deref_load:
+            dst, image, location, arg3, arg4, arg5, arg6 = line.args
+            args = [image, dst, location, arg3, arg4, arg5, arg6]
+            dstRegNames, _, _, _ = unwrapp_vector(ptx_shader, dst, dst)
+            locationRegNames, _, _, _ = unwrapp_vector(ptx_shader, location, location)
+            args[2:3] = locationRegNames
+            args[1:2] = dstRegNames
+            line.buildString(line.functionalType, args)
 
-        image, arg2, arg3, hitValue, arg5, arg6, arg7 = line.args
-        args = line.args
-        args[3:4] = [(hitValue + '_' + str(i)) for i in range(4)]
-        args[1:2] = [(arg2 + '_' + str(i)) for i in range(4)]
-        line.buildString(line.functionalType, args)
 
 
 def translate_exit(ptx_shader):
@@ -667,7 +675,9 @@ def translate_phi(ptx_shader):
 
 
 def translate_load_const(ptx_shader):
-    for index in range(len(ptx_shader.lines)):
+    index = -1
+    while index + 1 < len(ptx_shader.lines):
+        index += 1
         line = ptx_shader.lines[index]
         if line.instructionClass != InstructionClass.Functional:
             continue
@@ -767,7 +777,7 @@ def translate_const_operands(ptx_shader):
                         line.buildString(line.command.split()[0], (dst, src1, src2 + '_bits'))
 
 
-        elif line.command[:3] == 'shl':
+        elif line.command[:3] == 'shl' or line.command[:3] == 'shr':
             dst, src1, src2 = line.args
 
             type = line.command[3:]
@@ -786,7 +796,9 @@ def translate_const_operands(ptx_shader):
 
         
 def translate_f1_to_pred(ptx_shader):
-    for index in range(len(ptx_shader.lines)):
+    index = -1
+    while index + 1 < len(ptx_shader.lines):
+        index += 1
         line = ptx_shader.lines[index]
         # if line.instructionClass == InstructionClass.VariableDeclaration:
 
@@ -878,6 +890,13 @@ def add_temps(ptx_shader):
     ptx_shader.addToStart((temp_f32_declaration, ))
 
 
+    temp_u64_declaration = PTXDecleration()
+    temp_u64_declaration.leadingWhiteSpace = '\t'
+    temp_u64_declaration.buildString(DeclarationType.Register, None, '.u64', '%temp_u64')
+
+    ptx_shader.addToStart((temp_u64_declaration, ))
+
+
     ptx_shader.addToStart((PTXLine('\n'), ))
 
 
@@ -939,6 +958,32 @@ def translate_ALU(ptx_shader):
             dst, src0, src1, src2 = line.args
 
             line.buildString('selp.f32', (dst, src1, src2, src0))
+        
+        elif line.functionalType == FunctionalType.pack_64_2x32_split:
+            dst, src0, src1 = line.args
+
+            src0Declaration, _ = ptx_shader.findDeclaration(src0)
+            assert src0Declaration.variableType == '.u32'
+
+            cvt1 = PTXFunctionalLine()
+            cvt1.leadingWhiteSpace = line.leadingWhiteSpace
+            cvt1.buildString('cvt.u64.u32', ('%temp_u64', src1))
+
+            shl = PTXFunctionalLine()
+            shl.leadingWhiteSpace = line.leadingWhiteSpace
+            shl.buildString('shl.b64', (dst, '%temp_u64', src1))
+
+            cvt0 = PTXFunctionalLine()
+            cvt0.leadingWhiteSpace = line.leadingWhiteSpace
+            cvt0.buildString('cvt.u64.u32', ('%temp_u64', src0))
+
+            orLine = PTXFunctionalLine()
+            orLine.leadingWhiteSpace = line.leadingWhiteSpace
+            orLine.comment = line.comment
+            orLine.buildString('or.b64', (dst, dst, '%temp_u64'))
+
+            ptx_shader.lines[index:index + 1] = (cvt1, shl, cvt0, orLine)
+
 
 
 
@@ -987,7 +1032,7 @@ def main():
     translate_trace_ray(shader)
     translate_decl_var(shader)
     translate_load_GL_instructions(shader)
-    translate_image_deref_store(shader)
+    translate_image_deref(shader)
     translate_exit(shader)
     translate_phi(shader)
     translate_texture_instructions(shader)
