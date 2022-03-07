@@ -1711,6 +1711,7 @@ typedef struct  {
    int num_components; // vec 1,2,3,4
    int num_bits; // 1,8,32,64 bits
    val_type type; // int, float, or bool
+   bool is_pointer;
    val_type pointer_type;
 } ssa_reg_info;
 
@@ -1943,8 +1944,11 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
    }
    else if (!strcmp(info->name, "load_deref")){ // get address / pointer of a variable used for reading / loading
       if (info->has_dest) {
-         ssa_register_info[instr->dest.ssa.index].type = FLOAT;
-         print_ptx_reg_decl(state, instr->dest.ssa.num_components, FLOAT, instr->dest.ssa.bit_size);
+         val_type pointerType = FLOAT;
+         if(ssa_register_info[instr->src[0].ssa->index].is_pointer)
+            pointerType = ssa_register_info[instr->src[0].ssa->index].pointer_type;
+         ssa_register_info[instr->dest.ssa.index].type = pointerType;
+         print_ptx_reg_decl(state, instr->dest.ssa.num_components, pointerType, instr->dest.ssa.bit_size);
          print_dest_as_ptx_no_pos(&instr->dest, state);
          fprintf(fp, ";\n");
          print_tabs(tabs, fp);
@@ -2057,6 +2061,16 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
       fprintf(fp, "%s ", info->name); // Intrinsic function name
    }
    else if (!strcmp(info->name, "load_ray_t_max")){
+      if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = FLOAT;
+         print_ptx_reg_decl(state, instr->dest.ssa.num_components, FLOAT, instr->dest.ssa.bit_size);
+         print_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";\n");
+         print_tabs(tabs, fp);
+      }
+      fprintf(fp, "%s ", info->name); // Intrinsic function name
+   }
+   else if (!strcmp(info->name, "load_ray_t_min")){
       if (info->has_dest) {
          ssa_register_info[instr->dest.ssa.index].type = FLOAT;
          print_ptx_reg_decl(state, instr->dest.ssa.num_components, FLOAT, instr->dest.ssa.bit_size);
@@ -3233,11 +3247,13 @@ print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_st
    case nir_deref_type_array:
    case nir_deref_type_ptr_as_array: {
       if (nir_src_is_const(instr->arr.index)) {
+         ssa_register_info->is_pointer = true;
          ssa_register_info->pointer_type = glsl_base_type_to_val_type(glsl_get_base_type(instr->type));
          //fprintf(fp, "[%"PRId64"]", nir_src_as_int(instr->arr.index));
          fprintf(fp, ", %"PRId64", %u, %s", nir_src_as_int(instr->arr.index), nir_deref_instr_array_stride(instr), 
             glsl_base_type_to_ptx_type(glsl_get_base_type(instr->type)));
       } else {
+         ssa_register_info->is_pointer = true;
          ssa_register_info->pointer_type = glsl_base_type_to_val_type(glsl_get_base_type(instr->type));
          fprintf(fp, ", ");
          print_src_as_ptx(&instr->arr.index, state);
@@ -4326,47 +4342,47 @@ print_cf_node_as_ptx(nir_cf_node *node, print_state *state, ssa_reg_info *ssa_re
    }
 }
 
-static val_type
-glsl_base_type_to_val_type(enum glsl_base_type type)
-{
-   switch (type)
-   {
-   case GLSL_TYPE_UINT:
-   case GLSL_TYPE_UINT8:
-   case GLSL_TYPE_UINT16:
-   case GLSL_TYPE_UINT64:
-      return UINT;
+// static val_type
+// glsl_base_type_to_val_type(enum glsl_base_type type)
+// {
+//    switch (type)
+//    {
+//    case GLSL_TYPE_UINT:
+//    case GLSL_TYPE_UINT8:
+//    case GLSL_TYPE_UINT16:
+//    case GLSL_TYPE_UINT64:
+//       return UINT;
    
-   case GLSL_TYPE_INT:
-   case GLSL_TYPE_INT8:
-   case GLSL_TYPE_INT16:
-   case GLSL_TYPE_INT64:
-      return INT;
+//    case GLSL_TYPE_INT:
+//    case GLSL_TYPE_INT8:
+//    case GLSL_TYPE_INT16:
+//    case GLSL_TYPE_INT64:
+//       return INT;
    
-   case GLSL_TYPE_FLOAT:
-   case GLSL_TYPE_FLOAT16:
-      return FLOAT;
+//    case GLSL_TYPE_FLOAT:
+//    case GLSL_TYPE_FLOAT16:
+//       return FLOAT;
    
-   case GLSL_TYPE_BOOL:
-   case GLSL_TYPE_IMAGE:
-      return BITS;
+//    case GLSL_TYPE_BOOL:
+//    case GLSL_TYPE_IMAGE:
+//       return BITS;
 
 
-   case GLSL_TYPE_SAMPLER:
-   case GLSL_TYPE_ATOMIC_UINT:
-   case GLSL_TYPE_STRUCT:
-   case GLSL_TYPE_INTERFACE:
-   case GLSL_TYPE_ARRAY:
-   case GLSL_TYPE_VOID:
-   case GLSL_TYPE_SUBROUTINE:
-   case GLSL_TYPE_FUNCTION:
-   case GLSL_TYPE_ERROR:
-   case GLSL_TYPE_DOUBLE:
-   default:
-      assert(0);
-      break;
-   }
-}
+//    case GLSL_TYPE_SAMPLER:
+//    case GLSL_TYPE_ATOMIC_UINT:
+//    case GLSL_TYPE_STRUCT:
+//    case GLSL_TYPE_INTERFACE:
+//    case GLSL_TYPE_ARRAY:
+//    case GLSL_TYPE_VOID:
+//    case GLSL_TYPE_SUBROUTINE:
+//    case GLSL_TYPE_FUNCTION:
+//    case GLSL_TYPE_ERROR:
+//    case GLSL_TYPE_DOUBLE:
+//    default:
+//       assert(0);
+//       break;
+//    }
+// }
 
 // static uint32_t
 // glsl_base_type_to_num_bits(enum glsl_base_type type)
@@ -4677,6 +4693,7 @@ print_ptx_function_impl(nir_function_impl *impl, print_state *state, gl_shader_s
    nir_index_blocks(impl);
 
    ssa_reg_info *ssa_register_info = malloc(sizeof(*ssa_register_info) * 5000);
+   memset(ssa_register_info, 0, sizeof(*ssa_register_info) * 5000);
 
    foreach_list_typed(nir_cf_node, node, node, &impl->body) {
       print_cf_node_as_ptx(node, state, ssa_register_info, 1);
