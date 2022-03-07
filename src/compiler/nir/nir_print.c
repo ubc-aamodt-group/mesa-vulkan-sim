@@ -1711,6 +1711,7 @@ typedef struct  {
    int num_components; // vec 1,2,3,4
    int num_bits; // 1,8,32,64 bits
    val_type type; // int, float, or bool
+   val_type pointer_type;
 } ssa_reg_info;
 
 static uint32_t loopID = 0;
@@ -2496,8 +2497,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          fprintf(fp, "\n");
          print_tabs(tabs, fp);
 
-         fprintf(fp, "cvt.s32");
-         fprintf(fp, ".u%d ", instr->dest.dest.ssa.bit_size);
+         fprintf(fp, "cvt.rni.s32.f%d ", instr->dest.dest.ssa.bit_size);
 
          ssa_register_info[instr->dest.dest.ssa.index].type = INT;
       }
@@ -2534,6 +2534,17 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          fprintf(fp, "cvt.rni.u32.f32 ");
 
          ssa_register_info[instr->dest.dest.ssa.index].type = UINT;
+      }
+      else if (!strcmp(nir_op_infos[instr->op].name, "b2f32")){
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, FLOAT, instr->dest.dest.ssa.bit_size);
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";");
+         fprintf(fp, "\n");
+         print_tabs(tabs, fp);
+
+         fprintf(fp, "b2f32 ");
+
+         ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
       }
       else if (!strcmp(nir_op_infos[instr->op].name, "fadd")) {
          print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, FLOAT, instr->dest.dest.ssa.bit_size);
@@ -2646,7 +2657,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          fprintf(fp, "\n");
          print_tabs(tabs, fp);
 
-         fprintf(fp, "neg.b%d ", instr->dest.dest.ssa.bit_size);
+         fprintf(fp, "neg.s%d ", instr->dest.dest.ssa.bit_size);
 
          ssa_register_info[instr->dest.dest.ssa.index].type = INT;
       }
@@ -2803,6 +2814,51 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
 
          ssa_register_info[instr->dest.dest.ssa.index].type = PREDICATE;
       }
+      else if (!strcmp(nir_op_infos[instr->op].name, "fge")) {
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, PREDICATE, instr->dest.dest.ssa.bit_size);
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";");
+         fprintf(fp, "\n");
+         print_tabs(tabs, fp);
+
+         fprintf(fp, "setp.ge.f%d ", instr->src[0].src.ssa->bit_size);
+
+         ssa_register_info[instr->dest.dest.ssa.index].type = PREDICATE;
+      }
+      else if (!strcmp(nir_op_infos[instr->op].name, "feq")) {
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, PREDICATE, instr->dest.dest.ssa.bit_size);
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";");
+         fprintf(fp, "\n");
+         print_tabs(tabs, fp);
+
+         fprintf(fp, "setp.eq.f%d ", instr->src[0].src.ssa->bit_size);
+
+         ssa_register_info[instr->dest.dest.ssa.index].type = PREDICATE;
+      }
+      else if (!strcmp(nir_op_infos[instr->op].name, "fsign")) {
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, FLOAT, instr->dest.dest.ssa.bit_size);
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";");
+         fprintf(fp, "\n");
+         print_tabs(tabs, fp);
+
+         fprintf(fp, "fsign ");
+
+         ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
+      }
+      else if (!strcmp(nir_op_infos[instr->op].name, "fneu")) {
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, PREDICATE, instr->dest.dest.ssa.bit_size);
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";");
+         fprintf(fp, "\n");
+         print_tabs(tabs, fp);
+
+         fprintf(fp, "setp.ne.f%d ", instr->src[0].src.ssa->bit_size);
+
+         ssa_register_info[instr->dest.dest.ssa.index].type = PREDICATE;
+      }
+
       else if (!strcmp(nir_op_infos[instr->op].name, "fsqrt")) {
          print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, FLOAT, instr->dest.dest.ssa.bit_size);
          print_alu_dest_as_ptx_no_pos(&instr->dest, state);
@@ -3014,6 +3070,48 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
    }
 }
 
+static val_type 
+glsl_base_type_to_val_type(enum glsl_base_type glsl_type)
+{
+   switch(glsl_type)
+   {
+      case GLSL_TYPE_UINT8:
+      case GLSL_TYPE_UINT16:
+      case GLSL_TYPE_UINT:
+      case GLSL_TYPE_UINT64:
+         return UINT;
+
+      case GLSL_TYPE_INT8:
+      case GLSL_TYPE_INT16:
+      case GLSL_TYPE_INT:
+      case GLSL_TYPE_INT64:
+         return INT;
+
+      case GLSL_TYPE_FLOAT:
+      case GLSL_TYPE_FLOAT16:
+      case GLSL_TYPE_DOUBLE:
+         return FLOAT;
+
+      case GLSL_TYPE_BOOL:
+         return PREDICATE;
+      
+      case GLSL_TYPE_SAMPLER:
+      case GLSL_TYPE_IMAGE:
+         return BITS;
+      
+      case GLSL_TYPE_INTERFACE:
+      case GLSL_TYPE_STRUCT:
+      case GLSL_TYPE_ARRAY:
+      case GLSL_TYPE_ATOMIC_UINT:
+      case GLSL_TYPE_VOID:
+      case GLSL_TYPE_SUBROUTINE:
+      case GLSL_TYPE_FUNCTION:
+      case GLSL_TYPE_ERROR:
+      default:
+         return UNDEF;
+   }
+}
+
 
 static const char*
 glsl_base_type_to_ptx_type(enum glsl_base_type glsl_type)
@@ -3061,7 +3159,7 @@ glsl_base_type_to_ptx_type(enum glsl_base_type glsl_type)
 }
 
 static void
-print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_state *state)
+print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_state *state, ssa_reg_info *ssa_register_info)
 {
    FILE *fp = state->fp;
 
@@ -3113,7 +3211,7 @@ print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_st
       
 
    if (whole_chain) {
-      print_deref_link_as_ptx(parent, whole_chain, state);
+      print_deref_link_as_ptx(parent, whole_chain, state, ssa_register_info);
    } else {
       print_src_as_ptx(&instr->parent, state);
    }
@@ -3135,10 +3233,12 @@ print_deref_link_as_ptx(const nir_deref_instr *instr, bool whole_chain, print_st
    case nir_deref_type_array:
    case nir_deref_type_ptr_as_array: {
       if (nir_src_is_const(instr->arr.index)) {
+         ssa_register_info->pointer_type = glsl_base_type_to_val_type(glsl_get_base_type(instr->type));
          //fprintf(fp, "[%"PRId64"]", nir_src_as_int(instr->arr.index));
          fprintf(fp, ", %"PRId64", %u, %s", nir_src_as_int(instr->arr.index), nir_deref_instr_array_stride(instr), 
             glsl_base_type_to_ptx_type(glsl_get_base_type(instr->type)));
       } else {
+         ssa_register_info->pointer_type = glsl_base_type_to_val_type(glsl_get_base_type(instr->type));
          fprintf(fp, ", ");
          print_src_as_ptx(&instr->arr.index, state);
          
@@ -3202,7 +3302,7 @@ print_deref_instr_as_ptx(nir_deref_instr *instr, print_state *state, ssa_reg_inf
    print_dest_as_ptx_no_pos(&instr->dest, state);
    fprintf(fp, ", ");
 
-   print_deref_link_as_ptx(instr, false, state);
+   print_deref_link_as_ptx(instr, false, state, &ssa_register_info[instr->dest.ssa.index]);
    fprintf(fp, ", ");
 
    //fprintf(fp, " (");
@@ -3274,7 +3374,7 @@ print_deref_instr_as_ptx(nir_deref_instr *instr, print_state *state, ssa_reg_inf
 
 
 static void
-print_tex_instr_as_ptx(nir_tex_instr *instr, print_state *state)
+print_tex_instr_as_ptx(nir_tex_instr *instr, print_state *state, ssa_reg_info *ssa_register_info)
 {
    FILE *fp = state->fp;
 
@@ -3282,6 +3382,8 @@ print_tex_instr_as_ptx(nir_tex_instr *instr, print_state *state)
    print_ptx_reg_decl(state, instr->dest.ssa.num_components, FLOAT, instr->dest.ssa.bit_size);
    print_dest_as_ptx_no_pos(&instr->dest, state);
    fprintf(fp, ";\n\t");
+
+   ssa_register_info[instr->dest.ssa.index].type = FLOAT;
 
    assert(instr->op == nir_texop_txl);
 
@@ -3911,7 +4013,7 @@ print_ssa_undef_instr_as_ptx(nir_ssa_undef_instr* instr, print_state *state, ssa
    print_ssa_use_as_ptx(&instr->def, state);
    fprintf(fp, ";\n\t");
 
-   fprintf(fp, "mov.f32 ");
+   fprintf(fp, "load_const ");
    print_ssa_use_as_ptx(&instr->def, state);
    fprintf(fp, ", 0F000000ff;");
 
@@ -4050,7 +4152,7 @@ print_instr_as_ptx(const nir_instr *instr, print_state *state, unsigned tabs, ss
       break;
 
    case nir_instr_type_tex:
-      print_tex_instr_as_ptx(nir_instr_as_tex(instr), state);
+      print_tex_instr_as_ptx(nir_instr_as_tex(instr), state, ssa_register_info);
       break;
 
    case nir_instr_type_load_const: ;

@@ -197,8 +197,11 @@ class FunctionalType(Enum, metaclass=MetaEnum):
     bra = 'bra'
     end_trace_ray = 'end_trace_ray'
     bcsel = 'bcsel'
+    selp = 'selp'
     pack_64_2x32_split = 'pack_64_2x32_split'
     txl = 'txl'
+    b2f32 = 'b2f32'
+    fsign = 'fsign'
     shader_clock = 'shader_clock'
     Other = auto()
 

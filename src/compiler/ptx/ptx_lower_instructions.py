@@ -210,7 +210,10 @@ def translate_deref_instructions(ptx_shader):
                     variableType = indexDeclaration.variableType
                     if variableType[1] == 'b':
                         variableType = '.u' + variableType[2:]
-                    newSet.buildString('cvt.u32%s' % variableType, (indexRegName_32, arrayIndex))
+                    if variableType[1] == 'f':
+                        newSet.buildString('cvt.rni.u32%s' % variableType, (indexRegName_32, arrayIndex))
+                    else:
+                        newSet.buildString('cvt.u32%s' % variableType, (indexRegName_32, arrayIndex))
 
 
                 newMult = PTXFunctionalLine()
@@ -231,6 +234,8 @@ def translate_deref_instructions(ptx_shader):
 
             declaration, declerationLine = ptx_shader.findDeclaration(dst)
             srcDeclaration, _ = ptx_shader.findDeclaration(ptr)
+            
+            # assert srcDeclaration.pointerVariableType == declaration.variableType
 
             # print(line.fullLine)
 
@@ -239,6 +244,11 @@ def translate_deref_instructions(ptx_shader):
             assert srcDeclaration.pointerVariableType[2:] == declaration.variableType[2:]
             declaration.buildString(declaration.declarationType, declaration.vector, srcDeclaration.pointerVariableType, declaration.variableName)
 
+            # if ptr == '%ssa_13':
+            #     print(declaration.fullLine)
+            #     exit(-1)
+
+            
             # if srcDeclaration.pointerVariableType == None:
             #     exit(-1)
 
@@ -626,6 +636,8 @@ def translate_phi(ptx_shader):
             dst, blockName0, src0, blockName1, src1, blockName2, src2 = line.args
         
         dstDecleration, dstIndex = ptx_shader.findDeclaration(dst)
+        print(src0)
+        print(src1)
         src0Decleration, _ = ptx_shader.findDeclaration(src0)
         src1Decleration, _ = ptx_shader.findDeclaration(src1)
 
@@ -791,6 +803,24 @@ def translate_const_operands(ptx_shader):
                     declaration, _ = ptx_shader.findDeclaration(src2)
                     if declaration.isLoadConst:
                         line.buildString(line.command.split()[0], (dst, src1, src2 + '_bits'))
+        
+        elif line.command[:4] == 'selp':
+            type = line.command[3:]
+            if type[:2] != '.f':
+
+                dst, src0, src1, src2 = line.args
+                if src0[0] == '%':
+                    declaration, _ = ptx_shader.findDeclaration(src0)
+                    if declaration.isLoadConst:
+                        line.buildString(line.command.split()[0], (dst, src0 + '_bits', src1, src2))
+
+                dst, src0, src1, src2 = line.args
+                if src1[0] == '%':
+                    declaration, _ = ptx_shader.findDeclaration(src1)
+                    if declaration.isLoadConst:
+                        line.buildString(line.command.split()[0], (dst, src0, src1 + '_bits', src2))
+
+        
 
 
 
@@ -903,7 +933,9 @@ def add_temps(ptx_shader):
 
 
 def translate_ALU(ptx_shader):
-    for index in range(len(ptx_shader.lines)):
+    index = -1
+    while index + 1 < len(ptx_shader.lines):
+        index += 1
         line = ptx_shader.lines[index]
         
         if line.instructionClass != InstructionClass.Functional:
@@ -957,7 +989,21 @@ def translate_ALU(ptx_shader):
         elif line.functionalType == FunctionalType.bcsel:
             dst, src0, src1, src2 = line.args
 
-            line.buildString('selp.f32', (dst, src1, src2, src0))
+            src1Declaration, _ = ptx_shader.findDeclaration(src1)
+            src2Declaration, _ = ptx_shader.findDeclaration(src2)
+            if not src1Declaration.isLoadConst:
+                type = src1Declaration.variableType
+            elif not src2Declaration.isLoadConst:
+                type = src2Declaration.variableType
+            else:
+                type = '.f32'
+            
+            dstDeclaration, _ = ptx_shader.findDeclaration(dst)
+            dstDeclaration.buildString(dstDeclaration.declarationType, dstDeclaration.vector, type, dstDeclaration.variableName)
+
+            line.buildString('selp' + type, (dst, src1, src2, src0))
+
+            # line.buildString('selp.f32', (dst, src1, src2, src0))
         
         elif line.functionalType == FunctionalType.pack_64_2x32_split:
             dst, src0, src1 = line.args
@@ -983,6 +1029,28 @@ def translate_ALU(ptx_shader):
             orLine.buildString('or.b64', (dst, dst, '%temp_u64'))
 
             ptx_shader.lines[index:index + 1] = (cvt1, shl, cvt0, orLine)
+        
+        elif line.functionalType == FunctionalType.b2f32:
+            dst, src = line.args
+            line.buildString('selp.f32', (dst, '0F3f800000', '0F00000000', src))
+        
+        elif line.functionalType == FunctionalType.fsign:
+            dst, src = line.args
+
+            ldLine = PTXFunctionalLine()
+            ldLine.leadingWhiteSpace = line.leadingWhiteSpace
+            ldLine.buildString('mov.f32', (dst, '0F3f800000'))
+
+            copysignfLine = PTXFunctionalLine()
+            copysignfLine.leadingWhiteSpace = line.leadingWhiteSpace
+            copysignfLine.comment = line.comment
+            copysignfLine.buildString('copysignf', (dst, src))
+
+            ptx_shader.lines[index:index + 1] = (ldLine, copysignfLine)
+
+
+
+
 
 
 
@@ -1034,14 +1102,16 @@ def main():
     translate_load_GL_instructions(shader)
     translate_image_deref(shader)
     translate_exit(shader)
-    translate_phi(shader)
     translate_texture_instructions(shader)
     translate_special_intrinsics(shader)
 
     translate_vector_operands(shader, unique_ID)
-    translate_const_operands(shader)
 
     translate_ALU(shader)
+
+    translate_phi(shader)
+    
+    translate_const_operands(shader)
 
     translate_f1_to_pred(shader)
     shader.writeToFile(shaderPath)
