@@ -203,6 +203,8 @@ class FunctionalType(Enum, metaclass=MetaEnum):
     b2f32 = 'b2f32'
     fsign = 'fsign'
     shader_clock = 'shader_clock'
+    report_ray_intersection = 'report_ray_intersection'
+    fsat = 'fsat'
     Other = auto()
 
 class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line that does sth like mov (eg it's not decleration)

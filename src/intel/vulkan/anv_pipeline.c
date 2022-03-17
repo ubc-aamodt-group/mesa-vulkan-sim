@@ -2767,19 +2767,20 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
          brw_nir_lower_combined_intersection_any_hit(intersection, any_hit,
                                                      devinfo);
    
-         result = compile_upload_rt_shader(pipeline, intersection,
-                                           &stages[intersection_idx],
-                                           &group->intersection,
-                                           group_ctx);
+         // result = compile_upload_rt_shader(pipeline, intersection,
+         //                                   &stages[intersection_idx],
+         //                                   &group->intersection,
+         //                                   group_ctx);
+         result = VK_SUCCESS;
          if (result != VK_SUCCESS) {
             ralloc_free(pipeline_ctx);
             return result;
          }
    
-         uint32_t stack_size =
-            brw_bs_prog_data_const(group->intersection->prog_data)->max_stack_size;
-         stack_max[MESA_SHADER_INTERSECTION] =
-            MAX2(stack_max[MESA_SHADER_INTERSECTION], stack_size);
+         // uint32_t stack_size =
+         //    brw_bs_prog_data_const(group->intersection->prog_data)->max_stack_size;
+         // stack_max[MESA_SHADER_INTERSECTION] =
+         //    MAX2(stack_max[MESA_SHADER_INTERSECTION], stack_size);
    
          ralloc_free(group_ctx);
          break;

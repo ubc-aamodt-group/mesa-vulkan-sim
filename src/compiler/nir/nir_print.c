@@ -2080,6 +2080,16 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
       }
       fprintf(fp, "%s ", info->name); // Intrinsic function name
    }
+   else if (!strcmp(info->name, "report_ray_intersection")){
+      if (info->has_dest) {
+         ssa_register_info[instr->dest.ssa.index].type = PREDICATE;
+         print_ptx_reg_decl(state, instr->dest.ssa.num_components, PREDICATE, instr->dest.ssa.bit_size);
+         print_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";\n");
+         print_tabs(tabs, fp);
+      }
+      fprintf(fp, "%s ", info->name); // Intrinsic function name
+   }
    else if (!strcmp(info->name, "shader_clock")){
       // The argument 2 probably means memory_scope=SUBGROUP
       // Store lower 32 bits in dst.x and upper 32 bits in dst.y
@@ -2924,7 +2934,7 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          fprintf(fp, "\n");
          print_tabs(tabs, fp);
 
-         fprintf(fp, "add.sat.f%d ", instr->dest.dest.ssa.bit_size);
+         fprintf(fp, "fsat ");
 
          ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
       }
@@ -3003,10 +3013,6 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
 
             print_alu_src_as_ptx(instr, j, state);
          }
-      }
-
-      if (!strcmp(nir_op_infos[instr->op].name, "fsat")) { // since fsat is translated as adding 0 to itself
-         fprintf(fp, ", 0F00000000");
       }
 
       fprintf(fp, ";");

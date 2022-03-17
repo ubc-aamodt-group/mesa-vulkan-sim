@@ -894,6 +894,17 @@ def add_consts(ptx_shader):
 
 
 
+    const0_f32_declaration = PTXDecleration()
+    const0_f32_declaration.leadingWhiteSpace = '\t'
+    const0_f32_declaration.buildString(DeclarationType.Register, None, '.f32', '%const0_f32')
+
+    const0_f32_mov = PTXFunctionalLine()
+    const0_f32_mov.leadingWhiteSpace = '\t'
+    const0_f32_mov.buildString('mov.f32', ('%const0_f32', '0F00000000'))
+
+    ptx_shader.addToStart((const0_f32_declaration, const0_f32_mov, PTXLine('\n')))
+
+
     const1_f32_declaration = PTXDecleration()
     const1_f32_declaration.leadingWhiteSpace = '\t'
     const1_f32_declaration.buildString(DeclarationType.Register, None, '.f32', '%const1_f32')
@@ -920,6 +931,13 @@ def add_temps(ptx_shader):
     ptx_shader.addToStart((temp_f32_declaration, ))
 
 
+    temp_u32_declaration = PTXDecleration()
+    temp_u32_declaration.leadingWhiteSpace = '\t'
+    temp_u32_declaration.buildString(DeclarationType.Register, None, '.u32', '%temp_u32')
+
+    ptx_shader.addToStart((temp_u32_declaration, ))
+
+
     temp_u64_declaration = PTXDecleration()
     temp_u64_declaration.leadingWhiteSpace = '\t'
     temp_u64_declaration.buildString(DeclarationType.Register, None, '.u64', '%temp_u64')
@@ -928,7 +946,6 @@ def add_temps(ptx_shader):
 
 
     ptx_shader.addToStart((PTXLine('\n'), ))
-
 
 
 
@@ -1047,9 +1064,20 @@ def translate_ALU(ptx_shader):
             copysignfLine.buildString('copysignf', (dst, src))
 
             ptx_shader.lines[index:index + 1] = (ldLine, copysignfLine)
+        
 
+        elif line.functionalType == FunctionalType.fsat:
+            dst, src = line.args
 
+            maxLine = PTXFunctionalLine()
+            maxLine.leadingWhiteSpace = line.leadingWhiteSpace
+            maxLine.buildString('max.f32', (dst, src, '%const0_f32'))
 
+            minLine = PTXFunctionalLine()
+            minLine.leadingWhiteSpace = line.leadingWhiteSpace
+            minLine.buildString('min.f32', (dst, dst, '%const1_f32'))
+
+            ptx_shader.lines[index:index + 1] = (maxLine, minLine)
 
 
 
@@ -1082,6 +1110,27 @@ def translate_special_intrinsics(ptx_shader):
             dst, memory_scope = line.args
             newRegNames, _, _, _ = unwrapp_vector(ptx_shader, dst, dst)
             line.buildString(FunctionalType.shader_clock, newRegNames[0:2])
+        
+        if line.functionalType == FunctionalType.report_ray_intersection:
+            dst, src0, src1 = line.args
+
+            # dstDeclaration, dstDeclarationIndex = ptx_shader.findDeclaration(dst)
+            line.buildString(line.functionalType, ('%temp_u32', src0, src1))
+
+            setpLine = PTXFunctionalLine()
+            setpLine.leadingWhiteSpace = line.leadingWhiteSpace
+            setpLine.buildString('setp.ne.u32', (dst, '%temp_u32', '%const0_u32'))
+
+            ptx_shader.lines[index + 1:index + 1] = (setpLine, )
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1089,7 +1138,7 @@ def main():
     unique_ID = 0
     assert len(sys.argv) == 2
     shaderPath = sys.argv[1]
-    shader = PTXShader(shaderPath)
+    shader = PTXShader(shaderPath)    
     
     add_consts(shader)
     add_temps(shader)
