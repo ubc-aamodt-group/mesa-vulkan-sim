@@ -4709,6 +4709,7 @@ print_ptx_function_impl(nir_function_impl *impl, print_state *state, gl_shader_s
 
    fprintf(fp, "\t// block block_%u:\n", impl->end_block->index);
 
+   fprintf(fp, "\tshader_exit:\n");
    fprintf(fp, "\texit;\n");
    fprintf(fp, "}\n");
 }

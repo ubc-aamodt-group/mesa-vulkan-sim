@@ -1125,7 +1125,35 @@ def translate_special_intrinsics(ptx_shader):
 
 
 
+def add_extra_thread_return(ptx_shader):
+    thread_return_code = """.reg .u32 %launch_ID_0;
+.reg .u32 %launch_ID_1;
+.reg .u32 %launch_ID_2;
+load_ray_launch_id %launch_ID_0, %launch_ID_1, %launch_ID_2;
 
+.reg .u32 %launch_Size_0;
+.reg .u32 %launch_Size_1;
+.reg .u32 %launch_Size_2;
+load_ray_launch_size %launch_Size_0, %launch_Size_1, %launch_Size_2;
+
+
+.reg .pred %bigger_0;
+setp.ge.u32 %bigger_0, %launch_ID_0, %launch_Size_0;
+
+.reg .pred %bigger_1;
+setp.ge.u32 %bigger_1, %launch_ID_1, %launch_Size_1;
+
+.reg .pred %bigger_2;
+setp.ge.u32 %bigger_2, %launch_ID_2, %launch_Size_2;
+
+@%bigger_0 bra shader_exit;
+@%bigger_1 bra shader_exit;
+@%bigger_2 bra shader_exit;"""
+
+    lines = [PTXLine('\t' + line + '\n') for line in thread_return_code.split("\n")]
+    lines.append(PTXLine('\n'))
+
+    ptx_shader.addToStart(lines)
 
 
 
@@ -1138,7 +1166,7 @@ def main():
     unique_ID = 0
     assert len(sys.argv) == 2
     shaderPath = sys.argv[1]
-    shader = PTXShader(shaderPath)    
+    shader = PTXShader(shaderPath)
     
     add_consts(shader)
     add_temps(shader)
@@ -1163,6 +1191,11 @@ def main():
     translate_const_operands(shader)
 
     translate_f1_to_pred(shader)
+
+    if shader.getShaderType() == ShaderType.Ray_generation:
+        add_extra_thread_return(shader)
+    
+
     shader.writeToFile(shaderPath)
 
 

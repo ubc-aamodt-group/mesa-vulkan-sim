@@ -286,6 +286,15 @@ class PTXEntryPoint (PTXLine):
         super().__init__(fullLine)
 
 
+class ShaderType(Enum):
+    Ray_generation = auto()
+    Closest_hit = auto()
+    Miss = auto()
+    Intersection = auto()
+    Any_hit = auto()
+    Callable = auto()
+
+
 class PTXShader:
     def __init__(self, filePath) -> None:
         f = open(filePath, "r")
@@ -309,6 +318,31 @@ class PTXShader:
             lineNO += 1
         # exit(-1)
         f.close()
+    
+    def getShaderType(self):
+        for index in range(len(self.lines)):
+            line = self.lines[index]
+            if line.instructionClass != InstructionClass.EntryPoint:
+                continue
+            if 'main' not in line.fullLine:
+                continue
+
+            if 'RAYGEN' in line.fullLine:
+                return ShaderType.Ray_generation
+            if 'CLOSEST_HIT' in line.fullLine:
+                return ShaderType.Closest_hit
+            if 'MISS' in line.fullLine:
+                return ShaderType.Miss
+            if 'INTERSECTION' in line.fullLine:
+                return ShaderType.Intersection
+            if 'ANY_HIT' in line.fullLine:
+                return ShaderType.Any_hit
+            if 'CALLABLE' in line.fullLine:
+                return ShaderType.Callable
+            
+            assert 0
+            
+
     
     def findDeclaration(self, name):
         for index in range(len(self.lines)):
