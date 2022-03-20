@@ -1803,7 +1803,7 @@ void anv_UpdateDescriptorSets(
          break;
       }
       // if(descriptorWriteCount == 10)
-         update_gpgpusim_descriptor_sets(set);
+         // update_gpgpusim_descriptor_sets(set);
    }
 
    for (uint32_t i = 0; i < descriptorCopyCount; i++) {

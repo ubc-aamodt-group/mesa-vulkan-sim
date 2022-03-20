@@ -32,6 +32,8 @@
 #include "vk_format_info.h"
 #include "vk_util.h"
 
+#include "gpgpusim_calls_from_mesa.h"
+
 /** \file anv_cmd_buffer.c
  *
  * This file contains all of the stuff for emitting commands into a command
@@ -950,6 +952,9 @@ void anv_CmdBindDescriptorSets(
                                          layout, firstSet + i, set,
                                          &dynamicOffsetCount,
                                          &pDynamicOffsets);
+      
+      assert(descriptorSetCount == 1);
+      gpgpusim_setDescriptorSet(set);
    }
 }
 
