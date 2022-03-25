@@ -4837,8 +4837,23 @@ cmd_buffer_trace_rays(struct anv_cmd_buffer *cmd_buffer,
    void *miss_addr = find_host_address(cmd_buffer->device, miss_sbt->deviceAddress);
    void *hit_addr = find_host_address(cmd_buffer->device, hit_sbt->deviceAddress);
    void *callable_addr = find_host_address(cmd_buffer->device, callable_sbt->deviceAddress);
-   gpgpusim_vkCmdTraceRaysKHR(raygen_addr, miss_addr, hit_addr, callable_addr,
-            is_indirect, launch_width, launch_height, launch_depth, launch_size_addr);
+   // gpgpusim_vkCmdTraceRaysKHR(raygen_addr, miss_addr, hit_addr, callable_addr,
+   //          is_indirect, launch_width, launch_height, launch_depth, launch_size_addr);
+
+
+   cmd_buffer->traceRayCall.raygen_sbt = raygen_addr;
+   cmd_buffer->traceRayCall.miss_sbt = miss_addr;
+   cmd_buffer->traceRayCall.hit_sbt = hit_addr;
+   cmd_buffer->traceRayCall.callable_sbt = callable_addr;
+   cmd_buffer->traceRayCall.is_indirect = is_indirect;
+   cmd_buffer->traceRayCall.launch_width = launch_width;
+   cmd_buffer->traceRayCall.launch_height = launch_height;
+   cmd_buffer->traceRayCall.launch_depth = launch_depth;
+   cmd_buffer->traceRayCall.launch_size_addr = launch_size_addr;
+   cmd_buffer->traceRayCall.valid = true;
+
+
+
    // struct anv_cmd_ray_tracing_state *rt = &cmd_buffer->state.rt;
    // struct anv_ray_tracing_pipeline *pipeline = rt->pipeline;
    //

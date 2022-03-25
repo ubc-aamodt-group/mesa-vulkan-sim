@@ -2980,6 +2980,19 @@ enum anv_cmd_buffer_exec_mode {
    ANV_CMD_BUFFER_EXEC_MODE_CALL_AND_RETURN,
 };
 
+struct anv_TraceRayCall {
+   bool valid;
+   void * raygen_sbt;
+   void * miss_sbt;
+   void * hit_sbt;
+   void * callable_sbt;
+   bool is_indirect;
+   uint32_t launch_width;
+   uint32_t launch_height;
+   uint32_t launch_depth;
+   uint64_t launch_size_addr;
+};
+
 struct anv_cmd_buffer {
    struct vk_object_base                        base;
 
@@ -3034,6 +3047,8 @@ struct anv_cmd_buffer {
 
    /* Set by SetPerformanceMarkerINTEL, written into queries by CmdBeginQuery */
    uint64_t                                     intel_perf_marker;
+
+   struct anv_TraceRayCall traceRayCall;
 };
 
 VkResult anv_cmd_buffer_init_batch_bo_chain(struct anv_cmd_buffer *cmd_buffer);

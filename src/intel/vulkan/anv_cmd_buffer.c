@@ -260,6 +260,8 @@ static VkResult anv_create_cmd_buffer(
    cmd_buffer->device = device;
    cmd_buffer->pool = pool;
    cmd_buffer->level = level;
+   
+   cmd_buffer->traceRayCall.valid = false;
 
    result = anv_cmd_buffer_init_batch_bo_chain(cmd_buffer);
    if (result != VK_SUCCESS)
@@ -860,6 +862,7 @@ anv_cmd_buffer_bind_descriptor_set(struct anv_cmd_buffer *cmd_buffer,
                 VK_SHADER_STAGE_INTERSECTION_BIT_KHR |
                 VK_SHADER_STAGE_CALLABLE_BIT_KHR;
       pipe_state = &cmd_buffer->state.rt.base;
+      gpgpusim_setDescriptorSet(set);
       break;
 
    default:
@@ -954,7 +957,6 @@ void anv_CmdBindDescriptorSets(
                                          &pDynamicOffsets);
       
       assert(descriptorSetCount == 1);
-      gpgpusim_setDescriptorSet(set);
    }
 }
 
