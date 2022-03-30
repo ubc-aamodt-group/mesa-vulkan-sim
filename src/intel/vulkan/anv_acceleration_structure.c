@@ -973,7 +973,9 @@ pack_node(struct anv_bvh_node *node, bool is_root, void *out,
          bpl.LeafDescriptor.ShaderIndex = leaf->geometry_id;
          bpl.LeafDescriptor.GeometryRayMask = 0xff;
          bpl.LeafDescriptor.GeometryIndex = leaf->geometry_id;
-         bpl.LeafDescriptor.LeafType = TYPE_OPAQUE_CULLING_ENABLED;
+         // MRS_TODO: what this has to do with culling? why it was disabled?
+         // bpl.LeafDescriptor.LeafType = TYPE_OPAQUE_CULLING_ENABLED;
+         bpl.LeafDescriptor.LeafType = TYPE_OPAQUE_CULLING_DISABLED;
          bpl.LeafDescriptor.GeometryFlags = geometry_flags;
          bpl.NumPrimitives = 1;
          bpl.PrimitiveIndex[0] = leaf->primitive_id;

@@ -460,13 +460,12 @@ _anv_queue_submit(struct anv_queue *queue, struct anv_queue_submit **_submit,
     */
    *_submit = NULL;
    if (queue->device->has_thread_submit) {
-      if(submit->cmd_buffer && submit->cmd_buffer->traceRayCall.valid)
-         gpgpusim_vkCmdTraceRaysKHR(submit->cmd_buffer->traceRayCall.raygen_sbt, submit->cmd_buffer->traceRayCall.miss_sbt,
-               submit->cmd_buffer->traceRayCall.hit_sbt, submit->cmd_buffer->traceRayCall.callable_sbt, submit->cmd_buffer->traceRayCall.is_indirect,
-               submit->cmd_buffer->traceRayCall.launch_width, submit->cmd_buffer->traceRayCall.launch_height, submit->cmd_buffer->traceRayCall.launch_depth,
-               submit->cmd_buffer->traceRayCall.launch_size_addr);
-      
       pthread_mutex_lock(&queue->mutex);
+      // if(submit->cmd_buffer && submit->cmd_buffer->traceRayCall.valid)
+      //    gpgpusim_vkCmdTraceRaysKHR(submit->cmd_buffer->traceRayCall.raygen_sbt, submit->cmd_buffer->traceRayCall.miss_sbt,
+      //          submit->cmd_buffer->traceRayCall.hit_sbt, submit->cmd_buffer->traceRayCall.callable_sbt, submit->cmd_buffer->traceRayCall.is_indirect,
+      //          submit->cmd_buffer->traceRayCall.launch_width, submit->cmd_buffer->traceRayCall.launch_height, submit->cmd_buffer->traceRayCall.launch_depth,
+      //          submit->cmd_buffer->traceRayCall.launch_size_addr);
       pthread_cond_broadcast(&queue->cond);
       list_addtail(&submit->link, &queue->queued_submits);
       pthread_mutex_unlock(&queue->mutex);
