@@ -409,6 +409,11 @@ anv_queue_task(void *_queue)
          /* Now submit */
          if (!queue->lost) {
             pthread_mutex_lock(&queue->device->mutex);
+            if(submit->cmd_buffer && submit->cmd_buffer->traceRayCall.valid)
+               gpgpusim_vkCmdTraceRaysKHR(submit->cmd_buffer->traceRayCall.raygen_sbt, submit->cmd_buffer->traceRayCall.miss_sbt,
+                     submit->cmd_buffer->traceRayCall.hit_sbt, submit->cmd_buffer->traceRayCall.callable_sbt, submit->cmd_buffer->traceRayCall.is_indirect,
+                     submit->cmd_buffer->traceRayCall.launch_width, submit->cmd_buffer->traceRayCall.launch_height, submit->cmd_buffer->traceRayCall.launch_depth,
+                     submit->cmd_buffer->traceRayCall.launch_size_addr);
             result = anv_queue_execbuf_locked(queue, submit);
             pthread_mutex_unlock(&queue->device->mutex);
          }
