@@ -373,6 +373,89 @@ def translate_trace_ray(ptx_shader):
         args.append(run_miss_reg)
         line.buildString(line.functionalType, args)
 
+        
+        #intersection shaders
+        intersection_counter_reg = '%intersection_counter_' + str(trace_ray_ID)
+        intersection_counter_declaration = PTXDecleration()
+        intersection_counter_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+        intersection_counter_declaration.buildString(DeclarationType.Register, None, '.u32', intersection_counter_reg)
+
+        intersection_counter_mov = PTXFunctionalLine()
+        intersection_counter_mov.leadingWhiteSpace = line.leadingWhiteSpace
+        intersection_counter_mov.buildString('mov.u32', (intersection_counter_reg, '0'))
+
+        intersection_loop_label_str = 'intersection_loop_' + str(trace_ray_ID)
+        intersection_loop_label = PTXLine('')
+        intersection_loop_label.fullLine = line.leadingWhiteSpace + intersection_loop_label_str + ':\n'
+
+        intersection_exit_reg = '%intersections_exit_' + str(trace_ray_ID)
+        intersection_exit_declaration = PTXDecleration()
+        intersection_exit_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+        intersection_exit_declaration.buildString(DeclarationType.Register, None, '.pred', intersection_exit_reg)
+
+        intersection_exit = PTXFunctionalLine()
+        intersection_exit.leadingWhiteSpace = line.leadingWhiteSpace
+        intersection_exit.buildString('intersection_exit.pred', (intersection_exit_reg, intersection_counter_reg))
+
+        exit_intersection_label_str = 'exit_intersection_label_' + str(trace_ray_ID)
+        exit_intersection_bra = PTXFunctionalLine()
+        exit_intersection_bra.leadingWhiteSpace = line.leadingWhiteSpace
+        exit_intersection_bra.condition = '@' + intersection_exit_reg
+        exit_intersection_bra.buildString(FunctionalType.bra, (exit_intersection_label_str, ))
+
+        run_intersection_reg = '%run_intersection_' + str(trace_ray_ID)
+        run_intersection_declaration = PTXDecleration()
+        run_intersection_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+        run_intersection_declaration.buildString(DeclarationType.Register, None, '.pred', run_intersection_reg)
+
+        run_intersection = PTXFunctionalLine()
+        run_intersection.leadingWhiteSpace = line.leadingWhiteSpace
+        run_intersection.buildString('run_intersection.pred', (run_intersection_reg, intersection_counter_reg))
+
+        intersection_counter_add = PTXFunctionalLine()
+        intersection_counter_add.leadingWhiteSpace = line.leadingWhiteSpace
+        intersection_counter_add.buildString('add.u32', (intersection_counter_reg, intersection_counter_reg, '1'))
+
+        skip_intersection_label_str = 'skip_intersection_label_' + str(trace_ray_ID)
+        skip_intersection_bra = PTXFunctionalLine()
+        skip_intersection_bra.leadingWhiteSpace = line.leadingWhiteSpace
+        skip_intersection_bra.condition = '@!' + run_intersection_reg
+        skip_intersection_bra.buildString(FunctionalType.bra, (skip_intersection_label_str, ))
+
+        # intersection_index_reg = '%intersection_index_' + str(trace_ray_ID)
+        # intersection_index_declaration = PTXDecleration()
+        # intersection_index_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+        # intersection_index_declaration.buildString(DeclarationType.Register, None, '.u32', intersection_index_reg)
+
+        # get_intersection_index = PTXFunctionalLine()
+        # get_intersection_index.leadingWhiteSpace = line.leadingWhiteSpace
+        # get_intersection_index.buildString(FunctionalType.get_intersection_index, (intersection_index_reg, ))
+
+        call_intersection = PTXFunctionalLine()
+        call_intersection.leadingWhiteSpace = line.leadingWhiteSpace
+        call_intersection.buildString(FunctionalType.call_intersection_shader, (intersection_counter_reg, ))
+
+        skip_intersection_label = PTXLine('')
+        skip_intersection_label.fullLine = line.leadingWhiteSpace + skip_intersection_label_str + ':\n'
+
+        intersection_loop_bra = PTXFunctionalLine()
+        intersection_loop_bra.leadingWhiteSpace = line.leadingWhiteSpace
+        intersection_loop_bra.buildString(FunctionalType.bra, (intersection_loop_label_str, ))
+
+        exit_intersection_label = PTXLine('')
+        exit_intersection_label.fullLine = line.leadingWhiteSpace + exit_intersection_label_str + ':\n'
+
+        #get hit_geometry
+        hit_geometry_reg = '%skip_closest_hit_' + str(trace_ray_ID)
+        hit_geometry_declaration = PTXDecleration()
+        hit_geometry_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+        hit_geometry_declaration.buildString(DeclarationType.Register, None, '.pred', hit_geometry_reg)
+
+        hit_geometry = PTXFunctionalLine()
+        hit_geometry.leadingWhiteSpace = line.leadingWhiteSpace
+        hit_geometry.buildString('hit_geometry.pred', (hit_geometry_reg, ))
+
+        #closest hit shader
         skip_closest_hit_reg = '%skip_closest_hit_' + str(trace_ray_ID)
         skip_closest_hit_declaration = PTXDecleration()
         skip_closest_hit_declaration.leadingWhiteSpace = line.leadingWhiteSpace
@@ -396,6 +479,7 @@ def translate_trace_ray(ptx_shader):
         skip_closest_hit_label.fullLine = line.leadingWhiteSpace + skip_closest_hit_label_str + ':\n'
 
 
+        #miss shader
         skip_miss_reg = '%skip_miss_' + str(trace_ray_ID)
         skip_miss_declaration = PTXDecleration()
         skip_miss_declaration.leadingWhiteSpace = line.leadingWhiteSpace
@@ -418,15 +502,19 @@ def translate_trace_ray(ptx_shader):
         skip_miss_label = PTXLine('')
         skip_miss_label.fullLine = line.leadingWhiteSpace + skip_miss_label_str + ':\n'
 
-
+        #
         end_trace_ray = PTXFunctionalLine()
         end_trace_ray.leadingWhiteSpace = line.leadingWhiteSpace
         end_trace_ray.buildString(FunctionalType.end_trace_ray, ())
 
 
         ptx_shader.lines[index:index + 1] = (runClosestHitDeclaration, runMissDeclaration, line, PTXLine('\n'), \
-            skip_closest_hit_declaration, call_closest_hit_setp, call_closest_hit_bra, call_closest_hit, skip_closest_hit_label, PTXLine('\n'),\
-            skip_miss_declaration, call_miss_setp, call_miss_bra, call_miss, skip_miss_label, PTXLine('\n'),\
+            intersection_counter_declaration, intersection_counter_mov, intersection_loop_label, \
+            intersection_exit_declaration, intersection_exit, exit_intersection_bra, \
+            run_intersection_declaration, run_intersection, intersection_counter_add, skip_intersection_bra, \
+            call_intersection, skip_intersection_label, intersection_loop_bra, exit_intersection_label, PTXLine('\n'), \
+            skip_closest_hit_declaration, call_closest_hit_setp, call_closest_hit_bra, call_closest_hit, skip_closest_hit_label, PTXLine('\n'), \
+            skip_miss_declaration, call_miss_setp, call_miss_bra, call_miss, skip_miss_label, PTXLine('\n'), \
             end_trace_ray)
         
         skip_lines = index + 16
@@ -1111,17 +1199,17 @@ def translate_special_intrinsics(ptx_shader):
             newRegNames, _, _, _ = unwrapp_vector(ptx_shader, dst, dst)
             line.buildString(FunctionalType.shader_clock, newRegNames[0:2])
         
-        if line.functionalType == FunctionalType.report_ray_intersection:
-            dst, src0, src1 = line.args
+        # if line.functionalType == FunctionalType.report_ray_intersection:
+        #     dst, src0, src1 = line.args
 
-            # dstDeclaration, dstDeclarationIndex = ptx_shader.findDeclaration(dst)
-            line.buildString(line.functionalType, ('%temp_u32', src0, src1))
+        #     # dstDeclaration, dstDeclarationIndex = ptx_shader.findDeclaration(dst)
+        #     line.buildString(line.functionalType, ('%temp_u32', src0, src1))
 
-            setpLine = PTXFunctionalLine()
-            setpLine.leadingWhiteSpace = line.leadingWhiteSpace
-            setpLine.buildString('setp.ne.u32', (dst, '%temp_u32', '%const0_u32'))
+        #     setpLine = PTXFunctionalLine()
+        #     setpLine.leadingWhiteSpace = line.leadingWhiteSpace
+        #     setpLine.buildString('setp.ne.u32', (dst, '%temp_u32', '%const0_u32'))
 
-            ptx_shader.lines[index + 1:index + 1] = (setpLine, )
+        #     ptx_shader.lines[index + 1:index + 1] = (setpLine, )
 
 
 

@@ -178,6 +178,7 @@ class FunctionalType(Enum, metaclass=MetaEnum):
     trace_ray = 'trace_ray'
     call_miss_shader = 'call_miss_shader'
     call_closest_hit_shader = 'call_closest_hit_shader'
+    call_intersection_shader = 'call_intersection_shader'
     alloca = 'alloca'
     decl_var = 'decl_var'
     deref_var = 'deref_var'
@@ -205,6 +206,10 @@ class FunctionalType(Enum, metaclass=MetaEnum):
     shader_clock = 'shader_clock'
     report_ray_intersection = 'report_ray_intersection'
     fsat = 'fsat'
+    # get_intersection_index = 'get_intersection_index'
+    run_intersection = 'run_intersection'
+    intersection_exit = 'intersection_exit'
+    hit_geometry = 'hit_geometry'
     Other = auto()
 
 class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line that does sth like mov (eg it's not decleration)

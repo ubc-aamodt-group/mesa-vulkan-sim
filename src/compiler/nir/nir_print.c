@@ -2088,7 +2088,7 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
          fprintf(fp, ";\n");
          print_tabs(tabs, fp);
       }
-      fprintf(fp, "%s ", info->name); // Intrinsic function name
+      fprintf(fp, "%s.pred ", info->name); // Intrinsic function name
    }
    else if (!strcmp(info->name, "shader_clock")){
       // The argument 2 probably means memory_scope=SUBGROUP
