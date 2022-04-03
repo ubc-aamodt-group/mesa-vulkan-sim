@@ -339,6 +339,7 @@ def translate_trace_ray(ptx_shader):
         if index <= skip_lines:
             continue
         line = ptx_shader.lines[index]
+        print(line)
         if line.instructionClass != InstructionClass.Functional:
             continue
 
@@ -357,20 +358,8 @@ def translate_trace_ray(ptx_shader):
         originRegNames = [origin + '_' + str(i) for i in range(3)]
         directionRegNames = [direction + '_' + str(i) for i in range(3)]
 
-        run_closest_hit_reg = '%run_closest_hit_' + str(trace_ray_ID)
-        runClosestHitDeclaration = PTXDecleration()
-        runClosestHitDeclaration.leadingWhiteSpace = line.leadingWhiteSpace
-        runClosestHitDeclaration.buildString(DeclarationType.Register, None, '.u32', run_closest_hit_reg)
-
-        run_miss_reg = '%run_miss_' + str(trace_ray_ID)
-        runMissDeclaration = PTXDecleration()
-        runMissDeclaration.leadingWhiteSpace = line.leadingWhiteSpace
-        runMissDeclaration.buildString(DeclarationType.Register, None, '.u32', run_miss_reg)
-
         args[8:9] = directionRegNames[:3]
         args[6:7] = originRegNames[:3]
-        args.append(run_closest_hit_reg)
-        args.append(run_miss_reg)
         line.buildString(line.functionalType, args)
 
         
@@ -446,7 +435,7 @@ def translate_trace_ray(ptx_shader):
         exit_intersection_label.fullLine = line.leadingWhiteSpace + exit_intersection_label_str + ':\n'
 
         #get hit_geometry
-        hit_geometry_reg = '%skip_closest_hit_' + str(trace_ray_ID)
+        hit_geometry_reg = '%hit_geometry_' + str(trace_ray_ID)
         hit_geometry_declaration = PTXDecleration()
         hit_geometry_declaration.leadingWhiteSpace = line.leadingWhiteSpace
         hit_geometry_declaration.buildString(DeclarationType.Register, None, '.pred', hit_geometry_reg)
@@ -456,19 +445,10 @@ def translate_trace_ray(ptx_shader):
         hit_geometry.buildString('hit_geometry.pred', (hit_geometry_reg, ))
 
         #closest hit shader
-        skip_closest_hit_reg = '%skip_closest_hit_' + str(trace_ray_ID)
-        skip_closest_hit_declaration = PTXDecleration()
-        skip_closest_hit_declaration.leadingWhiteSpace = line.leadingWhiteSpace
-        skip_closest_hit_declaration.buildString(DeclarationType.Register, None, '.pred', skip_closest_hit_reg)
-
-        call_closest_hit_setp = PTXFunctionalLine()
-        call_closest_hit_setp.leadingWhiteSpace = line.leadingWhiteSpace
-        call_closest_hit_setp.buildString('setp.eq.u32', (skip_closest_hit_reg, run_closest_hit_reg, '%const0_u32'))
-
         skip_closest_hit_label_str = 'skip_closest_hit_label_' + str(trace_ray_ID)
         call_closest_hit_bra = PTXFunctionalLine()
         call_closest_hit_bra.leadingWhiteSpace = line.leadingWhiteSpace
-        call_closest_hit_bra.condition = '@' + skip_closest_hit_reg
+        call_closest_hit_bra.condition = '@!' + hit_geometry_reg
         call_closest_hit_bra.buildString(FunctionalType.bra, (skip_closest_hit_label_str, ))
 
         call_closest_hit = PTXFunctionalLine()
@@ -480,19 +460,10 @@ def translate_trace_ray(ptx_shader):
 
 
         #miss shader
-        skip_miss_reg = '%skip_miss_' + str(trace_ray_ID)
-        skip_miss_declaration = PTXDecleration()
-        skip_miss_declaration.leadingWhiteSpace = line.leadingWhiteSpace
-        skip_miss_declaration.buildString(DeclarationType.Register, None, '.pred', skip_miss_reg)
-
-        call_miss_setp = PTXFunctionalLine()
-        call_miss_setp.leadingWhiteSpace = line.leadingWhiteSpace
-        call_miss_setp.buildString('setp.eq.u32', (skip_miss_reg, run_miss_reg, '%const0_u32'))
-        
         skip_miss_label_str = 'skip_miss_label_' + str(trace_ray_ID)
         call_miss_bra = PTXFunctionalLine()
         call_miss_bra.leadingWhiteSpace = line.leadingWhiteSpace
-        call_miss_bra.condition = '@' + skip_miss_reg
+        call_miss_bra.condition = '@' + hit_geometry_reg
         call_miss_bra.buildString(FunctionalType.bra, (skip_miss_label_str, ))
 
         call_miss = PTXFunctionalLine()
@@ -508,13 +479,14 @@ def translate_trace_ray(ptx_shader):
         end_trace_ray.buildString(FunctionalType.end_trace_ray, ())
 
 
-        ptx_shader.lines[index:index + 1] = (runClosestHitDeclaration, runMissDeclaration, line, PTXLine('\n'), \
+        ptx_shader.lines[index:index + 1] = (line, PTXLine('\n'), \
             intersection_counter_declaration, intersection_counter_mov, intersection_loop_label, \
             intersection_exit_declaration, intersection_exit, exit_intersection_bra, \
             run_intersection_declaration, run_intersection, intersection_counter_add, skip_intersection_bra, \
             call_intersection, skip_intersection_label, intersection_loop_bra, exit_intersection_label, PTXLine('\n'), \
-            skip_closest_hit_declaration, call_closest_hit_setp, call_closest_hit_bra, call_closest_hit, skip_closest_hit_label, PTXLine('\n'), \
-            skip_miss_declaration, call_miss_setp, call_miss_bra, call_miss, skip_miss_label, PTXLine('\n'), \
+            hit_geometry_declaration, hit_geometry, PTXLine('\n'), \
+            call_closest_hit_bra, call_closest_hit, skip_closest_hit_label, PTXLine('\n'), \
+            call_miss_bra, call_miss, skip_miss_label, PTXLine('\n'), \
             end_trace_ray)
         
         skip_lines = index + 16
