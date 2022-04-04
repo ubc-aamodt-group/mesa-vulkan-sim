@@ -434,7 +434,7 @@ def translate_trace_ray(ptx_shader):
         exit_intersection_label = PTXLine('')
         exit_intersection_label.fullLine = line.leadingWhiteSpace + exit_intersection_label_str + ':\n'
 
-        #get hit_geometry
+        # get hit_geometry
         hit_geometry_reg = '%hit_geometry_' + str(trace_ray_ID)
         hit_geometry_declaration = PTXDecleration()
         hit_geometry_declaration.leadingWhiteSpace = line.leadingWhiteSpace
@@ -444,7 +444,7 @@ def translate_trace_ray(ptx_shader):
         hit_geometry.leadingWhiteSpace = line.leadingWhiteSpace
         hit_geometry.buildString('hit_geometry.pred', (hit_geometry_reg, ))
 
-        #closest hit shader
+        # closest hit shader
         skip_closest_hit_label_str = 'skip_closest_hit_label_' + str(trace_ray_ID)
         call_closest_hit_bra = PTXFunctionalLine()
         call_closest_hit_bra.leadingWhiteSpace = line.leadingWhiteSpace
@@ -459,7 +459,7 @@ def translate_trace_ray(ptx_shader):
         skip_closest_hit_label.fullLine = line.leadingWhiteSpace + skip_closest_hit_label_str + ':\n'
 
 
-        #miss shader
+        # miss shader
         skip_miss_label_str = 'skip_miss_label_' + str(trace_ray_ID)
         call_miss_bra = PTXFunctionalLine()
         call_miss_bra.leadingWhiteSpace = line.leadingWhiteSpace
@@ -473,7 +473,11 @@ def translate_trace_ray(ptx_shader):
         skip_miss_label = PTXLine('')
         skip_miss_label.fullLine = line.leadingWhiteSpace + skip_miss_label_str + ':\n'
 
-        #
+        # finish trace ray
+        bar = PTXFunctionalLine()
+        bar.leadingWhiteSpace = line.leadingWhiteSpace
+        bar.buildString('bar.sync', ('1', ))
+
         end_trace_ray = PTXFunctionalLine()
         end_trace_ray.leadingWhiteSpace = line.leadingWhiteSpace
         end_trace_ray.buildString(FunctionalType.end_trace_ray, ())
@@ -487,7 +491,7 @@ def translate_trace_ray(ptx_shader):
             hit_geometry_declaration, hit_geometry, PTXLine('\n'), \
             call_closest_hit_bra, call_closest_hit, skip_closest_hit_label, PTXLine('\n'), \
             call_miss_bra, call_miss, skip_miss_label, PTXLine('\n'), \
-            end_trace_ray)
+            bar, end_trace_ray)
         
         skip_lines = index + 16
 
