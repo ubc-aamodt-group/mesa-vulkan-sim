@@ -211,7 +211,8 @@ def translate_deref_instructions(ptx_shader):
                     if variableType[1] == 'b':
                         variableType = '.u' + variableType[2:]
                     if variableType[1] == 'f':
-                        newSet.buildString('cvt.rni.u32%s' % variableType, (indexRegName_32, arrayIndex))
+                        # newSet.buildString('cvt.rni.u32%s' % variableType, (indexRegName_32, arrayIndex))
+                        newSet.buildString('mov.b32', (indexRegName_32, arrayIndex))
                     else:
                         newSet.buildString('cvt.u32%s' % variableType, (indexRegName_32, arrayIndex))
 
@@ -401,10 +402,6 @@ def translate_trace_ray(ptx_shader):
         run_intersection.leadingWhiteSpace = line.leadingWhiteSpace
         run_intersection.buildString('run_intersection.pred', (run_intersection_reg, intersection_counter_reg))
 
-        intersection_counter_add = PTXFunctionalLine()
-        intersection_counter_add.leadingWhiteSpace = line.leadingWhiteSpace
-        intersection_counter_add.buildString('add.u32', (intersection_counter_reg, intersection_counter_reg, '1'))
-
         skip_intersection_label_str = 'skip_intersection_label_' + str(trace_ray_ID)
         skip_intersection_bra = PTXFunctionalLine()
         skip_intersection_bra.leadingWhiteSpace = line.leadingWhiteSpace
@@ -426,6 +423,10 @@ def translate_trace_ray(ptx_shader):
 
         skip_intersection_label = PTXLine('')
         skip_intersection_label.fullLine = line.leadingWhiteSpace + skip_intersection_label_str + ':\n'
+
+        intersection_counter_add = PTXFunctionalLine()
+        intersection_counter_add.leadingWhiteSpace = line.leadingWhiteSpace
+        intersection_counter_add.buildString('add.u32', (intersection_counter_reg, intersection_counter_reg, '1'))
 
         intersection_loop_bra = PTXFunctionalLine()
         intersection_loop_bra.leadingWhiteSpace = line.leadingWhiteSpace
@@ -486,8 +487,8 @@ def translate_trace_ray(ptx_shader):
         ptx_shader.lines[index:index + 1] = (line, PTXLine('\n'), \
             intersection_counter_declaration, intersection_counter_mov, intersection_loop_label, \
             intersection_exit_declaration, intersection_exit, exit_intersection_bra, \
-            run_intersection_declaration, run_intersection, intersection_counter_add, skip_intersection_bra, \
-            call_intersection, skip_intersection_label, intersection_loop_bra, exit_intersection_label, PTXLine('\n'), \
+            run_intersection_declaration, run_intersection, skip_intersection_bra, call_intersection, \
+            skip_intersection_label, intersection_counter_add, intersection_loop_bra, exit_intersection_label, PTXLine('\n'), \
             hit_geometry_declaration, hit_geometry, PTXLine('\n'), \
             call_closest_hit_bra, call_closest_hit, skip_closest_hit_label, PTXLine('\n'), \
             call_miss_bra, call_miss, skip_miss_label, PTXLine('\n'), \
