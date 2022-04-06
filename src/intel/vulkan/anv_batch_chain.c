@@ -35,6 +35,8 @@
 
 #include "util/debug.h"
 
+#include "gpgpusim_calls_from_mesa.h"
+
 /** \file anv_batch_chain.c
  *
  * This file contains functions related to anv_cmd_buffer as a data
@@ -1871,6 +1873,12 @@ anv_queue_execbuf_locked(struct anv_queue *queue,
          result = anv_queue_set_lost(queue, "execbuf2 failed: %m");
    }
 
+   if(submit->cmd_buffer && submit->cmd_buffer->traceRayCall.valid)
+      gpgpusim_vkCmdTraceRaysKHR(submit->cmd_buffer->traceRayCall.raygen_sbt, submit->cmd_buffer->traceRayCall.miss_sbt,
+            submit->cmd_buffer->traceRayCall.hit_sbt, submit->cmd_buffer->traceRayCall.callable_sbt, submit->cmd_buffer->traceRayCall.is_indirect,
+            submit->cmd_buffer->traceRayCall.launch_width, submit->cmd_buffer->traceRayCall.launch_height, submit->cmd_buffer->traceRayCall.launch_depth,
+            submit->cmd_buffer->traceRayCall.launch_size_addr);
+   
    int ret = queue->device->no_hw ? 0 :
       anv_gem_execbuffer(queue->device, &execbuf.execbuf);
    if (ret)

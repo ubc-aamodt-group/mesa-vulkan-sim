@@ -2654,6 +2654,7 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
          char shaderPath[200];
          translate_nir_to_ptx(stages[i].nir, shaderPath);
          stages[i].bin = (void *)gpgpusim_registerShader(shaderPath, (uint32_t)(stages[i].stage));
+         assert((uint64_t)(stages[i].bin) == i);
       }
 
       anv_pipeline_lower_nir(&pipeline->base, pipeline_ctx, &stages[i], layout);
