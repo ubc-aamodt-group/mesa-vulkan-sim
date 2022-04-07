@@ -2751,39 +2751,43 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
       case VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR: {
          if (ginfo->closestHitShader < info->stageCount)
             group->closest_hit = stages[ginfo->closestHitShader].bin;
+         if (ginfo->intersectionShader < info->stageCount)
+            group->intersection = stages[ginfo->intersectionShader].bin;
+         if (ginfo->anyHitShader < info->stageCount)
+            assert(0);
    
          /* The any-hit and intersection shader have to be combined */
-         void *group_ctx = ralloc_context(pipeline_ctx);
+         // void *group_ctx = ralloc_context(pipeline_ctx);
    
-         uint32_t intersection_idx = info->pGroups[i].intersectionShader;
-         assert(intersection_idx < info->stageCount);
-         nir_shader *intersection =
-            nir_shader_clone(group_ctx, stages[intersection_idx].nir);
+         // uint32_t intersection_idx = info->pGroups[i].intersectionShader;
+         // assert(intersection_idx < info->stageCount);
+         // nir_shader *intersection =
+         //    nir_shader_clone(group_ctx, stages[intersection_idx].nir);
    
-         uint32_t any_hit_idx = info->pGroups[i].anyHitShader;
-         const nir_shader *any_hit = NULL;
-         if (any_hit_idx < info->stageCount)
-            any_hit = stages[any_hit_idx].nir;
+         // uint32_t any_hit_idx = info->pGroups[i].anyHitShader;
+         // const nir_shader *any_hit = NULL;
+         // if (any_hit_idx < info->stageCount)
+         //    any_hit = stages[any_hit_idx].nir;
    
-         brw_nir_lower_combined_intersection_any_hit(intersection, any_hit,
-                                                     devinfo);
+         // brw_nir_lower_combined_intersection_any_hit(intersection, any_hit,
+         //                                             devinfo);
    
-         // result = compile_upload_rt_shader(pipeline, intersection,
-         //                                   &stages[intersection_idx],
-         //                                   &group->intersection,
-         //                                   group_ctx);
-         result = VK_SUCCESS;
-         if (result != VK_SUCCESS) {
-            ralloc_free(pipeline_ctx);
-            return result;
-         }
+         // // result = compile_upload_rt_shader(pipeline, intersection,
+         // //                                   &stages[intersection_idx],
+         // //                                   &group->intersection,
+         // //                                   group_ctx);
+         // result = VK_SUCCESS;
+         // if (result != VK_SUCCESS) {
+         //    ralloc_free(pipeline_ctx);
+         //    return result;
+         // }
    
-         // uint32_t stack_size =
-         //    brw_bs_prog_data_const(group->intersection->prog_data)->max_stack_size;
-         // stack_max[MESA_SHADER_INTERSECTION] =
-         //    MAX2(stack_max[MESA_SHADER_INTERSECTION], stack_size);
+         // // uint32_t stack_size =
+         // //    brw_bs_prog_data_const(group->intersection->prog_data)->max_stack_size;
+         // // stack_max[MESA_SHADER_INTERSECTION] =
+         // //    MAX2(stack_max[MESA_SHADER_INTERSECTION], stack_size);
    
-         ralloc_free(group_ctx);
+         // ralloc_free(group_ctx);
          break;
       }
    

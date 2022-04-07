@@ -1166,15 +1166,18 @@ anv_cpu_build_acceleration_structures(
          case VK_GEOMETRY_TYPE_TRIANGLES_KHR: {
             const VkAccelerationStructureGeometryTrianglesDataKHR *triangles =
                &pGeometry->geometry.triangles;
+               
+               assert(infoCount == 1); // these g indices down here probably should be i
 
             anv_bvh_parse_triangles(build_state.geometries[g].triangles,
                                     pBuildRangeInfos[g].primitiveCount,
                                     doha_to_host_const(triangles->indexData,
-                                                       &build_state),
+                                                       &build_state) +
+                                       pBuildRangeInfos[g].primitiveOffset,
                                     triangles->indexType,
                                     doha_to_host_const(triangles->vertexData,
                                                        &build_state) +
-                                       pBuildRangeInfos[g].primitiveOffset,
+                                       0/*pBuildRangeInfos[g].primitiveOffset*/,
                                     triangles->vertexStride,
                                     triangles->vertexFormat,
                                     pBuildRangeInfos[g].firstVertex,
