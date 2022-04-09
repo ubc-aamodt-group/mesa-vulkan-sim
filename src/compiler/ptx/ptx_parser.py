@@ -210,6 +210,8 @@ class FunctionalType(Enum, metaclass=MetaEnum):
     run_intersection = 'run_intersection'
     intersection_exit = 'intersection_exit'
     hit_geometry = 'hit_geometry'
+    get_warp_hitgroup = 'get_warp_hitgroup'
+    get_hitgroup = 'get_hitgroup'
     Other = auto()
 
 class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line that does sth like mov (eg it's not decleration)
