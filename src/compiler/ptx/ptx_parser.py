@@ -212,6 +212,7 @@ class FunctionalType(Enum, metaclass=MetaEnum):
     hit_geometry = 'hit_geometry'
     get_warp_hitgroup = 'get_warp_hitgroup'
     get_hitgroup = 'get_hitgroup'
+    get_closest_hit_shaderID = 'get_closest_hit_shaderID'
     Other = auto()
 
 class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line that does sth like mov (eg it's not decleration)
@@ -349,6 +350,18 @@ class PTXShader:
                 return ShaderType.Callable
             
             assert 0
+    
+    def getShaderID(self):
+        for index in range(len(self.lines)):
+            line = self.lines[index]
+            if line.instructionClass != InstructionClass.EntryPoint:
+                continue
+            if 'main' not in line.fullLine:
+                continue
+
+            func_name = line.fullLine.split()[1]
+            assert 'MESA_SHADER_' in func_name and '_main' in func_name
+            return int(func_name.split('_')[-2][4:])
             
 
     

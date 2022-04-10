@@ -334,7 +334,7 @@ def translate_deref_instructions(ptx_shader):
         #                 zero = '0F00000000'
         #             line.buildString('add%s' % variableType, (line.args[0], line.args[1], zero))
 
-def translate_trace_ray(ptx_shader):
+def translate_trace_ray(ptx_shader, shaderIDs):
     trace_ray_ID = 0
     skip_lines = -1
     for index in range(len(ptx_shader.lines)):
@@ -447,68 +447,57 @@ def translate_trace_ray(ptx_shader):
         hit_geometry.buildString('hit_geometry.pred', (hit_geometry_reg, ))
 
         # closest hit shader
+        closest_hit_lines = []
+
         exit_closest_hit_label_str = 'exit_closest_hit_label_' + str(trace_ray_ID)
         call_closest_hit_bra = PTXFunctionalLine()
         call_closest_hit_bra.leadingWhiteSpace = line.leadingWhiteSpace
         call_closest_hit_bra.condition = '@!' + hit_geometry_reg
         call_closest_hit_bra.buildString(FunctionalType.bra, (exit_closest_hit_label_str, ))
+        closest_hit_lines.append(call_closest_hit_bra)
 
-        closest_hit_counter_reg = '%closest_hit_counter_' + str(trace_ray_ID)
-        closest_hit_counter_declaration = PTXDecleration()
-        closest_hit_counter_declaration.leadingWhiteSpace = line.leadingWhiteSpace
-        closest_hit_counter_declaration.buildString(DeclarationType.Register, None, '.u32', closest_hit_counter_reg)
+        closest_hit_shaderID_reg = '%closest_hit_shaderID_' + str(trace_ray_ID)
+        closest_hit_shaderID_declaration = PTXDecleration()
+        closest_hit_shaderID_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+        closest_hit_shaderID_declaration.buildString(DeclarationType.Register, None, '.u32', closest_hit_shaderID_reg)
+        closest_hit_lines.append(closest_hit_shaderID_declaration)
 
-        closest_hit_counter_mov = PTXFunctionalLine()
-        closest_hit_counter_mov.leadingWhiteSpace = line.leadingWhiteSpace
-        closest_hit_counter_mov.buildString('mov.u32', (closest_hit_counter_reg, '0'))
+        get_closest_hit_shaderID = PTXFunctionalLine()
+        get_closest_hit_shaderID.leadingWhiteSpace = line.leadingWhiteSpace
+        get_closest_hit_shaderID.buildString(FunctionalType.get_closest_hit_shaderID, (closest_hit_shaderID_reg, ))
+        closest_hit_lines.append(get_closest_hit_shaderID)
 
-        closest_hit_loop_label_str = 'closest_hit_loop_' + str(trace_ray_ID)
-        closest_hit_loop_label = PTXLine('')
-        closest_hit_loop_label.fullLine = line.leadingWhiteSpace + closest_hit_loop_label_str + ':\n'
+        for shaderID in shaderIDs[ShaderType.Closest_hit]:
+            skip_closest_hit_reg = '%skip_closest_hit_' + str(shaderID) + '_' + str(trace_ray_ID)
+            skip_closest_hit_declaration = PTXDecleration()
+            skip_closest_hit_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+            skip_closest_hit_declaration.buildString(DeclarationType.Register, None, '.pred', skip_closest_hit_reg)
+            closest_hit_lines.append(skip_closest_hit_declaration)
 
-        closest_hit_counter_add = PTXFunctionalLine()
-        closest_hit_counter_add.leadingWhiteSpace = line.leadingWhiteSpace
-        closest_hit_counter_add.buildString('add.u32', (closest_hit_counter_reg, closest_hit_counter_reg, '1'))
+            skip_closest_hit_pred = PTXFunctionalLine()
+            skip_closest_hit_pred.leadingWhiteSpace = line.leadingWhiteSpace
+            skip_closest_hit_pred.buildString('setp.ne.u32', (skip_closest_hit_reg, closest_hit_shaderID_reg, str(shaderID)))
+            closest_hit_lines.append(skip_closest_hit_pred)
 
-        warp_hitgroup_reg = '%warp_hitgroup_' + str(trace_ray_ID)
-        warp_hitgroup_declaration = PTXDecleration()
-        warp_hitgroup_declaration.leadingWhiteSpace = line.leadingWhiteSpace
-        warp_hitgroup_declaration.buildString(DeclarationType.Register, None, '.u32', warp_hitgroup_reg)
+            skip_closest_hit_label_str = 'skip_closest_hit_label_' + str(shaderID) + '_' + str(trace_ray_ID)
+            skip_closest_hit_bra = PTXFunctionalLine()
+            skip_closest_hit_bra.leadingWhiteSpace = line.leadingWhiteSpace
+            skip_closest_hit_bra.condition = '@!' + skip_closest_hit_reg
+            skip_closest_hit_bra.buildString(FunctionalType.bra, (skip_closest_hit_label_str, ))
+            closest_hit_lines.append(skip_closest_hit_bra)
 
-        get_warp_hitgroup = PTXFunctionalLine()
-        get_warp_hitgroup.leadingWhiteSpace = line.leadingWhiteSpace
-        get_warp_hitgroup.buildString(FunctionalType.get_warp_hitgroup, (warp_hitgroup_reg, closest_hit_counter_reg))
+            call_closest_hit = PTXFunctionalLine()
+            call_closest_hit.leadingWhiteSpace = line.leadingWhiteSpace
+            call_closest_hit.buildString(FunctionalType.call_closest_hit_shader, (str(shaderID), ))
+            closest_hit_lines.append(call_closest_hit)
 
-        thread_hitgroup_reg = '%thread_hitgroup_' + str(trace_ray_ID)
-        thread_hitgroup_declaration = PTXDecleration()
-        thread_hitgroup_declaration.leadingWhiteSpace = line.leadingWhiteSpace
-        thread_hitgroup_declaration.buildString(DeclarationType.Register, None, '.u32', thread_hitgroup_reg)
-
-        get_thread_hitgroup = PTXFunctionalLine()
-        get_thread_hitgroup.leadingWhiteSpace = line.leadingWhiteSpace
-        get_thread_hitgroup.buildString(FunctionalType.get_hitgroup, (thread_hitgroup_reg, ))
-
-        skip_closest_hit_reg = '%skip_closest_hit_' + str(trace_ray_ID)
-        skip_closest_hit_declaration = PTXDecleration()
-        skip_closest_hit_declaration.leadingWhiteSpace = line.leadingWhiteSpace
-        skip_closest_hit_declaration.buildString(DeclarationType.Register, None, '.pred', skip_closest_hit_reg)
-
-        skip_closest_hit_pred = PTXFunctionalLine()
-        skip_closest_hit_pred.leadingWhiteSpace = line.leadingWhiteSpace
-        skip_closest_hit_pred.buildString('setp.ne.u32', (skip_closest_hit_reg, thread_hitgroup_reg, warp_hitgroup_reg))
-
-        skip_closest_hit_bra = PTXFunctionalLine()
-        skip_closest_hit_bra.leadingWhiteSpace = line.leadingWhiteSpace
-        skip_closest_hit_bra.condition = '@' + skip_closest_hit_reg
-        skip_closest_hit_bra.buildString(FunctionalType.bra, (closest_hit_loop_label_str, ))
-
-        call_closest_hit = PTXFunctionalLine()
-        call_closest_hit.leadingWhiteSpace = line.leadingWhiteSpace
-        call_closest_hit.buildString(FunctionalType.call_closest_hit_shader, ())
-
+            skip_closest_hit_label = PTXLine('')
+            skip_closest_hit_label.fullLine = line.leadingWhiteSpace + skip_closest_hit_label_str + ':\n'
+            closest_hit_lines.append(skip_closest_hit_label)
+        
         exit_closest_hit_label = PTXLine('')
         exit_closest_hit_label.fullLine = line.leadingWhiteSpace + exit_closest_hit_label_str + ':\n'
-
+        closest_hit_lines.append(exit_closest_hit_label)
 
         # miss shader
         skip_miss_label_str = 'skip_miss_label_' + str(trace_ray_ID)
@@ -529,21 +518,21 @@ def translate_trace_ray(ptx_shader):
         end_trace_ray.leadingWhiteSpace = line.leadingWhiteSpace
         end_trace_ray.buildString(FunctionalType.end_trace_ray, ())
 
-
-        ptx_shader.lines[index:index + 1] = (line, PTXLine('\n'), \
+        newLines = [line, PTXLine('\n'), \
             intersection_counter_declaration, intersection_counter_mov, intersection_loop_label, \
             intersection_exit_declaration, intersection_exit, exit_intersection_bra, \
             run_intersection_declaration, run_intersection, skip_intersection_bra, call_intersection, \
             skip_intersection_label, intersection_counter_add, intersection_loop_bra, exit_intersection_label, PTXLine('\n'), \
-            hit_geometry_declaration, hit_geometry, PTXLine('\n'), \
-            call_closest_hit_bra, closest_hit_counter_declaration, closest_hit_counter_mov, closest_hit_loop_label,
-            closest_hit_counter_add, warp_hitgroup_declaration, get_warp_hitgroup, thread_hitgroup_declaration, get_thread_hitgroup, 
-            skip_closest_hit_declaration, skip_closest_hit_pred, skip_closest_hit_bra, call_closest_hit,
-            exit_closest_hit_label, PTXLine('\n'), \
-            call_miss_bra, call_miss, skip_miss_label, PTXLine('\n'), \
-            end_trace_ray)
+            hit_geometry_declaration, hit_geometry, PTXLine('\n')]
+        newLines.extend(closest_hit_lines)
+        newLines.append(PTXLine('\n'))
+        newLines.extend([call_miss_bra, call_miss, skip_miss_label, PTXLine('\n'), \
+            end_trace_ray])
+
+
+        ptx_shader.lines[index:index + 1] = newLines
         
-        skip_lines = index + 16
+        skip_lines = index + len(newLines) - 1
 
         trace_ray_ID += 1
 
@@ -1285,6 +1274,14 @@ def main():
     for shaderFile in os.listdir(shaderFolder):
         shaders.append(PTXShader(os.path.join(shaderFolder, shaderFile)))
     
+    shaderIDs = {}
+    for shader in shaders:
+        if shader.getShaderType() in shaderIDs:
+            shaderIDs[shader.getShaderType()].append(shader.getShaderID())
+        else:
+            shaderIDs[shader.getShaderType()] = [shader.getShaderID(), ]
+
+    
     for shader in shaders:
         add_consts(shader)
         add_temps(shader)
@@ -1292,7 +1289,7 @@ def main():
         translate_load_const(shader)
         translate_descriptor_set_instructions(shader)
         translate_deref_instructions(shader)
-        translate_trace_ray(shader)
+        translate_trace_ray(shader, shaderIDs)
         translate_decl_var(shader)
         translate_load_GL_instructions(shader)
         translate_image_deref(shader)
