@@ -482,7 +482,7 @@ def translate_trace_ray(ptx_shader, shaderIDs):
             skip_closest_hit_label_str = 'skip_closest_hit_label_' + str(shaderID) + '_' + str(trace_ray_ID)
             skip_closest_hit_bra = PTXFunctionalLine()
             skip_closest_hit_bra.leadingWhiteSpace = line.leadingWhiteSpace
-            skip_closest_hit_bra.condition = '@!' + skip_closest_hit_reg
+            skip_closest_hit_bra.condition = '@' + skip_closest_hit_reg
             skip_closest_hit_bra.buildString(FunctionalType.bra, (skip_closest_hit_label_str, ))
             closest_hit_lines.append(skip_closest_hit_bra)
 
