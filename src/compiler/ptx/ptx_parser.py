@@ -304,6 +304,7 @@ class ShaderType(Enum):
 
 class PTXShader:
     def __init__(self, filePath) -> None:
+        self.filePath = filePath
         f = open(filePath, "r")
         lineNO = 1
         self.lines = []
@@ -359,7 +360,9 @@ class PTXShader:
                     return line, index
         return None, None
     
-    def writeToFile(self, filePath):
+    def writeToFile(self, filePath=None):
+        if filePath == None:
+            filePath = self.filePath
         f = open(filePath, 'w')
         for line in self.lines:
             f.write(line.fullLine)

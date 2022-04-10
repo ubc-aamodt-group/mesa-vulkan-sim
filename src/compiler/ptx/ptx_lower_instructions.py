@@ -1,6 +1,7 @@
 from enum import unique
 from ptx_parser import *
 import sys
+import os
 
 def vector_suffix_letter(x):
     if x == 0:
@@ -1278,38 +1279,42 @@ setp.ge.u32 %bigger_2, %launch_ID_2, %launch_Size_2;
 def main():
     unique_ID = 0
     assert len(sys.argv) == 2
-    shaderPath = sys.argv[1]
-    shader = PTXShader(shaderPath)
+    shaderFolder = sys.argv[1]
+
+    shaders = []
+    for shaderFile in os.listdir(shaderFolder):
+        shaders.append(PTXShader(os.path.join(shaderFolder, shaderFile)))
     
-    add_consts(shader)
-    add_temps(shader)
+    for shader in shaders:
+        add_consts(shader)
+        add_temps(shader)
 
-    translate_load_const(shader)
-    translate_descriptor_set_instructions(shader)
-    translate_deref_instructions(shader)
-    translate_trace_ray(shader)
-    translate_decl_var(shader)
-    translate_load_GL_instructions(shader)
-    translate_image_deref(shader)
-    translate_exit(shader)
-    translate_texture_instructions(shader)
-    translate_special_intrinsics(shader)
+        translate_load_const(shader)
+        translate_descriptor_set_instructions(shader)
+        translate_deref_instructions(shader)
+        translate_trace_ray(shader)
+        translate_decl_var(shader)
+        translate_load_GL_instructions(shader)
+        translate_image_deref(shader)
+        translate_exit(shader)
+        translate_texture_instructions(shader)
+        translate_special_intrinsics(shader)
 
-    translate_vector_operands(shader, unique_ID)
+        translate_vector_operands(shader, unique_ID)
 
-    translate_ALU(shader)
+        translate_ALU(shader)
 
-    translate_phi(shader)
-    
-    translate_const_operands(shader)
+        translate_phi(shader)
+        
+        translate_const_operands(shader)
 
-    translate_f1_to_pred(shader)
+        translate_f1_to_pred(shader)
 
-    if shader.getShaderType() == ShaderType.Ray_generation:
-        add_extra_thread_return(shader)
-    
+        if shader.getShaderType() == ShaderType.Ray_generation:
+            add_extra_thread_return(shader)
+        
 
-    shader.writeToFile(shaderPath)
+        shader.writeToFile()
 
 
 main()

@@ -4808,18 +4808,4 @@ nir_translate_shader_to_ptx(nir_shader *shader, FILE *fp, char *filePath)
 {
    nir_translate_shader_annotated(shader, fp, NULL);
    fflush(fp);
-
-   if (filePath == NULL)
-      return;
-   char command[400];
-   char *mesa_root = getenv("MESA_ROOT");
-   snprintf(command, sizeof(command), "python3 %s/src/compiler/ptx/ptx_lower_instructions.py %s", mesa_root, filePath);
-   //snprintf(command, sizeof(command), "python3 -m pdb %s/src/compiler/ptx/ptx_lower_instructions.py %s", mesa_root, filePath);
-   int result = system(command);
-
-   if (result != 0)
-   {
-      printf("MESA: ERROR ** while translating nir to PTX %d\n", result);
-      exit(1);
-   }
 }

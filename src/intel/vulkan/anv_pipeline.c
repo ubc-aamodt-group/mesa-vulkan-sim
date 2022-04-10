@@ -2590,6 +2590,22 @@ static void translate_nir_to_ptx(nir_shader *shader, char* shaderPath)
    // }
 }
 
+static void run_rt_translation_passes()
+{
+   char *mesa_root = getenv("MESA_ROOT");
+   char *filePath = "gpgpusimShaders/";
+
+   char command[400];
+   snprintf(command, sizeof(command), "python3 %s/src/compiler/ptx/ptx_lower_instructions.py %s%s", mesa_root, mesa_root, filePath);
+   int result = system(command);
+
+   if (result != 0)
+   {
+      printf("MESA: ERROR ** while translating nir to PTX %d\n", result);
+      exit(1);
+   }
+}
+
 
 static VkResult
 anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
@@ -2612,6 +2628,11 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
 
    struct anv_pipeline_stage *stages =
       rzalloc_array(pipeline_ctx, struct anv_pipeline_stage, info->stageCount);
+
+   
+   char shaderPaths[20][200];
+   assert(info->stageCount < 20);
+
    for (uint32_t i = 0; i < info->stageCount; i++) {
       const VkPipelineShaderStageCreateInfo *sinfo = &info->pStages[i];
       if (sinfo->module == VK_NULL_HANDLE)
@@ -2651,10 +2672,8 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
 
       // Insert NIR to PTX translator here for each different ray tracing shaders, the lowered shaders under have too many intel specific intrinsics
       if(stages[i].stage >= MESA_SHADER_RAYGEN && stages[i].stage <= MESA_SHADER_CALLABLE) { // shader type from 8 to 13
-         char shaderPath[200];
-         translate_nir_to_ptx(stages[i].nir, shaderPath);
-         stages[i].bin = (void *)gpgpusim_registerShader(shaderPath, (uint32_t)(stages[i].stage));
-         assert((uint64_t)(stages[i].bin) == i);
+         
+         translate_nir_to_ptx(stages[i].nir, shaderPaths[i]);
       }
 
       anv_pipeline_lower_nir(&pipeline->base, pipeline_ctx, &stages[i], layout);
@@ -2668,6 +2687,14 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
 
       pipeline->pipeline_nir[i] = stages[i].nir;
    }
+
+   run_rt_translation_passes();
+
+   for (uint32_t i = 0; i < info->stageCount; i++)
+      if(stages[i].stage >= MESA_SHADER_RAYGEN && stages[i].stage <= MESA_SHADER_CALLABLE) {
+         stages[i].bin = (void *)gpgpusim_registerShader(shaderPaths[i], (uint32_t)(stages[i].stage));
+         assert((uint64_t)(stages[i].bin) == i);
+      }
 
    //compile_trivial_return_shader(pipeline);
 
