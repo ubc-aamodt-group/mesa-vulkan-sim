@@ -452,7 +452,7 @@ def translate_trace_ray(ptx_shader, shaderIDs):
 
         hit_geometry = PTXFunctionalLine()
         hit_geometry.leadingWhiteSpace = line.leadingWhiteSpace
-        hit_geometry.buildString('hit_geometry.pred', (hit_geometry_reg, ))
+        hit_geometry.buildString('hit_geometry.pred', (hit_geometry_reg, traversal_finished_reg))
 
         # closest hit shader
         closest_hit_lines = []
@@ -472,7 +472,7 @@ def translate_trace_ray(ptx_shader, shaderIDs):
 
         get_closest_hit_shaderID = PTXFunctionalLine()
         get_closest_hit_shaderID.leadingWhiteSpace = line.leadingWhiteSpace
-        get_closest_hit_shaderID.buildString(FunctionalType.get_closest_hit_shaderID, (closest_hit_shaderID_reg, traversal_finished_reg))
+        get_closest_hit_shaderID.buildString(FunctionalType.get_closest_hit_shaderID, (closest_hit_shaderID_reg, ))
         closest_hit_lines.append(get_closest_hit_shaderID)
 
         for shaderID in shaderIDs[ShaderType.Closest_hit]:
