@@ -350,6 +350,13 @@ def translate_trace_ray(ptx_shader, shaderIDs):
 
         assert len(line.args) == 11
 
+
+        traversal_finished_reg = '%traversal_finished_' + str(trace_ray_ID)
+        traversal_finished_declaration = PTXDecleration()
+        traversal_finished_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+        traversal_finished_declaration.buildString(DeclarationType.Register, None, '.u32', traversal_finished_reg)
+
+
         topLevelAS, rayFlags, cullMask, sbtRecordOffset, sbtRecordStride, missIndex, origin, Tmin, direction, Tmax, payload = line.args
         line.args = line.args[:-1] # MRS_TODO: why there is a payload (in glsl code it is NULL but translated to ssa_88)? and why it gets an error to run?
         args = line.args
@@ -362,6 +369,7 @@ def translate_trace_ray(ptx_shader, shaderIDs):
 
         args[8:9] = directionRegNames[:3]
         args[6:7] = originRegNames[:3]
+        args.append(traversal_finished_reg)
         line.buildString(line.functionalType, args)
 
         
@@ -386,7 +394,7 @@ def translate_trace_ray(ptx_shader, shaderIDs):
 
         intersection_exit = PTXFunctionalLine()
         intersection_exit.leadingWhiteSpace = line.leadingWhiteSpace
-        intersection_exit.buildString('intersection_exit.pred', (intersection_exit_reg, intersection_counter_reg))
+        intersection_exit.buildString('intersection_exit.pred', (intersection_exit_reg, intersection_counter_reg, traversal_finished_reg))
 
         exit_intersection_label_str = 'exit_intersection_label_' + str(trace_ray_ID)
         exit_intersection_bra = PTXFunctionalLine()
@@ -401,7 +409,7 @@ def translate_trace_ray(ptx_shader, shaderIDs):
 
         run_intersection = PTXFunctionalLine()
         run_intersection.leadingWhiteSpace = line.leadingWhiteSpace
-        run_intersection.buildString('run_intersection.pred', (run_intersection_reg, intersection_counter_reg))
+        run_intersection.buildString('run_intersection.pred', (run_intersection_reg, intersection_counter_reg, traversal_finished_reg))
 
         skip_intersection_label_str = 'skip_intersection_label_' + str(trace_ray_ID)
         skip_intersection_bra = PTXFunctionalLine()
@@ -464,7 +472,7 @@ def translate_trace_ray(ptx_shader, shaderIDs):
 
         get_closest_hit_shaderID = PTXFunctionalLine()
         get_closest_hit_shaderID.leadingWhiteSpace = line.leadingWhiteSpace
-        get_closest_hit_shaderID.buildString(FunctionalType.get_closest_hit_shaderID, (closest_hit_shaderID_reg, ))
+        get_closest_hit_shaderID.buildString(FunctionalType.get_closest_hit_shaderID, (closest_hit_shaderID_reg, traversal_finished_reg))
         closest_hit_lines.append(get_closest_hit_shaderID)
 
         for shaderID in shaderIDs[ShaderType.Closest_hit]:
@@ -518,7 +526,7 @@ def translate_trace_ray(ptx_shader, shaderIDs):
         end_trace_ray.leadingWhiteSpace = line.leadingWhiteSpace
         end_trace_ray.buildString(FunctionalType.end_trace_ray, ())
 
-        newLines = [line, PTXLine('\n'), \
+        newLines = [traversal_finished_declaration, line, PTXLine('\n'), \
             intersection_counter_declaration, intersection_counter_mov, intersection_loop_label, \
             intersection_exit_declaration, intersection_exit, exit_intersection_bra, \
             run_intersection_declaration, run_intersection, skip_intersection_bra, call_intersection, \
