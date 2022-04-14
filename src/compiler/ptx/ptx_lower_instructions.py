@@ -383,97 +383,58 @@ def translate_trace_ray(ptx_shader, shaderIDs):
         
         #intersection shaders
         intersection_lines = []
+        if ShaderType.Intersection in shaderIDs:
 
-        intersection_counter_reg = '%intersection_counter_' + str(trace_ray_ID)
-        intersection_counter_declaration = PTXDecleration()
-        intersection_counter_declaration.leadingWhiteSpace = line.leadingWhiteSpace
-        intersection_counter_declaration.buildString(DeclarationType.Register, None, '.u32', intersection_counter_reg)
-        intersection_lines.append(intersection_counter_declaration)
+            intersection_counter_reg = '%intersection_counter_' + str(trace_ray_ID)
+            intersection_counter_declaration = PTXDecleration()
+            intersection_counter_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+            intersection_counter_declaration.buildString(DeclarationType.Register, None, '.u32', intersection_counter_reg)
+            intersection_lines.append(intersection_counter_declaration)
 
-        intersection_counter_mov = PTXFunctionalLine()
-        intersection_counter_mov.leadingWhiteSpace = line.leadingWhiteSpace
-        intersection_counter_mov.buildString('mov.u32', (intersection_counter_reg, '0'))
-        intersection_lines.append(intersection_counter_mov)
+            intersection_counter_mov = PTXFunctionalLine()
+            intersection_counter_mov.leadingWhiteSpace = line.leadingWhiteSpace
+            intersection_counter_mov.buildString('mov.u32', (intersection_counter_reg, '0'))
+            intersection_lines.append(intersection_counter_mov)
 
-        intersection_loop_label_str = 'intersection_loop_' + str(trace_ray_ID)
-        intersection_loop_label = PTXLine('')
-        intersection_loop_label.fullLine = line.leadingWhiteSpace + intersection_loop_label_str + ':\n'
-        intersection_lines.append(intersection_loop_label)
+            intersection_loop_label_str = 'intersection_loop_' + str(trace_ray_ID)
+            intersection_loop_label = PTXLine('')
+            intersection_loop_label.fullLine = line.leadingWhiteSpace + intersection_loop_label_str + ':\n'
+            intersection_lines.append(intersection_loop_label)
 
-        intersection_exit_reg = '%intersections_exit_' + str(trace_ray_ID)
-        intersection_exit_declaration = PTXDecleration()
-        intersection_exit_declaration.leadingWhiteSpace = line.leadingWhiteSpace
-        intersection_exit_declaration.buildString(DeclarationType.Register, None, '.pred', intersection_exit_reg)
-        intersection_lines.append(intersection_exit_declaration)
+            intersection_exit_reg = '%intersections_exit_' + str(trace_ray_ID)
+            intersection_exit_declaration = PTXDecleration()
+            intersection_exit_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+            intersection_exit_declaration.buildString(DeclarationType.Register, None, '.pred', intersection_exit_reg)
+            intersection_lines.append(intersection_exit_declaration)
 
-        intersection_exit = PTXFunctionalLine()
-        intersection_exit.leadingWhiteSpace = line.leadingWhiteSpace
-        intersection_exit.buildString('intersection_exit.pred', (intersection_exit_reg, intersection_counter_reg, traversal_finished_reg))
-        intersection_lines.append(intersection_exit)
+            intersection_exit = PTXFunctionalLine()
+            intersection_exit.leadingWhiteSpace = line.leadingWhiteSpace
+            intersection_exit.buildString('intersection_exit.pred', (intersection_exit_reg, intersection_counter_reg, traversal_finished_reg))
+            intersection_lines.append(intersection_exit)
 
-        exit_intersection_label_str = 'exit_intersection_label_' + str(trace_ray_ID)
-        exit_intersection_bra = PTXFunctionalLine()
-        exit_intersection_bra.leadingWhiteSpace = line.leadingWhiteSpace
-        exit_intersection_bra.condition = '@' + intersection_exit_reg
-        exit_intersection_bra.buildString(FunctionalType.bra, (exit_intersection_label_str, ))
-        intersection_lines.append(exit_intersection_bra)
+            exit_intersection_label_str = 'exit_intersection_label_' + str(trace_ray_ID)
+            exit_intersection_bra = PTXFunctionalLine()
+            exit_intersection_bra.leadingWhiteSpace = line.leadingWhiteSpace
+            exit_intersection_bra.condition = '@' + intersection_exit_reg
+            exit_intersection_bra.buildString(FunctionalType.bra, (exit_intersection_label_str, ))
+            intersection_lines.append(exit_intersection_bra)
 
-        if intersection_table_type == Intersection_Table_Type.FCC:
-            run_intersection_reg = '%run_intersection_' + str(trace_ray_ID)
-            run_intersection_declaration = PTXDecleration()
-            run_intersection_declaration.leadingWhiteSpace = line.leadingWhiteSpace
-            run_intersection_declaration.buildString(DeclarationType.Register, None, '.pred', run_intersection_reg)
-            intersection_lines.append(run_intersection_declaration)
+            if intersection_table_type == Intersection_Table_Type.FCC:
+                run_intersection_reg = '%run_intersection_' + str(trace_ray_ID)
+                run_intersection_declaration = PTXDecleration()
+                run_intersection_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+                run_intersection_declaration.buildString(DeclarationType.Register, None, '.pred', run_intersection_reg)
+                intersection_lines.append(run_intersection_declaration)
 
-            run_intersection = PTXFunctionalLine()
-            run_intersection.leadingWhiteSpace = line.leadingWhiteSpace
-            run_intersection.buildString('run_intersection.pred', (run_intersection_reg, intersection_counter_reg, traversal_finished_reg))
-            intersection_lines.append(run_intersection)
+                run_intersection = PTXFunctionalLine()
+                run_intersection.leadingWhiteSpace = line.leadingWhiteSpace
+                run_intersection.buildString('run_intersection.pred', (run_intersection_reg, intersection_counter_reg, traversal_finished_reg))
+                intersection_lines.append(run_intersection)
 
-            skip_intersection_label_str = 'skip_intersection_label_' + str(trace_ray_ID)
-            skip_intersection_bra = PTXFunctionalLine()
-            skip_intersection_bra.leadingWhiteSpace = line.leadingWhiteSpace
-            skip_intersection_bra.condition = '@!' + run_intersection_reg
-            skip_intersection_bra.buildString(FunctionalType.bra, (skip_intersection_label_str, ))
-            intersection_lines.append(skip_intersection_bra)
-
-            call_intersection = PTXFunctionalLine()
-            call_intersection.leadingWhiteSpace = line.leadingWhiteSpace
-            call_intersection.buildString(FunctionalType.call_intersection_shader, (intersection_counter_reg, ))
-            intersection_lines.append(call_intersection)
-
-            skip_intersection_label = PTXLine('')
-            skip_intersection_label.fullLine = line.leadingWhiteSpace + skip_intersection_label_str + ':\n'
-            intersection_lines.append(skip_intersection_label)
-        
-        else: # baseline
-            intersection_shaderID_reg = '%intersection_shaderID_' + str(trace_ray_ID)
-            intersection_shaderID_declaration = PTXDecleration()
-            intersection_shaderID_declaration.leadingWhiteSpace = line.leadingWhiteSpace
-            intersection_shaderID_declaration.buildString(DeclarationType.Register, None, '.u32', intersection_shaderID_reg)
-            intersection_lines.append(intersection_shaderID_declaration)
-
-            get_intersection_shaderID = PTXFunctionalLine()
-            get_intersection_shaderID.leadingWhiteSpace = line.leadingWhiteSpace
-            get_intersection_shaderID.buildString(FunctionalType.get_intersection_shaderID, (intersection_shaderID_reg, intersection_counter_reg))
-            intersection_lines.append(get_intersection_shaderID)
-
-            for shaderID in shaderIDs[ShaderType.Intersection]:
-                skip_intersection_reg = '%skip_intersection_' + str(shaderID) + '_' + str(trace_ray_ID)
-                skip_intersection_declaration = PTXDecleration()
-                skip_intersection_declaration.leadingWhiteSpace = line.leadingWhiteSpace
-                skip_intersection_declaration.buildString(DeclarationType.Register, None, '.pred', skip_intersection_reg)
-                intersection_lines.append(skip_intersection_declaration)
-
-                skip_intersection_pred = PTXFunctionalLine()
-                skip_intersection_pred.leadingWhiteSpace = line.leadingWhiteSpace
-                skip_intersection_pred.buildString('setp.ne.u32', (skip_intersection_reg, intersection_shaderID_reg, str(shaderID)))
-                intersection_lines.append(skip_intersection_pred)
-
-                skip_intersection_label_str = 'skip_intersection_label_' + str(shaderID) + '_' + str(trace_ray_ID)
+                skip_intersection_label_str = 'skip_intersection_label_' + str(trace_ray_ID)
                 skip_intersection_bra = PTXFunctionalLine()
                 skip_intersection_bra.leadingWhiteSpace = line.leadingWhiteSpace
-                skip_intersection_bra.condition = '@' + skip_intersection_reg
+                skip_intersection_bra.condition = '@!' + run_intersection_reg
                 skip_intersection_bra.buildString(FunctionalType.bra, (skip_intersection_label_str, ))
                 intersection_lines.append(skip_intersection_bra)
 
@@ -485,20 +446,60 @@ def translate_trace_ray(ptx_shader, shaderIDs):
                 skip_intersection_label = PTXLine('')
                 skip_intersection_label.fullLine = line.leadingWhiteSpace + skip_intersection_label_str + ':\n'
                 intersection_lines.append(skip_intersection_label)
+            
+            else: # baseline
+                intersection_shaderID_reg = '%intersection_shaderID_' + str(trace_ray_ID)
+                intersection_shaderID_declaration = PTXDecleration()
+                intersection_shaderID_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+                intersection_shaderID_declaration.buildString(DeclarationType.Register, None, '.u32', intersection_shaderID_reg)
+                intersection_lines.append(intersection_shaderID_declaration)
 
-        intersection_counter_add = PTXFunctionalLine()
-        intersection_counter_add.leadingWhiteSpace = line.leadingWhiteSpace
-        intersection_counter_add.buildString('add.u32', (intersection_counter_reg, intersection_counter_reg, '1'))
-        intersection_lines.append(intersection_counter_add)
+                get_intersection_shaderID = PTXFunctionalLine()
+                get_intersection_shaderID.leadingWhiteSpace = line.leadingWhiteSpace
+                get_intersection_shaderID.buildString(FunctionalType.get_intersection_shaderID, (intersection_shaderID_reg, intersection_counter_reg))
+                intersection_lines.append(get_intersection_shaderID)
 
-        intersection_loop_bra = PTXFunctionalLine()
-        intersection_loop_bra.leadingWhiteSpace = line.leadingWhiteSpace
-        intersection_loop_bra.buildString(FunctionalType.bra, (intersection_loop_label_str, ))
-        intersection_lines.append(intersection_loop_bra)
+                for shaderID in shaderIDs[ShaderType.Intersection]:
+                    skip_intersection_reg = '%skip_intersection_' + str(shaderID) + '_' + str(trace_ray_ID)
+                    skip_intersection_declaration = PTXDecleration()
+                    skip_intersection_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+                    skip_intersection_declaration.buildString(DeclarationType.Register, None, '.pred', skip_intersection_reg)
+                    intersection_lines.append(skip_intersection_declaration)
 
-        exit_intersection_label = PTXLine('')
-        exit_intersection_label.fullLine = line.leadingWhiteSpace + exit_intersection_label_str + ':\n'
-        intersection_lines.append(exit_intersection_label)
+                    skip_intersection_pred = PTXFunctionalLine()
+                    skip_intersection_pred.leadingWhiteSpace = line.leadingWhiteSpace
+                    skip_intersection_pred.buildString('setp.ne.u32', (skip_intersection_reg, intersection_shaderID_reg, str(shaderID)))
+                    intersection_lines.append(skip_intersection_pred)
+
+                    skip_intersection_label_str = 'skip_intersection_label_' + str(shaderID) + '_' + str(trace_ray_ID)
+                    skip_intersection_bra = PTXFunctionalLine()
+                    skip_intersection_bra.leadingWhiteSpace = line.leadingWhiteSpace
+                    skip_intersection_bra.condition = '@' + skip_intersection_reg
+                    skip_intersection_bra.buildString(FunctionalType.bra, (skip_intersection_label_str, ))
+                    intersection_lines.append(skip_intersection_bra)
+
+                    call_intersection = PTXFunctionalLine()
+                    call_intersection.leadingWhiteSpace = line.leadingWhiteSpace
+                    call_intersection.buildString(FunctionalType.call_intersection_shader, (intersection_counter_reg, ))
+                    intersection_lines.append(call_intersection)
+
+                    skip_intersection_label = PTXLine('')
+                    skip_intersection_label.fullLine = line.leadingWhiteSpace + skip_intersection_label_str + ':\n'
+                    intersection_lines.append(skip_intersection_label)
+
+            intersection_counter_add = PTXFunctionalLine()
+            intersection_counter_add.leadingWhiteSpace = line.leadingWhiteSpace
+            intersection_counter_add.buildString('add.u32', (intersection_counter_reg, intersection_counter_reg, '1'))
+            intersection_lines.append(intersection_counter_add)
+
+            intersection_loop_bra = PTXFunctionalLine()
+            intersection_loop_bra.leadingWhiteSpace = line.leadingWhiteSpace
+            intersection_loop_bra.buildString(FunctionalType.bra, (intersection_loop_label_str, ))
+            intersection_lines.append(intersection_loop_bra)
+
+            exit_intersection_label = PTXLine('')
+            exit_intersection_label.fullLine = line.leadingWhiteSpace + exit_intersection_label_str + ':\n'
+            intersection_lines.append(exit_intersection_label)
 
         # get hit_geometry
         hit_geometry_reg = '%hit_geometry_' + str(trace_ray_ID)
