@@ -720,21 +720,78 @@ def translate_load_GL_instructions(ptx_shader):
 
             newRegNames, _, _, _ = unwrapp_vector(ptx_shader, dst, dst)
 
-            line.buildString(line.functionalType, newRegNames[:3] + [loadIndex, ])
+
+            address_reg = str(dst) + '_address'
+            address_declaration = PTXDecleration()
+            address_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+            address_declaration.buildString(DeclarationType.Register, None, '.b64', address_reg)
+
+            offset = 0
+            loads = []
+            for regNames in newRegNames:
+                newLoad = PTXFunctionalLine()
+                newLoad.leadingWhiteSpace = line.leadingWhiteSpace
+                newLoad.buildString('ld.global.f32', (regNames, '[' + address_reg + ' + ' + str(offset) + ']'))
+                loads.append(newLoad)
+                offset += 4
+
+            line.buildString(line.functionalType, [address_reg, loadIndex, ])
+
+            ptx_shader.lines[index:index + 1] = [address_declaration, line] + loads
+
+            skip_lines = index + 2
         
 
         elif line.functionalType == FunctionalType.load_ray_world_direction:
             dst = line.args[0]
 
+            address_reg = str(dst) + '_address'
+            address_declaration = PTXDecleration()
+            address_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+            address_declaration.buildString(DeclarationType.Register, None, '.b64', address_reg)
+
             newRegNames, _, _, _ = unwrapp_vector(ptx_shader, dst, dst)
-            line.buildString(line.functionalType, newRegNames[:3])
+
+            offset = 0
+            loads = []
+            for regNames in newRegNames:
+                newLoad = PTXFunctionalLine()
+                newLoad.leadingWhiteSpace = line.leadingWhiteSpace
+                newLoad.buildString('ld.global.f32', (regNames, '[' + address_reg + ' + ' + str(offset) + ']'))
+                loads.append(newLoad)
+                offset += 4
+
+            line.buildString(line.functionalType, (address_reg, ))
+
+            ptx_shader.lines[index:index + 1] = [address_declaration, line] + loads
+
+            skip_lines = index + 2
         
 
         elif line.functionalType == FunctionalType.load_ray_world_origin:
             dst = line.args[0]
 
+            address_reg = str(dst) + '_address'
+            address_declaration = PTXDecleration()
+            address_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+            address_declaration.buildString(DeclarationType.Register, None, '.b64', address_reg)
+
             newRegNames, _, _, _ = unwrapp_vector(ptx_shader, dst, dst)
-            line.buildString(line.functionalType, newRegNames[:3])
+
+            offset = 0
+            loads = []
+            for regNames in newRegNames:
+                newLoad = PTXFunctionalLine()
+                newLoad.leadingWhiteSpace = line.leadingWhiteSpace
+                newLoad.buildString('ld.global.f32', (regNames, '[' + address_reg + ' + ' + str(offset) + ']'))
+                loads.append(newLoad)
+                offset += 4
+            
+            line.buildString(line.functionalType, (address_reg, ))
+
+            ptx_shader.lines[index:index + 1] = [address_declaration, line] + loads
+
+            skip_lines = index + 2
 
 
 
