@@ -214,6 +214,7 @@ class FunctionalType(Enum, metaclass=MetaEnum):
     get_hitgroup = 'get_hitgroup'
     get_closest_hit_shaderID = 'get_closest_hit_shaderID'
     get_intersection_shaderID = 'get_intersection_shaderID'
+    get_intersection_shader_data_address = 'get_intersection_shader_data_address'
     Other = auto()
 
 class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line that does sth like mov (eg it's not decleration)
