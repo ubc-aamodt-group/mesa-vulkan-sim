@@ -430,29 +430,6 @@ def translate_trace_ray(ptx_shader, shaderIDs):
             get_shader_data_address.buildString('get_intersection_shader_data_address', (shader_data_address_reg, intersection_counter_reg))
             intersection_lines.append(get_shader_data_address)
 
-            primitiveID_reg = '%primitiveID_' + str(trace_ray_ID)
-            primitiveID_declaration = PTXDecleration()
-            primitiveID_declaration.leadingWhiteSpace = line.leadingWhiteSpace
-            primitiveID_declaration.buildString(DeclarationType.Register, None, '.u32', primitiveID_reg)
-            intersection_lines.append(primitiveID_declaration)
-
-            primitiveID_load = PTXFunctionalLine()
-            primitiveID_load.leadingWhiteSpace = line.leadingWhiteSpace
-            primitiveID_load.buildString('ld.global.u32', (primitiveID_reg, '[' + shader_data_address_reg + ']'))
-            intersection_lines.append(primitiveID_load)
-
-            instanceID_reg = '%instanceID_' + str(trace_ray_ID)
-            instanceID_declaration = PTXDecleration()
-            instanceID_declaration.leadingWhiteSpace = line.leadingWhiteSpace
-            instanceID_declaration.buildString(DeclarationType.Register, None, '.u32', instanceID_reg)
-            intersection_lines.append(instanceID_declaration)
-
-            instanceID_load = PTXFunctionalLine()
-            instanceID_load.leadingWhiteSpace = line.leadingWhiteSpace
-            instanceID_load.buildString('ld.global.u32', (instanceID_reg, '[' + shader_data_address_reg + ' + 4]'))
-            intersection_lines.append(instanceID_load)
-
-
 
             if intersection_table_type == Intersection_Table_Type.FCC:
                 run_intersection_reg = '%run_intersection_' + str(trace_ray_ID)
@@ -472,6 +449,28 @@ def translate_trace_ray(ptx_shader, shaderIDs):
                 skip_intersection_bra.condition = '@!' + run_intersection_reg
                 skip_intersection_bra.buildString(FunctionalType.bra, (skip_intersection_label_str, ))
                 intersection_lines.append(skip_intersection_bra)
+
+                primitiveID_reg = '%primitiveID_' + str(trace_ray_ID)
+                primitiveID_declaration = PTXDecleration()
+                primitiveID_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+                primitiveID_declaration.buildString(DeclarationType.Register, None, '.u32', primitiveID_reg)
+                intersection_lines.append(primitiveID_declaration)
+
+                primitiveID_load = PTXFunctionalLine()
+                primitiveID_load.leadingWhiteSpace = line.leadingWhiteSpace
+                primitiveID_load.buildString('ld.global.u32', (primitiveID_reg, '[' + shader_data_address_reg + ']'))
+                intersection_lines.append(primitiveID_load)
+
+                instanceID_reg = '%instanceID_' + str(trace_ray_ID)
+                instanceID_declaration = PTXDecleration()
+                instanceID_declaration.leadingWhiteSpace = line.leadingWhiteSpace
+                instanceID_declaration.buildString(DeclarationType.Register, None, '.u32', instanceID_reg)
+                intersection_lines.append(instanceID_declaration)
+
+                instanceID_load = PTXFunctionalLine()
+                instanceID_load.leadingWhiteSpace = line.leadingWhiteSpace
+                instanceID_load.buildString('ld.global.u32', (instanceID_reg, '[' + shader_data_address_reg + ' + 4]'))
+                intersection_lines.append(instanceID_load)
 
                 call_intersection = PTXFunctionalLine()
                 call_intersection.leadingWhiteSpace = line.leadingWhiteSpace
