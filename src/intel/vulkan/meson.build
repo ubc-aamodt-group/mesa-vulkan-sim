@@ -25,10 +25,10 @@ dep_embree = declare_dependency(
     link_args : ['-L' + embree_lib_dir, '-l' + embree_lib],
     include_directories : include_directories(embree_header_dir))
 
-gpgpusim_lib = 'cudart'
-gpgpusim_lib_dir = '/home/mrs/emerald-ray-tracing/gpgpu-sim_emerald/lib/gcc-9.4.0/cuda-11000/debug'
-dep_gpgpusim = declare_dependency(
-    link_args : ['-L' + gpgpusim_lib_dir, '-l' + gpgpusim_lib])
+#gpgpusim_lib = 'cudart'
+#gpgpusim_lib_dir = '/home/mrs/emerald-ray-tracing/gpgpu-sim_emerald/lib/gcc-9.4.0/cuda-11000/debug'
+#dep_gpgpusim = declare_dependency(
+#    link_args : ['-L' + gpgpusim_lib_dir, '-l' + gpgpusim_lib])
 
 anv_extensions_py = files('anv_extensions.py')
 
@@ -144,7 +144,7 @@ libanv_files = files(
 )
 
 anv_deps = [
-  dep_gpgpusim,
+  #dep_gpgpusim,
   dep_embree,
   dep_libdrm,
   dep_valgrind,
