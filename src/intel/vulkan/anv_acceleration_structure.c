@@ -1013,6 +1013,8 @@ pack_node(struct anv_bvh_node *node, bool is_root, void *out,
             anv_address_add(child_addr, child_start_offset);
          /* The hardware flags are the same as the Vulkan flags */
          bil.InstanceFlags = instance->flags;
+         gpgpusim_pass_child_addr((void*)child_addr.offset);
+         child_addr.offset -= (uint64_t) out; // if something breaks, undo this and remove "leaf_addr + " in vulkan_ray_tracing.cc:594,595,609
          bil.BVHAddress = child_addr;
          bil.InstanceID = instance->instanceCustomIndex;
          bil.InstanceIndex = leaf->primitive_id;
