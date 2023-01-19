@@ -1721,7 +1721,7 @@ _drm_amdgpu_ver = '2.4.110'
 _drm_radeon_ver = '2.4.71'
 _drm_nouveau_ver = '2.4.102'
 _drm_intel_ver = '2.4.75'
-_drm_ver = '2.4.109'
+_drm_ver = '2.4.102'
 
 _libdrm_checks = [
   ['intel', with_gallium_i915],

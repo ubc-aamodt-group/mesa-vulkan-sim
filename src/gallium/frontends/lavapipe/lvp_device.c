@@ -193,6 +193,9 @@ static const struct vk_device_extension_table lvp_device_extensions_supported = 
    .EXT_robustness2                       = true,
    .GOOGLE_decorate_string                = true,
    .GOOGLE_hlsl_functionality1            = true,
+   .KHR_acceleration_structure            = true,
+   .KHR_deferred_host_operations          = true,
+   .KHR_ray_tracing_pipeline              = true,
 };
 
 static int
@@ -631,7 +634,7 @@ lvp_get_physical_device_features_1_2(struct lvp_physical_device *pdevice,
    f->shaderUniformTexelBufferArrayDynamicIndexing = false;
    f->shaderStorageTexelBufferArrayDynamicIndexing = false;
    f->shaderUniformBufferArrayNonUniformIndexing = false;
-   f->shaderSampledImageArrayNonUniformIndexing = false;
+   f->shaderSampledImageArrayNonUniformIndexing = true;
    f->shaderStorageBufferArrayNonUniformIndexing = false;
    f->shaderStorageImageArrayNonUniformIndexing = false;
    f->shaderInputAttachmentArrayNonUniformIndexing = false;
@@ -646,7 +649,7 @@ lvp_get_physical_device_features_1_2(struct lvp_physical_device *pdevice,
    f->descriptorBindingUpdateUnusedWhilePending = false;
    f->descriptorBindingPartiallyBound = false;
    f->descriptorBindingVariableDescriptorCount = false;
-   f->runtimeDescriptorArray = false;
+   f->runtimeDescriptorArray = true;
 
    f->samplerFilterMinmax = true;
    f->scalarBlockLayout = true;
@@ -1050,6 +1053,28 @@ VKAPI_ATTR void VKAPI_CALL lvp_GetPhysicalDeviceFeatures2(
          features->shaderSharedFloat64AtomicMinMax = false;
          features->shaderImageFloat32AtomicMinMax  = LLVM_VERSION_MAJOR >= 15;
          features->sparseImageFloat32AtomicMinMax  = false;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR: {
+         VkPhysicalDeviceRayTracingPipelineFeaturesKHR *features =
+            (VkPhysicalDeviceRayTracingPipelineFeaturesKHR *)ext;
+         features->rayTracingPipeline = true;
+         features->rayTracingPipelineShaderGroupHandleCaptureReplay = false;
+         features->rayTracingPipelineShaderGroupHandleCaptureReplayMixed = false;
+         features->rayTracingPipelineTraceRaysIndirect = false;
+         features->rayTraversalPrimitiveCulling = false;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR: {
+         VkPhysicalDeviceAccelerationStructureFeaturesKHR *features =
+            (VkPhysicalDeviceAccelerationStructureFeaturesKHR *)ext;
+         features->accelerationStructure = true;
+         features->accelerationStructureCaptureReplay = false;
+         features->accelerationStructureIndirectBuild = false;
+         features->accelerationStructureHostCommands = false;
+         features->descriptorBindingAccelerationStructureUpdateAfterBind = false;
          break;
       }
       default:
