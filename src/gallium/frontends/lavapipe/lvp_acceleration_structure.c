@@ -180,23 +180,15 @@ lvp_GetAccelerationStructureBuildSizesKHR(
    uint64_t cpu_update_scratch_size = cpu_build_scratch_size; /* TODO */
 
    switch (buildType) {
-   case VK_ACCELERATION_STRUCTURE_BUILD_TYPE_HOST_KHR:
-      pSizeInfo->buildScratchSize = cpu_build_scratch_size;
-      pSizeInfo->updateScratchSize = cpu_update_scratch_size;
-      break;
+      case VK_ACCELERATION_STRUCTURE_BUILD_TYPE_HOST_KHR:
+      case VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR:
+      case VK_ACCELERATION_STRUCTURE_BUILD_TYPE_HOST_OR_DEVICE_KHR:
+         pSizeInfo->buildScratchSize = cpu_build_scratch_size;
+         pSizeInfo->updateScratchSize = cpu_update_scratch_size;
+         break;
 
-   case VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR:
-      unreachable("Unimplemented");
-      break;
-      /* Fall through */
-
-   case VK_ACCELERATION_STRUCTURE_BUILD_TYPE_HOST_OR_DEVICE_KHR:
-      pSizeInfo->buildScratchSize = cpu_build_scratch_size;
-      pSizeInfo->updateScratchSize = cpu_update_scratch_size;
-      break;
-
-   default:
-      unreachable("Invalid acceleration structure build type");
+      default:
+         unreachable("Invalid acceleration structure build type");
    }
 }
 
