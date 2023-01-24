@@ -1,3 +1,14 @@
+embree_lib = 'embree3'
+embree_lib_dir = '/opt/embree-3.12.2.x86_64.linux/lib'
+embree_header_dir = '/opt/embree-3.12.2.x86_64.linux/include'
+dep_embree = declare_dependency(
+    link_args : ['-L' + embree_lib_dir, '-l' + embree_lib],
+    include_directories : include_directories(embree_header_dir))
+
+gpgpusim_lib = 'cudart'
+gpgpusim_lib_dir = '/home/lucy/sim/dist-vulkan-sim/gpgpu-sim_emerald/lib/gcc-5.5.0/cuda-10000/release'
+dep_gpgpusim = declare_dependency(
+   link_args : ['-L' + gpgpusim_lib_dir, '-l' + gpgpusim_lib])
 
 lvp_entrypoints = custom_target(
   'lvp_entrypoints',
@@ -10,7 +21,15 @@ lvp_entrypoints = custom_target(
   depend_files : vk_entrypoints_gen_depend_files,
 )
 
+intel_dir = '../../../intel'
+dep_intel = declare_dependency(
+  include_directories : include_directories(intel_dir)
+)
+
 liblvp_files = files(
+    'gpgpusim_bvh.h',
+    'lvp_acceleration_structure.h',
+    'lvp_acceleration_structure.c',
     'lvp_device.c',
     'lvp_cmd_buffer.c',
     'lvp_descriptor_set.c',
@@ -28,8 +47,12 @@ liblvp_files = files(
     'lvp_query.c',
     'lvp_wsi.c') + [vk_cmd_enqueue_entrypoints[0]]
 
-lvp_deps = []
-lvp_flags = []
+compile_args_vsim = [
+  '-Wno-pointer-arith'
+]
+
+lvp_deps = [dep_intel, dep_embree, dep_gpgpusim]
+lvp_flags = [compile_args_vsim]
 
 if with_platform_x11
   lvp_deps += dep_xcb_dri3
