@@ -23,6 +23,8 @@
 
 #include "lvp_acceleration_structure.h"
 #include "lvp_private.h"
+#include "vsim_private.h"
+#include "gen_rt_pack.h"
 
 #include <math.h>
 
@@ -35,7 +37,6 @@
 // #include "anv_private.h"
 // #include "../intel/genxml/gen125_rt_pack.h"
 #include "gpgpusim_bvh.h"
-// #include "gen_rt_pack.h"
 
 #include "embree3/rtcore.h"
 #include "embree3/rtcore_device.h"
@@ -151,6 +152,7 @@ struct lvp_bvh_build_state {
 
 #define doha_to_host(addr, state) ((addr).hostAddress)
 #define doha_to_host_const(addr, state) ((addr).hostAddress)
+
 
 void
 lvp_GetAccelerationStructureBuildSizesKHR(

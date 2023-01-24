@@ -1,120 +1,62 @@
-/*
- * Copyright (C) 2016 Intel Corporation
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
- */
-
-
-/* Instructions, enums and structures for RT.
- *
- * This file has been generated, do not hand edit.
- */
-
 #ifndef GEN_PACK_H
 #define GEN_PACK_H
-
-#include <stdio.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <assert.h>
-#include <math.h>
-
-#ifndef __gen_validate_value
-#define __gen_validate_value(x)
-#endif
-
-#ifndef __gen_field_functions
-#define __gen_field_functions
-
-#ifdef NDEBUG
-#define NDEBUG_UNUSED __attribute__((unused))
-#else
-#define NDEBUG_UNUSED
-#endif
-
-
 
 union __gen_value {
    float f;
    uint32_t dw;
 };
 
-static inline __attribute__((always_inline)) uint64_t
-__gen_mbo(uint32_t start, uint32_t end)
+#ifndef __gen_validate_value
+#define __gen_validate_value(x)
+#endif
+
+static inline __attribute__((always_inline)) uint32_t
+__gen_float(float v)
 {
-   return (~0ull >> (64 - (end - start + 1))) << start;
+   __gen_validate_value(v);
+   return ((union __gen_value) { .f = (v) }).dw;
 }
 
 static inline __attribute__((always_inline)) uint64_t
-__gen_uint(uint64_t v, uint32_t start, NDEBUG_UNUSED uint32_t end)
+__gen_offset(uint64_t v, uint32_t start, uint32_t end)
 {
    __gen_validate_value(v);
-
-#ifndef NDEBUG
-   const int width = end - start + 1;
-   if (width < 64) {
-      const uint64_t max = (1ull << width) - 1;
-      assert(v <= max);
-   }
-#endif
-
-   return v << start;
+   return v;
 }
 
 static inline __attribute__((always_inline)) uint64_t
 __gen_sint(int64_t v, uint32_t start, uint32_t end)
 {
    const int width = end - start + 1;
-
    __gen_validate_value(v);
-
-#ifndef NDEBUG
-   if (width < 64) {
-      const int64_t max = (1ll << (width - 1)) - 1;
-      const int64_t min = -(1ll << (width - 1));
-      assert(min <= v && v <= max);
-   }
-#endif
-
    const uint64_t mask = ~0ull >> (64 - width);
-
    return (v & mask) << start;
 }
 
 static inline __attribute__((always_inline)) uint64_t
-__gen_offset(uint64_t v, NDEBUG_UNUSED uint32_t start, NDEBUG_UNUSED uint32_t end)
+__gen_uint(uint64_t v, uint32_t start, uint32_t end)
 {
    __gen_validate_value(v);
-#ifndef NDEBUG
-   uint64_t mask = (~0ull >> (64 - (end - start + 1))) << start;
+   return v << start;
+}
 
-   assert((v & ~mask) == 0);
-#endif
+static inline uint64_t
+__gen_combine_address(struct anv_batch *batch, void *location,
+                     const struct anv_address address, uint32_t delta)
+{
+   if (address.bo == NULL)
+      return address.offset + delta;
 
-   return v;
+   if (batch)
+      anv_reloc_list_add_bo(batch->relocs, batch->alloc, address.bo);
+
+   return anv_address_physical(anv_address_add(address, delta));
 }
 
 static inline __attribute__((always_inline)) uint64_t
-__gen_address(__gen_user_data *data, void *location,
-              __gen_address_type address, uint32_t delta,
-              NDEBUG_UNUSED uint32_t start, uint32_t end)
+__gen_address(struct anv_batch *data, void *location,
+              struct anv_address address, uint32_t delta,
+              uint32_t start, uint32_t end)
 {
    uint64_t addr_u64 = __gen_combine_address(data, location, address, delta);
    if (end == 31) {
@@ -127,256 +69,198 @@ __gen_address(__gen_user_data *data, void *location,
       return addr_u64;
    }
 }
+// #define GEN_BINDLESS_SHADER_RECORD_length      2
+// struct GEN_BINDLESS_SHADER_RECORD {
+//    uint32_t                             OffsetToLocalArguments;
+//    uint32_t                             BindlessShaderDispatchMode;
+// #define SIMD8                                    0
+// #define SIMD16                                   1
+//    uint64_t                             KernelStartPointer;
+// };
 
-static inline __attribute__((always_inline)) uint32_t
-__gen_float(float v)
-{
-   __gen_validate_value(v);
-   return ((union __gen_value) { .f = (v) }).dw;
-}
+// static inline __attribute__((always_inline)) void
+// GEN_BINDLESS_SHADER_RECORD_pack(__attribute__((unused)) struct anv_batch *data,
+//                                 __attribute__((unused)) void * restrict dst,
+//                                 __attribute__((unused)) const struct GEN_BINDLESS_SHADER_RECORD * restrict values)
+// {
+//    uint32_t * restrict dw = (uint32_t * restrict) dst;
 
-static inline __attribute__((always_inline)) uint64_t
-__gen_sfixed(float v, uint32_t start, uint32_t end, uint32_t fract_bits)
-{
-   __gen_validate_value(v);
+//    dw[0] =
+//       __gen_uint(values->OffsetToLocalArguments, 0, 2) |
+//       __gen_uint(values->BindlessShaderDispatchMode, 4, 4) |
+//       __gen_offset(values->KernelStartPointer, 6, 31);
 
-   const float factor = (1 << fract_bits);
+//    dw[1] = 0;
+// }
 
-#ifndef NDEBUG
-   const float max = ((1 << (end - start)) - 1) / factor;
-   const float min = -(1 << (end - start)) / factor;
-   assert(min <= v && v <= max);
-#endif
+// #define GEN_RT_GENERAL_SBT_HANDLE_length       8
+// struct GEN_RT_GENERAL_SBT_HANDLE {
+//    struct GEN_BINDLESS_SHADER_RECORD    General;
+// };
 
-   const int64_t int_val = llroundf(v * factor);
-   const uint64_t mask = ~0ull >> (64 - (end - start + 1));
-
-   return (int_val & mask) << start;
-}
-
-static inline __attribute__((always_inline)) uint64_t
-__gen_ufixed(float v, uint32_t start, NDEBUG_UNUSED uint32_t end, uint32_t fract_bits)
-{
-   __gen_validate_value(v);
-
-   const float factor = (1 << fract_bits);
-
-#ifndef NDEBUG
-   const float max = ((1 << (end - start + 1)) - 1) / factor;
-   const float min = 0.0f;
-   assert(min <= v && v <= max);
-#endif
-
-   const uint64_t uint_val = llroundf(v * factor);
-
-   return uint_val << start;
-}
-
-#ifndef __gen_address_type
-#error #define __gen_address_type before including this file
-#endif
-
-#ifndef __gen_user_data
-#error #define __gen_combine_address before including this file
-#endif
-
-#undef NDEBUG_UNUSED
-
-#endif
-
-
-#define GEN_BINDLESS_SHADER_RECORD_length      2
-struct GEN_BINDLESS_SHADER_RECORD {
-   uint32_t                             OffsetToLocalArguments;
-   uint32_t                             BindlessShaderDispatchMode;
-#define SIMD8                                    0
-#define SIMD16                                   1
-   uint64_t                             KernelStartPointer;
-};
-
-static inline __attribute__((always_inline)) void
-GEN_BINDLESS_SHADER_RECORD_pack(__attribute__((unused)) __gen_user_data *data,
-                                __attribute__((unused)) void * restrict dst,
-                                __attribute__((unused)) const struct GEN_BINDLESS_SHADER_RECORD * restrict values)
-{
-   uint32_t * restrict dw = (uint32_t * restrict) dst;
-
-   dw[0] =
-      __gen_uint(values->OffsetToLocalArguments, 0, 2) |
-      __gen_uint(values->BindlessShaderDispatchMode, 4, 4) |
-      __gen_offset(values->KernelStartPointer, 6, 31);
-
-   dw[1] = 0;
-}
-
-#define GEN_RT_GENERAL_SBT_HANDLE_length       8
-struct GEN_RT_GENERAL_SBT_HANDLE {
-   struct GEN_BINDLESS_SHADER_RECORD    General;
-};
-
-static inline __attribute__((always_inline)) void
-GEN_RT_GENERAL_SBT_HANDLE_pack(__attribute__((unused)) __gen_user_data *data,
-                               __attribute__((unused)) void * restrict dst,
-                               __attribute__((unused)) const struct GEN_RT_GENERAL_SBT_HANDLE * restrict values)
-{
-   uint32_t * restrict dw = (uint32_t * restrict) dst;
-
-   GEN_BINDLESS_SHADER_RECORD_pack(data, &dw[0], &values->General);
-
-   dw[2] = 0;
-
-   dw[3] = 0;
-
-   dw[4] = 0;
-
-   dw[5] = 0;
-
-   dw[6] = 0;
-
-   dw[7] = 0;
-}
-
-#define GEN_RT_TRIANGLES_SBT_HANDLE_length      8
-struct GEN_RT_TRIANGLES_SBT_HANDLE {
-   struct GEN_BINDLESS_SHADER_RECORD    ClosestHit;
-   struct GEN_BINDLESS_SHADER_RECORD    AnyHit;
-};
-
-static inline __attribute__((always_inline)) void
-GEN_RT_TRIANGLES_SBT_HANDLE_pack(__attribute__((unused)) __gen_user_data *data,
-                                 __attribute__((unused)) void * restrict dst,
-                                 __attribute__((unused)) const struct GEN_RT_TRIANGLES_SBT_HANDLE * restrict values)
-{
-   uint32_t * restrict dw = (uint32_t * restrict) dst;
-
-   GEN_BINDLESS_SHADER_RECORD_pack(data, &dw[0], &values->ClosestHit);
-
-   GEN_BINDLESS_SHADER_RECORD_pack(data, &dw[2], &values->AnyHit);
-
-   dw[4] = 0;
-
-   dw[5] = 0;
-
-   dw[6] = 0;
-
-   dw[7] = 0;
-}
-
-#define GEN_RT_PROCEDURAL_SBT_HANDLE_length      8
-struct GEN_RT_PROCEDURAL_SBT_HANDLE {
-   struct GEN_BINDLESS_SHADER_RECORD    ClosestHit;
-   struct GEN_BINDLESS_SHADER_RECORD    Intersection;
-};
-
-static inline __attribute__((always_inline)) void
-GEN_RT_PROCEDURAL_SBT_HANDLE_pack(__attribute__((unused)) __gen_user_data *data,
-                                  __attribute__((unused)) void * restrict dst,
-                                  __attribute__((unused)) const struct GEN_RT_PROCEDURAL_SBT_HANDLE * restrict values)
-{
-   uint32_t * restrict dw = (uint32_t * restrict) dst;
-
-   GEN_BINDLESS_SHADER_RECORD_pack(data, &dw[0], &values->ClosestHit);
-
-   GEN_BINDLESS_SHADER_RECORD_pack(data, &dw[2], &values->Intersection);
-
-   dw[4] = 0;
-
-   dw[5] = 0;
-
-   dw[6] = 0;
-
-   dw[7] = 0;
-}
-
-#define GEN_RT_SHADER_TABLE_length             2
-struct GEN_RT_SHADER_TABLE {
-   __gen_address_type                   BaseAddress;
-   uint32_t                             Stride;
-};
-
-static inline __attribute__((always_inline)) void
-GEN_RT_SHADER_TABLE_pack(__attribute__((unused)) __gen_user_data *data,
-                         __attribute__((unused)) void * restrict dst,
-                         __attribute__((unused)) const struct GEN_RT_SHADER_TABLE * restrict values)
-{
-   uint32_t * restrict dw = (uint32_t * restrict) dst;
-
-   const uint64_t v0 =
-      __gen_uint(values->Stride, 48, 63);
-   const uint64_t v0_address =
-      __gen_address(data, &dw[0], values->BaseAddress, v0, 0, 47);
-   dw[0] = v0_address;
-   dw[1] = (v0_address >> 32) | (v0 >> 32);
-}
-
-#define GEN_RT_DISPATCH_GLOBALS_length        20
-struct GEN_RT_DISPATCH_GLOBALS {
-   __gen_address_type                   MemBaseAddress;
-   struct GEN_BINDLESS_SHADER_RECORD    CallStackHandler;
-   uint32_t                             AsyncRTStackSize;
-   uint32_t                             NumDSSRTStacks;
-   uint32_t                             MaxBVHLevels;
-   uint32_t                             Flags;
-#define RT_DEPTH_TEST_LESS_EQUAL                 1
-   struct GEN_RT_SHADER_TABLE           HitGroupTable;
-   struct GEN_RT_SHADER_TABLE           MissGroupTable;
-   uint32_t                             SWStackSize;
-   uint32_t                             LaunchWidth;
-   uint32_t                             LaunchHeight;
-   uint32_t                             LaunchDepth;
-   struct GEN_RT_SHADER_TABLE           CallableGroupTable;
-   __gen_address_type                   ResumeShaderTable;
-};
-
-static inline __attribute__((always_inline)) void
-GEN_RT_DISPATCH_GLOBALS_pack(__attribute__((unused)) __gen_user_data *data,
-                             __attribute__((unused)) void * restrict dst,
-                             __attribute__((unused)) const struct GEN_RT_DISPATCH_GLOBALS * restrict values)
-{
-   uint32_t * restrict dw = (uint32_t * restrict) dst;
-
-   const uint64_t v0_address =
-      __gen_address(data, &dw[0], values->MemBaseAddress, 0, 0, 63);
-   dw[0] = v0_address;
-   dw[1] = v0_address >> 32;
-
-   GEN_BINDLESS_SHADER_RECORD_pack(data, &dw[2], &values->CallStackHandler);
-
-   dw[4] =
-      __gen_uint(values->AsyncRTStackSize, 0, 31);
-
-   dw[5] =
-      __gen_uint(values->NumDSSRTStacks, 0, 15);
-
-   dw[6] =
-      __gen_uint(values->MaxBVHLevels, 0, 2);
-
-   dw[7] =
-      __gen_uint(values->Flags, 0, 0);
-
-   GEN_RT_SHADER_TABLE_pack(data, &dw[8], &values->HitGroupTable);
-
-   GEN_RT_SHADER_TABLE_pack(data, &dw[10], &values->MissGroupTable);
-
-   dw[12] =
-      __gen_uint(values->SWStackSize, 0, 31);
-
-   dw[13] =
-      __gen_uint(values->LaunchWidth, 0, 31);
-
-   dw[14] =
-      __gen_uint(values->LaunchHeight, 0, 31);
-
-   dw[15] =
-      __gen_uint(values->LaunchDepth, 0, 31);
-
-   GEN_RT_SHADER_TABLE_pack(data, &dw[16], &values->CallableGroupTable);
-
-   const uint64_t v18_address =
-      __gen_address(data, &dw[18], values->ResumeShaderTable, 0, 0, 63);
-   dw[18] = v18_address;
-   dw[19] = v18_address >> 32;
-}
+// static inline __attribute__((always_inline)) void
+// GEN_RT_GENERAL_SBT_HANDLE_pack(__attribute__((unused)) struct anv_batch *data,
+//                                __attribute__((unused)) void * restrict dst,
+//                                __attribute__((unused)) const struct GEN_RT_GENERAL_SBT_HANDLE * restrict values)
+// {
+//    uint32_t * restrict dw = (uint32_t * restrict) dst;
+
+//    GEN_BINDLESS_SHADER_RECORD_pack(data, &dw[0], &values->General);
+
+//    dw[2] = 0;
+
+//    dw[3] = 0;
+
+//    dw[4] = 0;
+
+//    dw[5] = 0;
+
+//    dw[6] = 0;
+
+//    dw[7] = 0;
+// }
+
+// #define GEN_RT_TRIANGLES_SBT_HANDLE_length      8
+// struct GEN_RT_TRIANGLES_SBT_HANDLE {
+//    struct GEN_BINDLESS_SHADER_RECORD    ClosestHit;
+//    struct GEN_BINDLESS_SHADER_RECORD    AnyHit;
+// };
+
+// static inline __attribute__((always_inline)) void
+// GEN_RT_TRIANGLES_SBT_HANDLE_pack(__attribute__((unused)) struct anv_batch *data,
+//                                  __attribute__((unused)) void * restrict dst,
+//                                  __attribute__((unused)) const struct GEN_RT_TRIANGLES_SBT_HANDLE * restrict values)
+// {
+//    uint32_t * restrict dw = (uint32_t * restrict) dst;
+
+//    GEN_BINDLESS_SHADER_RECORD_pack(data, &dw[0], &values->ClosestHit);
+
+//    GEN_BINDLESS_SHADER_RECORD_pack(data, &dw[2], &values->AnyHit);
+
+//    dw[4] = 0;
+
+//    dw[5] = 0;
+
+//    dw[6] = 0;
+
+//    dw[7] = 0;
+// }
+
+// #define GEN_RT_PROCEDURAL_SBT_HANDLE_length      8
+// struct GEN_RT_PROCEDURAL_SBT_HANDLE {
+//    struct GEN_BINDLESS_SHADER_RECORD    ClosestHit;
+//    struct GEN_BINDLESS_SHADER_RECORD    Intersection;
+// };
+
+// static inline __attribute__((always_inline)) void
+// GEN_RT_PROCEDURAL_SBT_HANDLE_pack(__attribute__((unused)) struct anv_batch *data,
+//                                   __attribute__((unused)) void * restrict dst,
+//                                   __attribute__((unused)) const struct GEN_RT_PROCEDURAL_SBT_HANDLE * restrict values)
+// {
+//    uint32_t * restrict dw = (uint32_t * restrict) dst;
+
+//    GEN_BINDLESS_SHADER_RECORD_pack(data, &dw[0], &values->ClosestHit);
+
+//    GEN_BINDLESS_SHADER_RECORD_pack(data, &dw[2], &values->Intersection);
+
+//    dw[4] = 0;
+
+//    dw[5] = 0;
+
+//    dw[6] = 0;
+
+//    dw[7] = 0;
+// }
+
+// #define GEN_RT_SHADER_TABLE_length             2
+// struct GEN_RT_SHADER_TABLE {
+//    struct anv_address                   BaseAddress;
+//    uint32_t                             Stride;
+// };
+
+// static inline __attribute__((always_inline)) void
+// GEN_RT_SHADER_TABLE_pack(__attribute__((unused)) struct anv_batch *data,
+//                          __attribute__((unused)) void * restrict dst,
+//                          __attribute__((unused)) const struct GEN_RT_SHADER_TABLE * restrict values)
+// {
+//    uint32_t * restrict dw = (uint32_t * restrict) dst;
+
+//    const uint64_t v0 =
+//       __gen_uint(values->Stride, 48, 63);
+//    const uint64_t v0_address =
+//       __gen_address(data, &dw[0], values->BaseAddress, v0, 0, 47);
+//    dw[0] = v0_address;
+//    dw[1] = (v0_address >> 32) | (v0 >> 32);
+// }
+
+// #define GEN_RT_DISPATCH_GLOBALS_length        20
+// struct GEN_RT_DISPATCH_GLOBALS {
+//    struct anv_address                   MemBaseAddress;
+//    struct GEN_BINDLESS_SHADER_RECORD    CallStackHandler;
+//    uint32_t                             AsyncRTStackSize;
+//    uint32_t                             NumDSSRTStacks;
+//    uint32_t                             MaxBVHLevels;
+//    uint32_t                             Flags;
+// #define RT_DEPTH_TEST_LESS_EQUAL                 1
+//    struct GEN_RT_SHADER_TABLE           HitGroupTable;
+//    struct GEN_RT_SHADER_TABLE           MissGroupTable;
+//    uint32_t                             SWStackSize;
+//    uint32_t                             LaunchWidth;
+//    uint32_t                             LaunchHeight;
+//    uint32_t                             LaunchDepth;
+//    struct GEN_RT_SHADER_TABLE           CallableGroupTable;
+//    struct anv_address                   ResumeShaderTable;
+// };
+
+// static inline __attribute__((always_inline)) void
+// GEN_RT_DISPATCH_GLOBALS_pack(__attribute__((unused)) struct anv_batch *data,
+//                              __attribute__((unused)) void * restrict dst,
+//                              __attribute__((unused)) const struct GEN_RT_DISPATCH_GLOBALS * restrict values)
+// {
+//    uint32_t * restrict dw = (uint32_t * restrict) dst;
+
+//    const uint64_t v0_address =
+//       __gen_address(data, &dw[0], values->MemBaseAddress, 0, 0, 63);
+//    dw[0] = v0_address;
+//    dw[1] = v0_address >> 32;
+
+//    GEN_BINDLESS_SHADER_RECORD_pack(data, &dw[2], &values->CallStackHandler);
+
+//    dw[4] =
+//       __gen_uint(values->AsyncRTStackSize, 0, 31);
+
+//    dw[5] =
+//       __gen_uint(values->NumDSSRTStacks, 0, 15);
+
+//    dw[6] =
+//       __gen_uint(values->MaxBVHLevels, 0, 2);
+
+//    dw[7] =
+//       __gen_uint(values->Flags, 0, 0);
+
+//    GEN_RT_SHADER_TABLE_pack(data, &dw[8], &values->HitGroupTable);
+
+//    GEN_RT_SHADER_TABLE_pack(data, &dw[10], &values->MissGroupTable);
+
+//    dw[12] =
+//       __gen_uint(values->SWStackSize, 0, 31);
+
+//    dw[13] =
+//       __gen_uint(values->LaunchWidth, 0, 31);
+
+//    dw[14] =
+//       __gen_uint(values->LaunchHeight, 0, 31);
+
+//    dw[15] =
+//       __gen_uint(values->LaunchDepth, 0, 31);
+
+//    GEN_RT_SHADER_TABLE_pack(data, &dw[16], &values->CallableGroupTable);
+
+//    const uint64_t v18_address =
+//       __gen_address(data, &dw[18], values->ResumeShaderTable, 0, 0, 63);
+//    dw[18] = v18_address;
+//    dw[19] = v18_address >> 32;
+// }
 
 #define GEN_RT_BVH_VEC3_length                 3
 struct GEN_RT_BVH_VEC3 {
@@ -386,7 +270,7 @@ struct GEN_RT_BVH_VEC3 {
 };
 
 static inline __attribute__((always_inline)) void
-GEN_RT_BVH_VEC3_pack(__attribute__((unused)) __gen_user_data *data,
+GEN_RT_BVH_VEC3_pack(__attribute__((unused)) struct anv_batch *data,
                      __attribute__((unused)) void * restrict dst,
                      __attribute__((unused)) const struct GEN_RT_BVH_VEC3 * restrict values)
 {
@@ -410,7 +294,7 @@ struct GEN_RT_BVH {
 };
 
 static inline __attribute__((always_inline)) void
-GEN_RT_BVH_pack(__attribute__((unused)) __gen_user_data *data,
+GEN_RT_BVH_pack(__attribute__((unused)) struct anv_batch *data,
                 __attribute__((unused)) void * restrict dst,
                 __attribute__((unused)) const struct GEN_RT_BVH * restrict values)
 {
@@ -468,7 +352,7 @@ struct GEN_RT_BVH_INTERNAL_NODE {
 };
 
 static inline __attribute__((always_inline)) void
-GEN_RT_BVH_INTERNAL_NODE_pack(__attribute__((unused)) __gen_user_data *data,
+GEN_RT_BVH_INTERNAL_NODE_pack(__attribute__((unused)) struct anv_batch *data,
                               __attribute__((unused)) void * restrict dst,
                               __attribute__((unused)) const struct GEN_RT_BVH_INTERNAL_NODE * restrict values)
 {
@@ -577,7 +461,7 @@ struct GEN_RT_BVH_PRIMITIVE_LEAF_DESCRIPTOR {
 };
 
 static inline __attribute__((always_inline)) void
-GEN_RT_BVH_PRIMITIVE_LEAF_DESCRIPTOR_pack(__attribute__((unused)) __gen_user_data *data,
+GEN_RT_BVH_PRIMITIVE_LEAF_DESCRIPTOR_pack(__attribute__((unused)) struct anv_batch *data,
                                           __attribute__((unused)) void * restrict dst,
                                           __attribute__((unused)) const struct GEN_RT_BVH_PRIMITIVE_LEAF_DESCRIPTOR * restrict values)
 {
@@ -606,7 +490,7 @@ struct GEN_RT_BVH_QUAD_LEAF {
 };
 
 static inline __attribute__((always_inline)) void
-GEN_RT_BVH_QUAD_LEAF_pack(__attribute__((unused)) __gen_user_data *data,
+GEN_RT_BVH_QUAD_LEAF_pack(__attribute__((unused)) struct anv_batch *data,
                           __attribute__((unused)) void * restrict dst,
                           __attribute__((unused)) const struct GEN_RT_BVH_QUAD_LEAF * restrict values)
 {
@@ -643,7 +527,7 @@ struct GEN_RT_BVH_INSTANCE_LEAF {
 #define TYPE_OPAQUE_CULLING_DISABLED             1
    uint32_t                             GeometryFlags;
 #define GEOMETRY_OPAQUE                          1
-   __gen_address_type                   StartNodeAddress;
+   struct anv_address                   StartNodeAddress;
    uint32_t                             InstanceFlags;
 #define TRIANGLE_CULL_DISABLE                    1
 #define TRIANGLE_FRONT_COUNTERCLOCKWISE          2
@@ -661,7 +545,7 @@ struct GEN_RT_BVH_INSTANCE_LEAF {
    float                                ObjectToWorldm30;
    float                                ObjectToWorldm31;
    float                                ObjectToWorldm32;
-   __gen_address_type                   BVHAddress;
+   struct anv_address                   BVHAddress;
    uint32_t                             InstanceID;
    uint32_t                             InstanceIndex;
    float                                ObjectToWorldm00;
@@ -679,7 +563,7 @@ struct GEN_RT_BVH_INSTANCE_LEAF {
 };
 
 static inline __attribute__((always_inline)) void
-GEN_RT_BVH_INSTANCE_LEAF_pack(__attribute__((unused)) __gen_user_data *data,
+GEN_RT_BVH_INSTANCE_LEAF_pack(__attribute__((unused)) struct anv_batch *data,
                               __attribute__((unused)) void * restrict dst,
                               __attribute__((unused)) const struct GEN_RT_BVH_INSTANCE_LEAF * restrict values)
 {
@@ -794,7 +678,7 @@ struct GEN_RT_BVH_PROCEDURAL_LEAF {
 };
 
 static inline __attribute__((always_inline)) void
-GEN_RT_BVH_PROCEDURAL_LEAF_pack(__attribute__((unused)) __gen_user_data *data,
+GEN_RT_BVH_PROCEDURAL_LEAF_pack(__attribute__((unused)) struct anv_batch *data,
                                 __attribute__((unused)) void * restrict dst,
                                 __attribute__((unused)) const struct GEN_RT_BVH_PROCEDURAL_LEAF * restrict values)
 {
@@ -845,5 +729,6 @@ GEN_RT_BVH_PROCEDURAL_LEAF_pack(__attribute__((unused)) __gen_user_data *data,
    dw[15] =
       __gen_uint(values->PrimitiveIndex[12], 0, 31);
 }
+
 
 #endif /* GEN_PACK_H */
