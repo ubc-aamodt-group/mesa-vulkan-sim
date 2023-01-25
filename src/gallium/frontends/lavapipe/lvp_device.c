@@ -1418,6 +1418,19 @@ VKAPI_ATTR void VKAPI_CALL lvp_GetPhysicalDeviceProperties2(
          props->minAccelerationStructureScratchOffsetAlignment = 128;
          break;
       }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR: {
+         printf("Getting ray tracing pipeline properties...\n");
+         VkPhysicalDeviceRayTracingPipelinePropertiesKHR *props = (void *)ext;
+         props->shaderGroupHandleSize = 32;
+         props->maxRayRecursionDepth = 31;
+         props->maxShaderGroupStride = UINT16_MAX;
+         props->shaderGroupBaseAlignment = 16;
+         props->shaderGroupHandleAlignment = 16;
+         props->shaderGroupHandleCaptureReplaySize = 32;
+         props->maxRayDispatchInvocationCount = 1U << 30;
+         props->maxRayHitAttributeSize = 64;
+         break;
+      }
       default:
          break;
       }

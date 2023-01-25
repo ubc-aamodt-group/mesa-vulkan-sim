@@ -1113,7 +1113,7 @@ lvp_cpu_build_acceleration_structures(
    const VkAccelerationStructureBuildRangeInfoKHR* const* ppBuildRangeInfos,
    bool is_host_build)
 {
-   printf("lvp_cpu_build_acceleration_structures\n");
+   printf("LVP: Building acceleration structure\n");
    RTCDevice rtc = rtcNewDevice("ignore_config_files=1");
 
    for (uint32_t i = 0; i < infoCount; i++) {
