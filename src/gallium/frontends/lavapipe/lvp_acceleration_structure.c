@@ -84,6 +84,7 @@ lvp_bvh_max_size(VkAccelerationStructureTypeKHR type, uint64_t leaf_count)
       unreachable("Invalid VkAccelerationStructureTypeKHR");
    }
 
+   printf("Size of BVH structure is %ld\n", max_size_B);
    return max_size_B;
 }
 
@@ -162,7 +163,7 @@ lvp_GetAccelerationStructureBuildSizesKHR(
     const uint32_t*                             pMaxPrimitiveCounts,
     VkAccelerationStructureBuildSizesInfoKHR*   pSizeInfo)
 {
-   printf("GetAccelerationStructureBuildSizesKHR\n");
+   printf("lvp_GetAccelerationStructureBuildSizesKHR\n");
    assert(pSizeInfo->sType ==
           VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR);
 
@@ -201,6 +202,7 @@ lvp_CreateAccelerationStructureKHR(
     const VkAllocationCallbacks*                pAllocator,
     VkAccelerationStructureKHR*                 pAccelerationStructure)
 {
+   printf("lvp_CreateAccelerationStructureKHR\n");
    LVP_FROM_HANDLE(lvp_device, device, _device);
    LVP_FROM_HANDLE(lvp_buffer, buffer, pCreateInfo->buffer);
    struct lvp_acceleration_structure *accel;
@@ -230,6 +232,7 @@ lvp_DestroyAccelerationStructureKHR(
     VkAccelerationStructureKHR                  accelerationStructure,
     const VkAllocationCallbacks*                pAllocator)
 {
+   printf("lvp_DestroyAccelerationStructureKHR\n");
    LVP_FROM_HANDLE(lvp_device, device, _device);
    LVP_FROM_HANDLE(lvp_acceleration_structure, accel, accelerationStructure);
 
@@ -245,6 +248,7 @@ lvp_GetAccelerationStructureDeviceAddressKHR(
     VkDevice                                    device,
     const VkAccelerationStructureDeviceAddressInfoKHR* pInfo)
 {
+   printf("lvp_GetAccelerationStructureDeviceAddressKHR\n");
    LVP_FROM_HANDLE(lvp_acceleration_structure, accel,
                    pInfo->accelerationStructure);
 
@@ -1109,6 +1113,7 @@ lvp_cpu_build_acceleration_structures(
    const VkAccelerationStructureBuildRangeInfoKHR* const* ppBuildRangeInfos,
    bool is_host_build)
 {
+   printf("lvp_cpu_build_acceleration_structures\n");
    RTCDevice rtc = rtcNewDevice("ignore_config_files=1");
 
    for (uint32_t i = 0; i < infoCount; i++) {
@@ -1265,7 +1270,7 @@ lvp_cpu_build_acceleration_structures(
       UNUSED uint32_t root_type, root_size;
       node_type_size(root, &root_type, &root_size, &build_state);
 
-      void *dst_map = anv_address_map(dst_accel->address);
+      void *dst_map = (uint8_t *)dst_accel->address.bo + dst_accel->address.offset;
 
       struct GEN_RT_BVH bvh = { };
       bvh.RootNodeOffset = GEN_RT_BVH_length * 4;
