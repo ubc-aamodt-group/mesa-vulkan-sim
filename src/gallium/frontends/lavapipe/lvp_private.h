@@ -433,6 +433,7 @@ struct lvp_pipeline {
    bool line_rectangular;
    bool gs_output_lines;
    bool library;
+   uint32_t group_count;
 };
 
 struct lvp_event {
@@ -473,12 +474,26 @@ struct lvp_query_pool {
    struct pipe_query *queries[0];
 };
 
+struct vsim_TraceRayCall {
+   bool valid;
+   void * raygen_sbt;
+   void * miss_sbt;
+   void * hit_sbt;
+   void * callable_sbt;
+   bool is_indirect;
+   uint32_t launch_width;
+   uint32_t launch_height;
+   uint32_t launch_depth;
+   uint64_t launch_size_addr;
+};
+
 struct lvp_cmd_buffer {
    struct vk_command_buffer vk;
 
    struct lvp_device *                          device;
 
    uint8_t push_constants[MAX_PUSH_CONSTANTS_SIZE];
+   struct vsim_TraceRayCall traceRayCall;
 };
 
 extern const struct vk_command_buffer_ops lvp_cmd_buffer_ops;

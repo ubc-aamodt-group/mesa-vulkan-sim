@@ -186,3 +186,38 @@ VKAPI_ATTR void VKAPI_CALL lvp_CmdPushDescriptorSetWithTemplateKHR(
       }
    }
 }
+
+static void *find_host_address(struct lvp_device *device, const VkDeviceAddress addr)
+{
+   // return bo->map + (addr - bo->offset);
+   return NULL;
+}
+
+void lvp_CmdTraceRaysKHR(
+    VkCommandBuffer                             commandBuffer,
+    const VkStridedDeviceAddressRegionKHR*      pRaygenShaderBindingTable,
+    const VkStridedDeviceAddressRegionKHR*      pMissShaderBindingTable,
+    const VkStridedDeviceAddressRegionKHR*      pHitShaderBindingTable,
+    const VkStridedDeviceAddressRegionKHR*      pCallableShaderBindingTable,
+    uint32_t                                    width,
+    uint32_t                                    height,
+    uint32_t                                    depth)
+{
+   LVP_FROM_HANDLE(lvp_cmd_buffer, cmd_buffer, commandBuffer);
+
+   void *raygen_addr = find_host_address(cmd_buffer->device, pRaygenShaderBindingTable->deviceAddress);
+   void *miss_addr = find_host_address(cmd_buffer->device, pMissShaderBindingTable->deviceAddress);
+   void *hit_addr = find_host_address(cmd_buffer->device, pHitShaderBindingTable->deviceAddress);
+   void *callable_addr = find_host_address(cmd_buffer->device, pCallableShaderBindingTable->deviceAddress);
+
+   cmd_buffer->traceRayCall.raygen_sbt = raygen_addr;
+   cmd_buffer->traceRayCall.miss_sbt = miss_addr;
+   cmd_buffer->traceRayCall.hit_sbt = hit_addr;
+   cmd_buffer->traceRayCall.callable_sbt = callable_addr;
+   cmd_buffer->traceRayCall.is_indirect = true;
+   cmd_buffer->traceRayCall.launch_width = width;
+   cmd_buffer->traceRayCall.launch_height = height;
+   cmd_buffer->traceRayCall.launch_depth = depth;
+   cmd_buffer->traceRayCall.valid = true;
+   cmd_buffer->traceRayCall.launch_size_addr = 0;
+}

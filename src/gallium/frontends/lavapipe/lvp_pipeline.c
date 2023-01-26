@@ -34,6 +34,7 @@
 #include "pipe/p_context.h"
 #include "tgsi/tgsi_from_mesa.h"
 #include "nir/nir_xfb_info.h"
+#include "lvp_pipeline.h"
 
 #define SPIR_V_MAGIC_NUMBER 0x07230203
 
@@ -1079,4 +1080,20 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_CreateComputePipelines(
 
 
    return result;
+}
+
+nir_shader *
+vsim_shader_spirv_to_nir(struct lvp_device *device, const VkPipelineShaderStageCreateInfo *sinfo)
+{
+   return NULL;
+}
+
+static VkResult
+lvp_ray_tracing_pipeline_init(
+   struct lvp_pipeline *pipeline,
+   struct lvp_device *device,
+   struct lvp_pipeline_cache *cache,
+   const VkRayTracingPipelineCreateInfoKHR *pCreateInfo)
+{
+   return VK_SUCCESS;
 }
