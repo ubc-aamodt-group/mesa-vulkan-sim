@@ -4409,6 +4409,10 @@ void nir_log_shader_annotated_tagged(enum mesa_log_level level, const char *tag,
 #define nir_log_shaderi(s) nir_log_shader_annotated_tagged(MESA_LOG_INFO, (MESA_LOG_TAG), (s), NULL)
 #define nir_log_shader_annotated(s, annotations) nir_log_shader_annotated_tagged(MESA_LOG_ERROR, (MESA_LOG_TAG), (s), annotations)
 
+//nir to ptx translation functions
+void nir_translate_shader_to_ptx(nir_shader *shader, FILE *fp, char *filePath);
+void nir_translate_shader_annotated(nir_shader *shader, FILE *fp, struct hash_table *errors);
+
 char *nir_shader_as_str(nir_shader *nir, void *mem_ctx);
 char *nir_shader_as_str_annotated(nir_shader *nir, struct hash_table *annotations, void *mem_ctx);
 char *nir_instr_as_str(const nir_instr *instr, void *mem_ctx);
