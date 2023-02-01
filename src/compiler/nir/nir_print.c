@@ -2962,7 +2962,35 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
                        !strcmp(nir_op_infos[instr->op].name, "vec4"));
 
    // PTX here
-   if (!is_vec_type) {
+
+   // Special case for fsum3 because I can't figure out how to optimize it out
+   if (!strcmp(nir_op_infos[instr->op].name, "fsum3")) {
+      print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, FLOAT, instr->dest.dest.ssa.bit_size);
+      print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+      fprintf(fp, ";");
+      fprintf(fp, "\n");
+      print_tabs(tabs, fp);
+
+      fprintf(fp, "add.f32 ");
+      print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+      fprintf(fp, ", ");
+      print_alu_src_as_ptx(instr, 0, state);
+      fprintf(fp, ".x, ");
+      print_alu_src_as_ptx(instr, 0, state);
+      fprintf(fp, ".y;\n");
+      print_tabs(tabs, fp);
+
+      fprintf(fp, "add.f32 ");
+      print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+      fprintf(fp, ", ");
+      print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+      fprintf(fp, ", ");
+      print_alu_src_as_ptx(instr, 0, state);
+      fprintf(fp, ".z;");
+
+      ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
+   }
+   else if (!is_vec_type) {
       // Opcodes
       if (!strcmp(nir_op_infos[instr->op].name, "u2f32")){
          print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, FLOAT, instr->dest.dest.ssa.bit_size);
@@ -3144,6 +3172,17 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
          print_tabs(tabs, fp);
 
          fprintf(fp, "neg.s%d ", instr->dest.dest.ssa.bit_size);
+
+         ssa_register_info[instr->dest.dest.ssa.index].type = INT;
+      }
+      else if (!strcmp(nir_op_infos[instr->op].name, "imin")) {
+         print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, INT, instr->dest.dest.ssa.bit_size);
+         print_alu_dest_as_ptx_no_pos(&instr->dest, state);
+         fprintf(fp, ";");
+         fprintf(fp, "\n");
+         print_tabs(tabs, fp);
+
+         fprintf(fp, "min.s%d ", instr->dest.dest.ssa.bit_size);
 
          ssa_register_info[instr->dest.dest.ssa.index].type = INT;
       }
@@ -3467,6 +3506,8 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
       // Prints the rest of the instruction
       for (unsigned i = 0; i < instr->dest.dest.ssa.num_components; i++) {
          // Src and Dst Operands
+         if (i != 0)
+               fprintf(fp, ", ");
          print_alu_dest_as_ptx(&instr->dest, state, i);
          fprintf(fp, ", ");
          for (unsigned j = 0; j < nir_op_infos[instr->op].num_inputs; j++) {

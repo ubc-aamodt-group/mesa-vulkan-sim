@@ -105,7 +105,7 @@ vsim_pipeline_stage_get_nir(
 {
    nir_shader *nir;
 
-   nir = vsim_shader_spirv_to_nir(pipeline->device, sinfo);
+   nir = vsim_shader_spirv_to_nir(pipeline, sinfo);
    if (nir) {
       return nir;
    }
@@ -118,6 +118,7 @@ vsim_compile_ray_tracing_pipeline(
    struct lvp_pipeline *pipeline,
    const VkRayTracingPipelineCreateInfoKHR *info)
 {
+   printf("LVP: Compiling ray tracing pipeline...\n");
    VkResult result;
    LVP_FROM_HANDLE(lvp_pipeline_layout, layout, info->layout);
 
@@ -127,11 +128,10 @@ vsim_compile_ray_tracing_pipeline(
 
    char shaderPaths[20][200];
    for (uint32_t i = 0; i < info->stageCount; i++) {
+      printf("LVP: Compiling shader stage %d\n", i);
       const VkPipelineShaderStageCreateInfo *sinfo = &info->pStages[i];
       if (sinfo->module == VK_NULL_HANDLE)
          continue;
-
-      int64_t stage_start = os_time_get_nano();
 
       stages[i] = (struct vsim_pipeline_stage) {
          .stage = vk_to_mesa_shader_stage(sinfo->stage),
@@ -142,12 +142,14 @@ vsim_compile_ray_tracing_pipeline(
       stages[i].nir = vsim_pipeline_stage_get_nir(pipeline, sinfo);
 
       if (stages[i].nir == NULL) {
+         printf("LVP: NIR missing\n");
          ralloc_free(pipeline_ctx);
          return VK_ERROR_OUT_OF_HOST_MEMORY;
       }
 
       // Insert NIR to PTX translator here for each different ray tracing shaders, the lowered shaders under have too many intel specific intrinsics
       if(stages[i].stage >= MESA_SHADER_RAYGEN && stages[i].stage <= MESA_SHADER_CALLABLE) { // shader type from 8 to 13
+         printf("LVP: Translating shader %d (type %d)\n", i, stages[i].stage);
          translate_nir_to_ptx(stages[i].nir, shaderPaths[i]);
       }
 
@@ -155,10 +157,12 @@ vsim_compile_ray_tracing_pipeline(
    }
 
    // Vulkan-Sim additions
+   printf("LVP: run_rt_translation_passes\n");
    run_rt_translation_passes();
 
    for (uint32_t i = 0; i < info->stageCount; i++) {
       if(stages[i].stage >= MESA_SHADER_RAYGEN && stages[i].stage <= MESA_SHADER_CALLABLE) {
+         printf("LVP: Registering shader stage %d with GPGPU-Sim\n", i);
          stages[i].bin = (void *)gpgpusim_registerShader(shaderPaths[i], (uint32_t)(stages[i].stage));
          assert((uint64_t)(stages[i].bin) == i);
       }

@@ -589,6 +589,16 @@ llvmpipe_get_device_uuid(struct pipe_screen *pscreen, char *uuid)
 
 
 static const struct nir_shader_compiler_options gallivm_nir_options = {
+   .lower_fdiv = true,
+   .lower_isign = true,
+   .vectorize_io = true,
+   .vertex_id_zero_based = true,
+   .lower_base_vertex = true,
+   .lower_hadd64 = true,
+   .has_imul24 = true,
+   .lower_pack_64_2x32 = true,
+
+   .lower_image_offset_to_range_base = true,
    .lower_scmp = true,
    .lower_flrp32 = true,
    .lower_flrp64 = true,

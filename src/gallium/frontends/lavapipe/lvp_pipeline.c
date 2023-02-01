@@ -1083,17 +1083,166 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_CreateComputePipelines(
 }
 
 nir_shader *
-vsim_shader_spirv_to_nir(struct lvp_device *device, const VkPipelineShaderStageCreateInfo *sinfo)
+vsim_shader_spirv_to_nir(struct lvp_pipeline *pipeline, const VkPipelineShaderStageCreateInfo *sinfo)
 {
-   return NULL;
+   // Implementation from lvp_shader_compile_to_ir
+   struct lvp_device *pdevice = pipeline->device;
+   gl_shader_stage stage = vk_to_mesa_shader_stage(sinfo->stage);
+   // assert(stage <= MESA_SHADER_COMPUTE && stage != MESA_SHADER_NONE);
+   VkResult result;
+   nir_shader *nir;
+
+   const struct spirv_to_nir_options spirv_options = {
+      .environment = NIR_SPIRV_VULKAN,
+      .caps = {
+         .float64 = (pdevice->pscreen->get_param(pdevice->pscreen, PIPE_CAP_DOUBLES) == 1),
+         .int16 = true,
+         .int64 = (pdevice->pscreen->get_param(pdevice->pscreen, PIPE_CAP_INT64) == 1),
+         .tessellation = true,
+         .float_controls = true,
+         .float32_atomic_add = true,
+         .image_ms_array = true,
+         .image_read_without_format = true,
+         .image_write_without_format = true,
+         .storage_image_ms = true,
+         .geometry_streams = true,
+         .storage_8bit = true,
+         .storage_16bit = true,
+         .variable_pointers = true,
+         .stencil_export = true,
+         .post_depth_coverage = true,
+         .transform_feedback = true,
+         .device_group = true,
+         .draw_parameters = true,
+         .shader_viewport_index_layer = true,
+         .shader_clock = true,
+         .multiview = true,
+         .physical_storage_buffer_address = true,
+         .int64_atomics = true,
+         .subgroup_arithmetic = true,
+         .subgroup_basic = true,
+         .subgroup_ballot = true,
+         .subgroup_quad = true,
+         .subgroup_vote = true,
+         .vk_memory_model = true,
+         .vk_memory_model_device_scope = true,
+         .int8 = true,
+         .float16 = true,
+         .demote_to_helper_invocation = true,
+      },
+      .ubo_addr_format = nir_address_format_32bit_index_offset,
+      .ssbo_addr_format = nir_address_format_32bit_index_offset,
+      .phys_ssbo_addr_format = nir_address_format_64bit_global,
+      .push_const_addr_format = nir_address_format_logical,
+      .shared_addr_format = nir_address_format_32bit_offset,
+   };
+
+   result = vk_pipeline_shader_stage_to_nir(&pdevice->vk, sinfo,
+                                            &spirv_options, pdevice->physical_device->drv_options[stage],
+                                            NULL, &nir);
+   if (result != VK_SUCCESS)
+      return NULL;
+   
+   // Debug print for NIR
+   // nir_print_shader(nir, stdout);
+
+   const struct nir_lower_sysvals_to_varyings_options sysvals_to_varyings = {
+      .frag_coord = true,
+      .point_coord = true,
+   };
+   NIR_PASS_V(nir, nir_lower_sysvals_to_varyings, &sysvals_to_varyings);
+
+   struct nir_lower_subgroups_options subgroup_opts = {0};
+   subgroup_opts.lower_quad = true;
+   subgroup_opts.ballot_components = 1;
+   subgroup_opts.ballot_bit_size = 32;
+   NIR_PASS_V(nir, nir_lower_subgroups, &subgroup_opts);
+
+   if (stage == MESA_SHADER_FRAGMENT)
+      lvp_lower_input_attachments(nir, false);
+   NIR_PASS_V(nir, nir_lower_system_values);
+   NIR_PASS_V(nir, nir_lower_is_helper_invocation);
+   NIR_PASS_V(nir, lower_demote);
+   NIR_PASS_V(nir, nir_lower_compute_system_values, NULL);
+
+   NIR_PASS_V(nir, nir_remove_dead_variables,
+              nir_var_uniform | nir_var_image, NULL);
+
+   scan_pipeline_info(pipeline, nir);
+   optimize(nir);
+   nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+   // lvp_lower_pipeline_layout(pipeline->device, pipeline->layout, nir);
+
+   NIR_PASS_V(nir, nir_lower_io_to_temporaries, nir_shader_get_entrypoint(nir), true, true);
+   NIR_PASS_V(nir, nir_split_var_copies);
+
+   NIR_PASS_V(nir, nir_lower_global_vars_to_local);
+   NIR_PASS_V(nir, nir_lower_var_copies);
+   // NIR_PASS_V(nir, nir_lower_load_const_to_scalar);
+   NIR_PASS_V(nir, nir_lower_system_values);
+
+   const nir_lower_tex_options tex_options = {
+      .lower_txp = ~0,
+      .lower_txf_offset = true,
+      .lower_rect_offset = true,
+      .lower_txd_cube_map = true,
+      .lower_txd_3d = true,
+      .lower_txd_array = true,
+      .lower_txb_shadow_clamp = true,
+      .lower_txd_shadow_clamp = true,
+      .lower_txd_offset_clamp = true,
+      .lower_tg4_offsets = true,
+      .lower_txs_lod = true,
+      .lower_invalid_implicit_lod = true,
+   };
+
+   NIR_PASS_V(nir, nir_lower_tex, &tex_options);
+   NIR_PASS_V(nir, nir_normalize_cubemap_coords);
+
+   const nir_lower_subgroups_options subgroups_options = {
+      .ballot_bit_size = 32,
+      .ballot_components = 1,
+      .lower_to_scalar = true,
+      .lower_relative_shuffle = true,
+      .lower_quad_broadcast_dynamic = true,
+      .lower_elect = true,
+   };
+   NIR_PASS_V(nir, nir_lower_subgroups, &subgroups_options);
+   NIR_PASS_V(nir, nir_lower_indirect_derefs, nir_var_function_temp, 16);
+   NIR_PASS_V(nir, nir_lower_array_deref_of_vec,
+       nir_var_mem_ubo | nir_var_mem_ssbo,
+       nir_lower_direct_array_deref_of_vec_load);
+   NIR_PASS_V(nir, nir_split_array_vars, nir_var_function_temp);
+     
+   NIR_PASS_V(nir, nir_shrink_vec_array_vars, nir_var_function_temp);
+   // NIR_PASS_V(nir, nir_opt_deref);
+   NIR_PASS_V(nir, nir_lower_vars_to_ssa);
+   NIR_PASS_V(nir, nir_lower_phis_to_scalar, true);
+
+   const nir_lower_image_options image_options = {
+      .lower_cube_size = true,
+      .lower_to_fragment_mask_load_amd = true,
+   };
+
+   NIR_PASS_V(nir, nir_lower_image, &image_options);
+
+
+   return nir;
 }
 
-static VkResult
-lvp_ray_tracing_pipeline_init(
-   struct lvp_pipeline *pipeline,
-   struct lvp_device *device,
-   struct lvp_pipeline_cache *cache,
-   const VkRayTracingPipelineCreateInfoKHR *pCreateInfo)
+VkResult
+lvp_ray_tracing_pipeline_init(struct lvp_pipeline *pipeline,
+                           struct lvp_device *device,
+                           struct lvp_pipeline_cache *cache,
+                           const VkRayTracingPipelineCreateInfoKHR *pCreateInfo)
 {
+   pipeline->device = device;
+   pipeline->layout = lvp_pipeline_layout_from_handle(pCreateInfo->layout);
+   vk_pipeline_layout_ref(&pipeline->layout->vk);
+   pipeline->force_min_sample = false;
+
+   pipeline->mem_ctx = ralloc_context(NULL);
+   // pipeline->is_compute_pipeline = true;
+
    return VK_SUCCESS;
 }
