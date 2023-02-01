@@ -1095,40 +1095,43 @@ vsim_shader_spirv_to_nir(struct lvp_pipeline *pipeline, const VkPipelineShaderSt
    const struct spirv_to_nir_options spirv_options = {
       .environment = NIR_SPIRV_VULKAN,
       .caps = {
-         .float64 = (pdevice->pscreen->get_param(pdevice->pscreen, PIPE_CAP_DOUBLES) == 1),
-         .int16 = true,
-         .int64 = (pdevice->pscreen->get_param(pdevice->pscreen, PIPE_CAP_INT64) == 1),
-         .tessellation = true,
-         .float_controls = true,
+         .demote_to_helper_invocation = true,
+         .device_group = true,
+         .descriptor_array_dynamic_indexing = true,
+         .descriptor_array_non_uniform_indexing = true,
+         .draw_parameters = true,
+         .float16 = true,
          .float32_atomic_add = true,
+         .float64 = (pdevice->pscreen->get_param(pdevice->pscreen, PIPE_CAP_DOUBLES) == 1),
+         .float_controls = true,
+         .geometry_streams = true,
          .image_ms_array = true,
          .image_read_without_format = true,
          .image_write_without_format = true,
-         .storage_image_ms = true,
-         .geometry_streams = true,
-         .storage_8bit = true,
-         .storage_16bit = true,
-         .variable_pointers = true,
-         .stencil_export = true,
-         .post_depth_coverage = true,
-         .transform_feedback = true,
-         .device_group = true,
-         .draw_parameters = true,
-         .shader_viewport_index_layer = true,
-         .shader_clock = true,
+         .int8 = true,
+         .int16 = true,
+         .int64 = (pdevice->pscreen->get_param(pdevice->pscreen, PIPE_CAP_INT64) == 1),
+         .int64_atomics = true,
          .multiview = true,
          .physical_storage_buffer_address = true,
-         .int64_atomics = true,
+         .post_depth_coverage = true,
+         .ray_tracing = true,
+         .shader_clock = true,
+         .shader_viewport_index_layer = true,
+         .stencil_export = true,
+         .storage_image_ms = true,
+         .storage_8bit = true,
+         .storage_16bit = true,
          .subgroup_arithmetic = true,
          .subgroup_basic = true,
          .subgroup_ballot = true,
          .subgroup_quad = true,
          .subgroup_vote = true,
+         .tessellation = true,
+         .transform_feedback = true,
+         .variable_pointers = true,
          .vk_memory_model = true,
          .vk_memory_model_device_scope = true,
-         .int8 = true,
-         .float16 = true,
-         .demote_to_helper_invocation = true,
       },
       .ubo_addr_format = nir_address_format_32bit_index_offset,
       .ssbo_addr_format = nir_address_format_32bit_index_offset,
@@ -1174,30 +1177,11 @@ vsim_shader_spirv_to_nir(struct lvp_pipeline *pipeline, const VkPipelineShaderSt
    // lvp_lower_pipeline_layout(pipeline->device, pipeline->layout, nir);
 
    NIR_PASS_V(nir, nir_lower_io_to_temporaries, nir_shader_get_entrypoint(nir), true, true);
-   NIR_PASS_V(nir, nir_split_var_copies);
-
    NIR_PASS_V(nir, nir_lower_global_vars_to_local);
+   NIR_PASS_V(nir, nir_split_var_copies);
+   NIR_PASS_V(nir, nir_split_struct_vars, nir_var_function_temp);
    NIR_PASS_V(nir, nir_lower_var_copies);
-   // NIR_PASS_V(nir, nir_lower_load_const_to_scalar);
    NIR_PASS_V(nir, nir_lower_system_values);
-
-   const nir_lower_tex_options tex_options = {
-      .lower_txp = ~0,
-      .lower_txf_offset = true,
-      .lower_rect_offset = true,
-      .lower_txd_cube_map = true,
-      .lower_txd_3d = true,
-      .lower_txd_array = true,
-      .lower_txb_shadow_clamp = true,
-      .lower_txd_shadow_clamp = true,
-      .lower_txd_offset_clamp = true,
-      .lower_tg4_offsets = true,
-      .lower_txs_lod = true,
-      .lower_invalid_implicit_lod = true,
-   };
-
-   NIR_PASS_V(nir, nir_lower_tex, &tex_options);
-   NIR_PASS_V(nir, nir_normalize_cubemap_coords);
 
    const nir_lower_subgroups_options subgroups_options = {
       .ballot_bit_size = 32,
@@ -1215,17 +1199,16 @@ vsim_shader_spirv_to_nir(struct lvp_pipeline *pipeline, const VkPipelineShaderSt
    NIR_PASS_V(nir, nir_split_array_vars, nir_var_function_temp);
      
    NIR_PASS_V(nir, nir_shrink_vec_array_vars, nir_var_function_temp);
-   // NIR_PASS_V(nir, nir_opt_deref);
+   NIR_PASS_V(nir, nir_opt_deref);
    NIR_PASS_V(nir, nir_lower_vars_to_ssa);
    NIR_PASS_V(nir, nir_lower_phis_to_scalar, true);
 
-   const nir_lower_image_options image_options = {
-      .lower_cube_size = true,
-      .lower_to_fragment_mask_load_amd = true,
-   };
-
-   NIR_PASS_V(nir, nir_lower_image, &image_options);
-
+   NIR_PASS_V(nir, nir_opt_intrinsics);
+   NIR_PASS_V(nir, nir_opt_idiv_const, 32);
+   NIR_PASS_V(nir, nir_opt_algebraic);
+   NIR_PASS_V(nir, nir_lower_constant_convert_alu_types);
+   NIR_PASS_V(nir, nir_opt_constant_folding);
+   NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_all, NULL);
 
    return nir;
 }
