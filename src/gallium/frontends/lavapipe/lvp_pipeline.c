@@ -1238,7 +1238,6 @@ lvp_ray_tracing_pipeline_init(struct lvp_pipeline *pipeline,
    vk_pipeline_layout_ref(&pipeline->layout->vk);
    pipeline->force_min_sample = false;
 
-   pipeline->mem_ctx = ralloc_context(NULL);
    // pipeline->is_compute_pipeline = true;
 
    return VK_SUCCESS;

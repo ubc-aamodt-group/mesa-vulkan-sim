@@ -153,7 +153,7 @@ vsim_compile_ray_tracing_pipeline(
          translate_nir_to_ptx(stages[i].nir, shaderPaths[i]);
       }
 
-      pipeline->pipeline_nir[i] = stages[i].nir;
+      pipeline->pipeline_nir[i]->nir = stages[i].nir;
    }
 
    // Vulkan-Sim additions
