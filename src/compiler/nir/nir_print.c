@@ -4538,14 +4538,24 @@ print_ssa_undef_instr_as_ptx(nir_ssa_undef_instr* instr, print_state *state, ssa
    // PTX Code
    print_ptx_reg_decl(state, instr->def.num_components, FLOAT, instr->def.bit_size);
    print_ssa_use_as_ptx(&instr->def, state);
-   fprintf(fp, ";\n\t");
 
-   fprintf(fp, "load_const ");
-   print_ssa_use_as_ptx(&instr->def, state);
-   fprintf(fp, ", 0F000000ff;");
+   if (instr->def.num_components < 2) {
+      fprintf(fp, ";\n\t");
+      fprintf(fp, "load_const ");
+      print_ssa_use_as_ptx(&instr->def, state);
+      fprintf(fp, ", 0F000000ff");
+   }
+   else {
+      for (unsigned i=0; i<instr->def.num_components; i++) {
+         fprintf(fp, ";\n\t");
+         fprintf(fp, "load_const ");
+         print_ssa_def_as_ptx(&instr->def, state, i);
+         fprintf(fp, ", 0F000000ff");
+      }
+   }
 
    // Original NIR
-   fprintf(fp, "\t// ");
+   fprintf(fp, ";\t// ");
    print_ssa_def(&instr->def, state);
    fprintf(fp, " = undefined");
 }
