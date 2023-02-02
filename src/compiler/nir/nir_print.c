@@ -3457,19 +3457,19 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
                break;
             case INT:
                fprintf(fp, "mov.s%d ", instr->dest.dest.ssa.bit_size);
-               ssa_register_info[instr->dest.dest.ssa.index].type = UINT;
+               ssa_register_info[instr->dest.dest.ssa.index].type = INT;
                break;
             case FLOAT:
                fprintf(fp, "mov.f%d ", instr->dest.dest.ssa.bit_size);
-               ssa_register_info[instr->dest.dest.ssa.index].type = UINT;
+               ssa_register_info[instr->dest.dest.ssa.index].type = FLOAT;
                break;
             case BITS:
                fprintf(fp, "mov.b%d ", instr->dest.dest.ssa.bit_size);
-               ssa_register_info[instr->dest.dest.ssa.index].type = UINT;
+               ssa_register_info[instr->dest.dest.ssa.index].type = BITS;
                break;
             case PREDICATE:
                fprintf(fp, "mov.pred ");
-               ssa_register_info[instr->dest.dest.ssa.index].type = UINT;
+               ssa_register_info[instr->dest.dest.ssa.index].type = PREDICATE;
                break;
             case UNDEF:
                printf("Should not be in here!\n");
@@ -3521,9 +3521,11 @@ print_alu_instr_as_ptx(nir_alu_instr *instr, print_state *state, ssa_reg_info *s
       fprintf(fp, ";");
    }
    else { // Special case to handle vec2, vec3, etc...
-     int src_reg_idx = instr->src[0].src.ssa->index;
-     val_type ssa_reg_type = ssa_register_info[src_reg_idx].type;
-     int num_bits = ssa_register_info[src_reg_idx].num_bits;
+      int src_reg_idx = instr->src[0].src.ssa->index;
+      val_type ssa_reg_type = ssa_register_info[src_reg_idx].type;
+      int num_bits = ssa_register_info[src_reg_idx].num_bits;
+
+      ssa_register_info[instr->dest.dest.ssa.index].type = ssa_reg_type;
 
       print_ptx_reg_decl(state, instr->dest.dest.ssa.num_components, ssa_reg_type, instr->dest.dest.ssa.bit_size);
       print_alu_dest_as_ptx_no_pos(&instr->dest, state);
