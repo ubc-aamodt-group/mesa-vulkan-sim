@@ -179,7 +179,7 @@ radv_pipeline_destroy(struct radv_device *device, struct radv_pipeline *pipeline
       radv_pipeline_layout_finish(device, &gfx_pipeline_lib->layout);
 
       for (unsigned i = 0; i < MESA_VULKAN_SHADER_STAGES; ++i) {
-         ralloc_free(pipeline->retained_shaders[i].nir);
+         ralloc_free(gfx_pipeline_lib->base.retained_shaders[i].nir);
       }
 
       if (gfx_pipeline_lib->base.ps_epilog)
@@ -277,128 +277,11 @@ radv_pipeline_init_scratch(const struct radv_device *device, struct radv_pipelin
    pipeline->max_waves = max_waves;
 }
 
-static uint32_t
-si_translate_blend_function(VkBlendOp op)
-{
-   switch (op) {
-   case VK_BLEND_OP_ADD:
-      return V_028780_COMB_DST_PLUS_SRC;
-   case VK_BLEND_OP_SUBTRACT:
-      return V_028780_COMB_SRC_MINUS_DST;
-   case VK_BLEND_OP_REVERSE_SUBTRACT:
-      return V_028780_COMB_DST_MINUS_SRC;
-   case VK_BLEND_OP_MIN:
-      return V_028780_COMB_MIN_DST_SRC;
-   case VK_BLEND_OP_MAX:
-      return V_028780_COMB_MAX_DST_SRC;
-   default:
-      return 0;
-   }
-}
-
-static uint32_t
-si_translate_blend_factor(enum amd_gfx_level gfx_level, VkBlendFactor factor)
-{
-   switch (factor) {
-   case VK_BLEND_FACTOR_ZERO:
-      return V_028780_BLEND_ZERO;
-   case VK_BLEND_FACTOR_ONE:
-      return V_028780_BLEND_ONE;
-   case VK_BLEND_FACTOR_SRC_COLOR:
-      return V_028780_BLEND_SRC_COLOR;
-   case VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR:
-      return V_028780_BLEND_ONE_MINUS_SRC_COLOR;
-   case VK_BLEND_FACTOR_DST_COLOR:
-      return V_028780_BLEND_DST_COLOR;
-   case VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR:
-      return V_028780_BLEND_ONE_MINUS_DST_COLOR;
-   case VK_BLEND_FACTOR_SRC_ALPHA:
-      return V_028780_BLEND_SRC_ALPHA;
-   case VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA:
-      return V_028780_BLEND_ONE_MINUS_SRC_ALPHA;
-   case VK_BLEND_FACTOR_DST_ALPHA:
-      return V_028780_BLEND_DST_ALPHA;
-   case VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA:
-      return V_028780_BLEND_ONE_MINUS_DST_ALPHA;
-   case VK_BLEND_FACTOR_CONSTANT_COLOR:
-      return gfx_level >= GFX11 ? V_028780_BLEND_CONSTANT_COLOR_GFX11
-                                : V_028780_BLEND_CONSTANT_COLOR_GFX6;
-   case VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR:
-      return gfx_level >= GFX11 ? V_028780_BLEND_ONE_MINUS_CONSTANT_COLOR_GFX11
-                                 : V_028780_BLEND_ONE_MINUS_CONSTANT_COLOR_GFX6;
-   case VK_BLEND_FACTOR_CONSTANT_ALPHA:
-      return gfx_level >= GFX11 ? V_028780_BLEND_CONSTANT_ALPHA_GFX11
-                                 : V_028780_BLEND_CONSTANT_ALPHA_GFX6;
-   case VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA:
-      return gfx_level >= GFX11 ? V_028780_BLEND_ONE_MINUS_CONSTANT_ALPHA_GFX11
-                                 : V_028780_BLEND_ONE_MINUS_CONSTANT_ALPHA_GFX6;
-   case VK_BLEND_FACTOR_SRC_ALPHA_SATURATE:
-      return V_028780_BLEND_SRC_ALPHA_SATURATE;
-   case VK_BLEND_FACTOR_SRC1_COLOR:
-      return gfx_level >= GFX11 ? V_028780_BLEND_SRC1_COLOR_GFX11 : V_028780_BLEND_SRC1_COLOR_GFX6;
-   case VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR:
-      return gfx_level >= GFX11 ? V_028780_BLEND_INV_SRC1_COLOR_GFX11
-                                 : V_028780_BLEND_INV_SRC1_COLOR_GFX6;
-   case VK_BLEND_FACTOR_SRC1_ALPHA:
-      return gfx_level >= GFX11 ? V_028780_BLEND_SRC1_ALPHA_GFX11 : V_028780_BLEND_SRC1_ALPHA_GFX6;
-   case VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA:
-      return gfx_level >= GFX11 ? V_028780_BLEND_INV_SRC1_ALPHA_GFX11
-                                 : V_028780_BLEND_INV_SRC1_ALPHA_GFX6;
-   default:
-      return 0;
-   }
-}
-
-static uint32_t
-si_translate_blend_opt_function(VkBlendOp op)
-{
-   switch (op) {
-   case VK_BLEND_OP_ADD:
-      return V_028760_OPT_COMB_ADD;
-   case VK_BLEND_OP_SUBTRACT:
-      return V_028760_OPT_COMB_SUBTRACT;
-   case VK_BLEND_OP_REVERSE_SUBTRACT:
-      return V_028760_OPT_COMB_REVSUBTRACT;
-   case VK_BLEND_OP_MIN:
-      return V_028760_OPT_COMB_MIN;
-   case VK_BLEND_OP_MAX:
-      return V_028760_OPT_COMB_MAX;
-   default:
-      return V_028760_OPT_COMB_BLEND_DISABLED;
-   }
-}
-
-static uint32_t
-si_translate_blend_opt_factor(VkBlendFactor factor, bool is_alpha)
-{
-   switch (factor) {
-   case VK_BLEND_FACTOR_ZERO:
-      return V_028760_BLEND_OPT_PRESERVE_NONE_IGNORE_ALL;
-   case VK_BLEND_FACTOR_ONE:
-      return V_028760_BLEND_OPT_PRESERVE_ALL_IGNORE_NONE;
-   case VK_BLEND_FACTOR_SRC_COLOR:
-      return is_alpha ? V_028760_BLEND_OPT_PRESERVE_A1_IGNORE_A0
-                      : V_028760_BLEND_OPT_PRESERVE_C1_IGNORE_C0;
-   case VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR:
-      return is_alpha ? V_028760_BLEND_OPT_PRESERVE_A0_IGNORE_A1
-                      : V_028760_BLEND_OPT_PRESERVE_C0_IGNORE_C1;
-   case VK_BLEND_FACTOR_SRC_ALPHA:
-      return V_028760_BLEND_OPT_PRESERVE_A1_IGNORE_A0;
-   case VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA:
-      return V_028760_BLEND_OPT_PRESERVE_A0_IGNORE_A1;
-   case VK_BLEND_FACTOR_SRC_ALPHA_SATURATE:
-      return is_alpha ? V_028760_BLEND_OPT_PRESERVE_ALL_IGNORE_NONE
-                      : V_028760_BLEND_OPT_PRESERVE_NONE_IGNORE_A0;
-   default:
-      return V_028760_BLEND_OPT_PRESERVE_NONE_IGNORE_NONE;
-   }
-}
-
 /**
  * Get rid of DST in the blend factors by commuting the operands:
  *    func(src * DST, dst * 0) ---> func(src * 0, dst * SRC)
  */
-static void
+void
 si_blend_remove_dst(VkBlendOp *func, VkBlendFactor *src_factor, VkBlendFactor *dst_factor,
                     VkBlendFactor expected_dst, VkBlendFactor replacement_src)
 {
@@ -411,29 +294,6 @@ si_blend_remove_dst(VkBlendOp *func, VkBlendFactor *src_factor, VkBlendFactor *d
          *func = VK_BLEND_OP_REVERSE_SUBTRACT;
       else if (*func == VK_BLEND_OP_REVERSE_SUBTRACT)
          *func = VK_BLEND_OP_SUBTRACT;
-   }
-}
-
-static bool
-si_blend_factor_uses_dst(VkBlendFactor factor)
-{
-   return factor == VK_BLEND_FACTOR_DST_COLOR || factor == VK_BLEND_FACTOR_DST_ALPHA ||
-          factor == VK_BLEND_FACTOR_SRC_ALPHA_SATURATE ||
-          factor == VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA ||
-          factor == VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
-}
-
-static bool
-is_dual_src(VkBlendFactor factor)
-{
-   switch (factor) {
-   case VK_BLEND_FACTOR_SRC1_COLOR:
-   case VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR:
-   case VK_BLEND_FACTOR_SRC1_ALPHA:
-   case VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA:
-      return true;
-   default:
-      return false;
    }
 }
 
@@ -570,7 +430,7 @@ radv_format_meta_fs_key(struct radv_device *device, VkFormat format)
    }
 }
 
-static bool
+bool
 radv_can_enable_dual_src(const struct vk_color_blend_attachment_state *att)
 {
    VkBlendOp eqRGB = att->color_blend_op;
@@ -582,121 +442,42 @@ radv_can_enable_dual_src(const struct vk_color_blend_attachment_state *att)
    bool eqRGB_minmax = eqRGB == VK_BLEND_OP_MIN || eqRGB == VK_BLEND_OP_MAX;
    bool eqA_minmax = eqA == VK_BLEND_OP_MIN || eqA == VK_BLEND_OP_MAX;
 
-   if (!eqRGB_minmax && (is_dual_src(srcRGB) || is_dual_src(dstRGB)))
+   if (!eqRGB_minmax && (radv_is_dual_src(srcRGB) || radv_is_dual_src(dstRGB)))
       return true;
-   if (!eqA_minmax && (is_dual_src(srcA) || is_dual_src(dstA)))
+   if (!eqA_minmax && (radv_is_dual_src(srcA) || radv_is_dual_src(dstA)))
       return true;
    return false;
 }
 
+static bool
+radv_pipeline_needs_dynamic_ps_epilog(const struct radv_graphics_pipeline *pipeline)
+{
+   /* These dynamic states need to compile PS epilogs on-demand. */
+   return !!(pipeline->dynamic_states & (RADV_DYNAMIC_COLOR_BLEND_ENABLE |
+                                         RADV_DYNAMIC_COLOR_WRITE_MASK |
+                                         RADV_DYNAMIC_ALPHA_TO_COVERAGE_ENABLE |
+                                         RADV_DYNAMIC_COLOR_BLEND_EQUATION));
+}
+
 static struct radv_blend_state
 radv_pipeline_init_blend_state(struct radv_graphics_pipeline *pipeline,
-                               const struct vk_graphics_pipeline_state *state,
-                               const struct radv_pipeline_key *key)
+                               const struct vk_graphics_pipeline_state *state)
 {
-   const struct radv_device *device = pipeline->base.device;
+   const struct radv_shader *ps = pipeline->base.shaders[MESA_SHADER_FRAGMENT];
    struct radv_blend_state blend = {0};
-   const enum amd_gfx_level gfx_level = device->physical_device->rad_info.gfx_level;
-   int i;
+   unsigned spi_shader_col_format = 0;
 
-   if (state->cb) {
-      for (i = 0; i < state->cb->attachment_count; i++) {
-         unsigned blend_cntl = 0;
-         unsigned srcRGB_opt, dstRGB_opt, srcA_opt, dstA_opt;
-         VkBlendOp eqRGB = state->cb->attachments[i].color_blend_op;
-         VkBlendFactor srcRGB = state->cb->attachments[i].src_color_blend_factor;
-         VkBlendFactor dstRGB = state->cb->attachments[i].dst_color_blend_factor;
-         VkBlendOp eqA = state->cb->attachments[i].alpha_blend_op;
-         VkBlendFactor srcA = state->cb->attachments[i].src_alpha_blend_factor;
-         VkBlendFactor dstA = state->cb->attachments[i].dst_alpha_blend_factor;
+   if (radv_pipeline_needs_dynamic_ps_epilog(pipeline))
+      return blend;
 
-         if (!state->cb->attachments[i].write_mask)
-            continue;
-
-         /* Ignore other blend targets if dual-source blending
-          * is enabled to prevent wrong behaviour.
-          */
-         if (i > 0 && key->ps.epilog.mrt0_is_dual_src)
-            continue;
-
-         if (!state->cb->attachments[i].blend_enable) {
-            pipeline->cb_blend_control[i] = blend_cntl;
-            continue;
-         }
-
-         if (eqRGB == VK_BLEND_OP_MIN || eqRGB == VK_BLEND_OP_MAX) {
-            srcRGB = VK_BLEND_FACTOR_ONE;
-            dstRGB = VK_BLEND_FACTOR_ONE;
-         }
-         if (eqA == VK_BLEND_OP_MIN || eqA == VK_BLEND_OP_MAX) {
-            srcA = VK_BLEND_FACTOR_ONE;
-            dstA = VK_BLEND_FACTOR_ONE;
-         }
-
-         /* Blending optimizations for RB+.
-          * These transformations don't change the behavior.
-          *
-          * First, get rid of DST in the blend factors:
-          *    func(src * DST, dst * 0) ---> func(src * 0, dst * SRC)
-          */
-         si_blend_remove_dst(&eqRGB, &srcRGB, &dstRGB, VK_BLEND_FACTOR_DST_COLOR,
-                             VK_BLEND_FACTOR_SRC_COLOR);
-
-         si_blend_remove_dst(&eqA, &srcA, &dstA, VK_BLEND_FACTOR_DST_COLOR,
-                             VK_BLEND_FACTOR_SRC_COLOR);
-
-         si_blend_remove_dst(&eqA, &srcA, &dstA, VK_BLEND_FACTOR_DST_ALPHA,
-                             VK_BLEND_FACTOR_SRC_ALPHA);
-
-         /* Look up the ideal settings from tables. */
-         srcRGB_opt = si_translate_blend_opt_factor(srcRGB, false);
-         dstRGB_opt = si_translate_blend_opt_factor(dstRGB, false);
-         srcA_opt = si_translate_blend_opt_factor(srcA, true);
-         dstA_opt = si_translate_blend_opt_factor(dstA, true);
-
-         /* Handle interdependencies. */
-         if (si_blend_factor_uses_dst(srcRGB))
-            dstRGB_opt = V_028760_BLEND_OPT_PRESERVE_NONE_IGNORE_NONE;
-         if (si_blend_factor_uses_dst(srcA))
-            dstA_opt = V_028760_BLEND_OPT_PRESERVE_NONE_IGNORE_NONE;
-
-         if (srcRGB == VK_BLEND_FACTOR_SRC_ALPHA_SATURATE &&
-             (dstRGB == VK_BLEND_FACTOR_ZERO || dstRGB == VK_BLEND_FACTOR_SRC_ALPHA ||
-              dstRGB == VK_BLEND_FACTOR_SRC_ALPHA_SATURATE))
-            dstRGB_opt = V_028760_BLEND_OPT_PRESERVE_NONE_IGNORE_A0;
-
-         /* Set the final value. */
-         pipeline->sx_mrt_blend_opt[i] =
-            S_028760_COLOR_SRC_OPT(srcRGB_opt) | S_028760_COLOR_DST_OPT(dstRGB_opt) |
-            S_028760_COLOR_COMB_FCN(si_translate_blend_opt_function(eqRGB)) |
-            S_028760_ALPHA_SRC_OPT(srcA_opt) | S_028760_ALPHA_DST_OPT(dstA_opt) |
-            S_028760_ALPHA_COMB_FCN(si_translate_blend_opt_function(eqA));
-
-         blend_cntl |= S_028780_COLOR_COMB_FCN(si_translate_blend_function(eqRGB));
-         blend_cntl |= S_028780_COLOR_SRCBLEND(si_translate_blend_factor(gfx_level, srcRGB));
-         blend_cntl |= S_028780_COLOR_DESTBLEND(si_translate_blend_factor(gfx_level, dstRGB));
-         if (srcA != srcRGB || dstA != dstRGB || eqA != eqRGB) {
-            blend_cntl |= S_028780_SEPARATE_ALPHA_BLEND(1);
-            blend_cntl |= S_028780_ALPHA_COMB_FCN(si_translate_blend_function(eqA));
-            blend_cntl |= S_028780_ALPHA_SRCBLEND(si_translate_blend_factor(gfx_level, srcA));
-            blend_cntl |= S_028780_ALPHA_DESTBLEND(si_translate_blend_factor(gfx_level, dstA));
-         }
-         pipeline->cb_blend_control[i] = blend_cntl;
-      }
+   if (ps->info.ps.has_epilog) {
+      spi_shader_col_format = pipeline->ps_epilog->spi_shader_col_format;
+   } else {
+      spi_shader_col_format = ps->info.ps.spi_shader_col_format;
    }
 
-   if (device->physical_device->rad_info.has_rbplus) {
-      /* Disable RB+ blend optimizations for dual source blending. */
-      if (key->ps.epilog.mrt0_is_dual_src) {
-         for (i = 0; i < 8; i++) {
-            pipeline->sx_mrt_blend_opt[i] = S_028760_COLOR_COMB_FCN(V_028760_OPT_COMB_NONE) |
-                                            S_028760_ALPHA_COMB_FCN(V_028760_OPT_COMB_NONE);
-         }
-      }
-   }
-
-   blend.cb_shader_mask = ac_get_cb_shader_mask(key->ps.epilog.spi_shader_col_format);
-   blend.spi_shader_col_format = key->ps.epilog.spi_shader_col_format;
+   blend.cb_shader_mask = ac_get_cb_shader_mask(spi_shader_col_format);
+   blend.spi_shader_col_format = spi_shader_col_format;
 
    return blend;
 }
@@ -914,10 +695,17 @@ radv_dynamic_state_mask(VkDynamicState state)
       return RADV_DYNAMIC_RASTERIZATION_SAMPLES;
    case VK_DYNAMIC_STATE_LINE_RASTERIZATION_MODE_EXT:
       return RADV_DYNAMIC_LINE_RASTERIZATION_MODE;
+   case VK_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT:
+      return RADV_DYNAMIC_COLOR_BLEND_EQUATION;
    default:
       unreachable("Unhandled dynamic state");
    }
 }
+
+#define RADV_DYNAMIC_CB_STATES \
+   (RADV_DYNAMIC_LOGIC_OP_ENABLE | RADV_DYNAMIC_LOGIC_OP | RADV_DYNAMIC_COLOR_WRITE_ENABLE | \
+    RADV_DYNAMIC_COLOR_WRITE_MASK | RADV_DYNAMIC_COLOR_BLEND_ENABLE | \
+    RADV_DYNAMIC_COLOR_BLEND_EQUATION | RADV_DYNAMIC_BLEND_CONSTANTS)
 
 static bool
 radv_pipeline_is_blend_enabled(const struct radv_graphics_pipeline *pipeline,
@@ -928,6 +716,10 @@ radv_pipeline_is_blend_enabled(const struct radv_graphics_pipeline *pipeline,
          if (cb->attachments[i].write_mask && cb->attachments[i].blend_enable)
             return true;
       }
+   } else {
+      /* When all color blend states are dynamic, it's allowed to be NULL. */
+      if ((pipeline->dynamic_states & RADV_DYNAMIC_CB_STATES) == RADV_DYNAMIC_CB_STATES)
+         return true;
    }
 
    return false;
@@ -993,7 +785,7 @@ radv_pipeline_needed_dynamic_state(const struct radv_graphics_pipeline *pipeline
       states &= ~RADV_DYNAMIC_BLEND_CONSTANTS;
 
    if (!has_color_att)
-      states &= ~RADV_DYNAMIC_COLOR_WRITE_ENABLE;
+      states &= ~RADV_DYNAMIC_CB_STATES;
 
    if (!(pipeline->active_stages & VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT))
       states &= ~(RADV_DYNAMIC_PATCH_CONTROL_POINTS | RADV_DYNAMIC_TESS_DOMAIN_ORIGIN);
@@ -1142,6 +934,13 @@ radv_pipeline_import_graphics_info(struct radv_graphics_pipeline *pipeline,
    if (result != VK_SUCCESS)
       return result;
 
+   if (pipeline->active_stages & VK_SHADER_STAGE_MESH_BIT_EXT) {
+      pipeline->last_vgt_api_stage = MESA_SHADER_MESH;
+   } else {
+      pipeline->last_vgt_api_stage =
+         util_last_bit(pipeline->active_stages & BITFIELD_MASK(MESA_SHADER_FRAGMENT)) - 1;
+   }
+
    if (lib_flags == ALL_GRAPHICS_LIB_FLAGS) {
       radv_pipeline_layout_finish(device, layout);
       radv_pipeline_layout_init(device, layout, false /* independent_sets */);
@@ -1203,15 +1002,18 @@ radv_graphics_pipeline_import_lib(struct radv_graphics_pipeline *pipeline,
 
    vk_graphics_pipeline_state_merge(state, &lib->graphics_state);
 
-   /* Import the NIR shaders (after SPIRV->NIR). */
-   for (uint32_t s = 0; s < ARRAY_SIZE(lib->base.base.shaders); s++) {
-      if (!lib->base.base.retained_shaders[s].nir)
-         continue;
+   /* When link time optimization is enabled, import the retained NIR shaders from the library.
+    * Otherwise, import the compiled binaries (ie. fast link).
+    */
+   if (link_optimize) {
+      /* Import the NIR shaders (after SPIRV->NIR). */
+      for (uint32_t s = 0; s < ARRAY_SIZE(lib->base.base.shaders); s++) {
+         if (!lib->base.retained_shaders[s].nir)
+            continue;
 
-      pipeline->base.retained_shaders[s] = lib->base.base.retained_shaders[s];
-   }
-
-   if (!link_optimize) {
+         pipeline->retained_shaders[s] = lib->base.retained_shaders[s];
+      }
+   } else {
       /* Import the compiled shaders. */
       for (uint32_t s = 0; s < ARRAY_SIZE(lib->base.base.shaders); s++) {
          if (!lib->base.base.shaders[s])
@@ -1268,15 +1070,43 @@ radv_pipeline_init_dynamic_state(struct radv_graphics_pipeline *pipeline,
                                  const struct vk_graphics_pipeline_state *state)
 {
    uint64_t needed_states = radv_pipeline_needed_dynamic_state(pipeline, state);
+   struct radv_dynamic_state *dynamic = &pipeline->dynamic_state;
    uint64_t states = needed_states;
 
-   pipeline->dynamic_state = default_dynamic_state;
+   /* Initialize non-zero values for default dynamic state. */
+   dynamic->vk.rs.line.width = 1.0f;
+   dynamic->vk.fsr.fragment_size.width = 1u;
+   dynamic->vk.fsr.fragment_size.height = 1u;
+   dynamic->vk.ds.depth.bounds_test.max = 1.0f;
+   dynamic->vk.ds.stencil.front.compare_mask = ~0;
+   dynamic->vk.ds.stencil.front.write_mask = ~0;
+   dynamic->vk.ds.stencil.back.compare_mask = ~0;
+   dynamic->vk.ds.stencil.back.write_mask = ~0;
+   dynamic->vk.ms.rasterization_samples = VK_SAMPLE_COUNT_1_BIT;
+
    pipeline->needed_dynamic_state = needed_states;
 
    states &= ~pipeline->dynamic_states;
 
-   struct radv_dynamic_state *dynamic = &pipeline->dynamic_state;
+   /* Input assembly. */
+   if (states & RADV_DYNAMIC_PRIMITIVE_TOPOLOGY) {
+      dynamic->vk.ia.primitive_topology = si_translate_prim(state->ia->primitive_topology);
+   }
 
+   if (states & RADV_DYNAMIC_PRIMITIVE_RESTART_ENABLE) {
+      dynamic->vk.ia.primitive_restart_enable = state->ia->primitive_restart_enable;
+   }
+
+   /* Tessellation. */
+   if (states & RADV_DYNAMIC_PATCH_CONTROL_POINTS) {
+      dynamic->vk.ts.patch_control_points = state->ts->patch_control_points;
+   }
+
+   if (states & RADV_DYNAMIC_TESS_DOMAIN_ORIGIN) {
+      dynamic->vk.ts.domain_origin = state->ts->domain_origin;
+   }
+
+   /* Viewport. */
    if (needed_states & RADV_DYNAMIC_VIEWPORT) {
       dynamic->vk.vp.viewport_count = state->vp->viewport_count;
       if (states & RADV_DYNAMIC_VIEWPORT) {
@@ -1294,6 +1124,19 @@ radv_pipeline_init_dynamic_state(struct radv_graphics_pipeline *pipeline,
       }
    }
 
+   if (states & RADV_DYNAMIC_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE) {
+      dynamic->vk.vp.depth_clip_negative_one_to_one = state->vp->depth_clip_negative_one_to_one;
+   }
+
+   /* Discard rectangles. */
+   if (needed_states & RADV_DYNAMIC_DISCARD_RECTANGLE) {
+      dynamic->vk.dr.rectangle_count = state->dr->rectangle_count;
+      if (states & RADV_DYNAMIC_DISCARD_RECTANGLE) {
+         typed_memcpy(dynamic->vk.dr.rectangles, state->dr->rectangles, state->dr->rectangle_count);
+      }
+   }
+
+   /* Rasterization. */
    if (states & RADV_DYNAMIC_LINE_WIDTH) {
       dynamic->vk.rs.line.width = state->rs->line.width;
    }
@@ -1304,16 +1147,6 @@ radv_pipeline_init_dynamic_state(struct radv_graphics_pipeline *pipeline,
       dynamic->vk.rs.depth_bias.slope = state->rs->depth_bias.slope;
    }
 
-   /* Section 9.2 of the Vulkan 1.0.15 spec says:
-    *
-    *    pColorBlendState is [...] NULL if the pipeline has rasterization
-    *    disabled or if the subpass of the render pass the pipeline is
-    *    created against does not use any color attachments.
-    */
-   if (states & RADV_DYNAMIC_BLEND_CONSTANTS) {
-      typed_memcpy(dynamic->vk.cb.blend_constants, state->cb->blend_constants, 4);
-   }
-
    if (states & RADV_DYNAMIC_CULL_MODE) {
       dynamic->vk.rs.cull_mode = state->rs->cull_mode;
    }
@@ -1322,10 +1155,79 @@ radv_pipeline_init_dynamic_state(struct radv_graphics_pipeline *pipeline,
       dynamic->vk.rs.front_face = state->rs->front_face;
    }
 
-   if (states & RADV_DYNAMIC_PRIMITIVE_TOPOLOGY) {
-      dynamic->vk.ia.primitive_topology = si_translate_prim(state->ia->primitive_topology);
+   if (states & RADV_DYNAMIC_LINE_STIPPLE) {
+      dynamic->vk.rs.line.stipple.factor = state->rs->line.stipple.factor;
+      dynamic->vk.rs.line.stipple.pattern = state->rs->line.stipple.pattern;
    }
 
+   if (states & RADV_DYNAMIC_DEPTH_BIAS_ENABLE) {
+      dynamic->vk.rs.depth_bias.enable = state->rs->depth_bias.enable;
+   }
+
+   if (states & RADV_DYNAMIC_RASTERIZER_DISCARD_ENABLE) {
+      dynamic->vk.rs.rasterizer_discard_enable = state->rs->rasterizer_discard_enable;
+   }
+
+   if (states & RADV_DYNAMIC_POLYGON_MODE) {
+      dynamic->vk.rs.polygon_mode = si_translate_fill(state->rs->polygon_mode);
+   }
+
+   if (states & RADV_DYNAMIC_LINE_STIPPLE_ENABLE) {
+      dynamic->vk.rs.line.stipple.enable = state->rs->line.stipple.enable;
+   }
+
+   if (states & RADV_DYNAMIC_DEPTH_CLIP_ENABLE) {
+      dynamic->vk.rs.depth_clip_enable =
+         state->rs->depth_clip_enable == VK_MESA_DEPTH_CLIP_ENABLE_TRUE;
+   }
+
+   if (states & RADV_DYNAMIC_CONSERVATIVE_RAST_MODE) {
+      dynamic->vk.rs.conservative_mode = state->rs->conservative_mode;
+   }
+
+   if (states & RADV_DYNAMIC_PROVOKING_VERTEX_MODE) {
+      dynamic->vk.rs.provoking_vertex = state->rs->provoking_vertex;
+   }
+
+   if (states & RADV_DYNAMIC_DEPTH_CLAMP_ENABLE) {
+      dynamic->vk.rs.depth_clamp_enable = state->rs->depth_clamp_enable;
+   }
+
+   if (states & RADV_DYNAMIC_LINE_RASTERIZATION_MODE) {
+      dynamic->vk.rs.line.mode = state->rs->line.mode;
+   }
+
+   /* Fragment shading rate. */
+   if (states & RADV_DYNAMIC_FRAGMENT_SHADING_RATE) {
+      dynamic->vk.fsr = *state->fsr;
+   }
+
+   /* Multisample. */
+   if (states & RADV_DYNAMIC_ALPHA_TO_COVERAGE_ENABLE) {
+      dynamic->vk.ms.alpha_to_coverage_enable = state->ms->alpha_to_coverage_enable;
+   }
+
+   if (states & RADV_DYNAMIC_SAMPLE_MASK) {
+      dynamic->vk.ms.sample_mask = state->ms->sample_mask & 0xffff;
+   }
+
+   if (states & RADV_DYNAMIC_RASTERIZATION_SAMPLES) {
+      dynamic->vk.ms.rasterization_samples = state->ms->rasterization_samples;
+   }
+
+   if (states & RADV_DYNAMIC_SAMPLE_LOCATIONS) {
+      unsigned count = state->ms->sample_locations->per_pixel *
+                       state->ms->sample_locations->grid_size.width *
+                       state->ms->sample_locations->grid_size.height;
+
+      dynamic->sample_location.per_pixel = state->ms->sample_locations->per_pixel;
+      dynamic->sample_location.grid_size = state->ms->sample_locations->grid_size;
+      dynamic->sample_location.count = count;
+      typed_memcpy(&dynamic->sample_location.locations[0], state->ms->sample_locations->locations,
+                   count);
+   }
+
+   /* Depth stencil. */
    /* If there is no depthstencil attachment, then don't read
     * pDepthStencilState. The Vulkan spec states that pDepthStencilState may
     * be NULL in this case. Even if pDepthStencilState is non-NULL, there is
@@ -1392,47 +1294,18 @@ radv_pipeline_init_dynamic_state(struct radv_graphics_pipeline *pipeline,
       }
    }
 
-   if (needed_states & RADV_DYNAMIC_DISCARD_RECTANGLE) {
-      dynamic->vk.dr.rectangle_count = state->dr->rectangle_count;
-      if (states & RADV_DYNAMIC_DISCARD_RECTANGLE) {
-         typed_memcpy(dynamic->vk.dr.rectangles, state->dr->rectangles, state->dr->rectangle_count);
-      }
+   /* Color blend. */
+   /* Section 9.2 of the Vulkan 1.0.15 spec says:
+    *
+    *    pColorBlendState is [...] NULL if the pipeline has rasterization
+    *    disabled or if the subpass of the render pass the pipeline is
+    *    created against does not use any color attachments.
+    */
+   if (states & RADV_DYNAMIC_BLEND_CONSTANTS) {
+      typed_memcpy(dynamic->vk.cb.blend_constants, state->cb->blend_constants, 4);
    }
 
-   if (states & RADV_DYNAMIC_SAMPLE_LOCATIONS) {
-      unsigned count = state->ms->sample_locations->per_pixel *
-                       state->ms->sample_locations->grid_size.width *
-                       state->ms->sample_locations->grid_size.height;
-
-      dynamic->sample_location.per_pixel = state->ms->sample_locations->per_pixel;
-      dynamic->sample_location.grid_size = state->ms->sample_locations->grid_size;
-      dynamic->sample_location.count = count;
-      typed_memcpy(&dynamic->sample_location.locations[0], state->ms->sample_locations->locations,
-                   count);
-   }
-
-   if (states & RADV_DYNAMIC_LINE_STIPPLE) {
-      dynamic->vk.rs.line.stipple.factor = state->rs->line.stipple.factor;
-      dynamic->vk.rs.line.stipple.pattern = state->rs->line.stipple.pattern;
-   }
-
-   if (states & RADV_DYNAMIC_FRAGMENT_SHADING_RATE) {
-      dynamic->vk.fsr = *state->fsr;
-   }
-
-   if (states & RADV_DYNAMIC_DEPTH_BIAS_ENABLE) {
-      dynamic->vk.rs.depth_bias.enable = state->rs->depth_bias.enable;
-   }
-
-   if (states & RADV_DYNAMIC_PRIMITIVE_RESTART_ENABLE) {
-      dynamic->vk.ia.primitive_restart_enable = state->ia->primitive_restart_enable;
-   }
-
-   if (states & RADV_DYNAMIC_RASTERIZER_DISCARD_ENABLE) {
-      dynamic->vk.rs.rasterizer_discard_enable = state->rs->rasterizer_discard_enable;
-   }
-
-   if (radv_pipeline_has_color_attachments(state->rp) && states & RADV_DYNAMIC_LOGIC_OP) {
+   if (states & RADV_DYNAMIC_LOGIC_OP) {
       if ((pipeline->dynamic_states & RADV_DYNAMIC_LOGIC_OP_ENABLE) || state->cb->logic_op_enable) {
          dynamic->vk.cb.logic_op = si_translate_blend_logic_op(state->cb->logic_op);
       }
@@ -1442,73 +1315,33 @@ radv_pipeline_init_dynamic_state(struct radv_graphics_pipeline *pipeline,
       dynamic->vk.cb.color_write_enables = state->cb->color_write_enables;
    }
 
-   if (states & RADV_DYNAMIC_PATCH_CONTROL_POINTS) {
-      dynamic->vk.ts.patch_control_points = state->ts->patch_control_points;
-   }
-
-   if (states & RADV_DYNAMIC_POLYGON_MODE) {
-      dynamic->vk.rs.polygon_mode = si_translate_fill(state->rs->polygon_mode);
-   }
-
-   if (states & RADV_DYNAMIC_TESS_DOMAIN_ORIGIN) {
-      dynamic->vk.ts.domain_origin = state->ts->domain_origin;
-   }
-
-   if (radv_pipeline_has_color_attachments(state->rp) && states & RADV_DYNAMIC_LOGIC_OP_ENABLE) {
+   if (states & RADV_DYNAMIC_LOGIC_OP_ENABLE) {
       dynamic->vk.cb.logic_op_enable = state->cb->logic_op_enable;
    }
 
-   if (states & RADV_DYNAMIC_LINE_STIPPLE_ENABLE) {
-      dynamic->vk.rs.line.stipple.enable = state->rs->line.stipple.enable;
-   }
-
-   if (states & RADV_DYNAMIC_ALPHA_TO_COVERAGE_ENABLE) {
-      dynamic->vk.ms.alpha_to_coverage_enable = state->ms->alpha_to_coverage_enable;
-   }
-
-   if (states & RADV_DYNAMIC_SAMPLE_MASK) {
-      dynamic->vk.ms.sample_mask = state->ms->sample_mask & 0xffff;
-   }
-
-   if (states & RADV_DYNAMIC_DEPTH_CLIP_ENABLE) {
-      dynamic->vk.rs.depth_clip_enable =
-         state->rs->depth_clip_enable == VK_MESA_DEPTH_CLIP_ENABLE_TRUE;
-   }
-
-   if (states & RADV_DYNAMIC_CONSERVATIVE_RAST_MODE) {
-      dynamic->vk.rs.conservative_mode = state->rs->conservative_mode;
-   }
-
-   if (states & RADV_DYNAMIC_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE) {
-      dynamic->vk.vp.depth_clip_negative_one_to_one = state->vp->depth_clip_negative_one_to_one;
-   }
-
-   if (states & RADV_DYNAMIC_PROVOKING_VERTEX_MODE) {
-      dynamic->vk.rs.provoking_vertex = state->rs->provoking_vertex;
-   }
-
-   if (states & RADV_DYNAMIC_DEPTH_CLAMP_ENABLE) {
-      dynamic->vk.rs.depth_clamp_enable = state->rs->depth_clamp_enable;
-   }
-
-   if (radv_pipeline_has_color_attachments(state->rp) && states & RADV_DYNAMIC_COLOR_WRITE_MASK) {
+   if (states & RADV_DYNAMIC_COLOR_WRITE_MASK) {
       for (unsigned i = 0; i < state->cb->attachment_count; i++) {
          dynamic->vk.cb.attachments[i].write_mask = state->cb->attachments[i].write_mask;
       }
    }
 
-   if (radv_pipeline_has_color_attachments(state->rp) && states & RADV_DYNAMIC_COLOR_BLEND_ENABLE) {
+   if (states & RADV_DYNAMIC_COLOR_BLEND_ENABLE) {
       for (unsigned i = 0; i < state->cb->attachment_count; i++) {
          dynamic->vk.cb.attachments[i].blend_enable = state->cb->attachments[i].blend_enable;
       }
    }
 
-   if (states & RADV_DYNAMIC_RASTERIZATION_SAMPLES) {
-      dynamic->vk.ms.rasterization_samples = state->ms->rasterization_samples;
-   }
+   if (states & RADV_DYNAMIC_COLOR_BLEND_EQUATION) {
+      for (unsigned i = 0; i < state->cb->attachment_count; i++) {
+         const struct vk_color_blend_attachment_state *att = &state->cb->attachments[i];
 
-   if (states & RADV_DYNAMIC_LINE_RASTERIZATION_MODE) {
-      dynamic->vk.rs.line.mode = state->rs->line.mode;
+         dynamic->vk.cb.attachments[i].src_color_blend_factor = att->src_color_blend_factor;
+         dynamic->vk.cb.attachments[i].dst_color_blend_factor = att->dst_color_blend_factor;
+         dynamic->vk.cb.attachments[i].color_blend_op = att->color_blend_op;
+         dynamic->vk.cb.attachments[i].src_alpha_blend_factor = att->src_alpha_blend_factor;
+         dynamic->vk.cb.attachments[i].dst_alpha_blend_factor = att->dst_alpha_blend_factor;
+         dynamic->vk.cb.attachments[i].alpha_blend_op = att->alpha_blend_op;
+      }
    }
 
    pipeline->dynamic_state.mask = states;
@@ -2265,11 +2098,11 @@ radv_pipeline_link_fs(struct radv_pipeline_stage *fs_stage,
 }
 
 static void
-radv_graphics_pipeline_link(const struct radv_pipeline *pipeline,
+radv_graphics_pipeline_link(const struct radv_graphics_pipeline *pipeline,
                             const struct radv_pipeline_key *pipeline_key,
                             struct radv_pipeline_stage *stages)
 {
-   const struct radv_device *device = pipeline->device;
+   const struct radv_device *device = pipeline->base.device;
 
    /* Walk backwards to link */
    struct radv_pipeline_stage *next_stage = NULL;
@@ -2306,15 +2139,6 @@ radv_graphics_pipeline_link(const struct radv_pipeline *pipeline,
 
       next_stage = &stages[s];
    }
-}
-
-static bool
-radv_pipeline_has_dynamic_ps_epilog(const struct radv_graphics_pipeline *pipeline)
-{
-   /* These dynamic states need to compile PS epilogs on-demand. */
-   return pipeline->dynamic_states & (RADV_DYNAMIC_COLOR_BLEND_ENABLE |
-                                      RADV_DYNAMIC_COLOR_WRITE_MASK |
-                                      RADV_DYNAMIC_ALPHA_TO_COVERAGE_ENABLE);
 }
 
 struct radv_pipeline_key
@@ -2404,7 +2228,6 @@ radv_generate_ps_epilog_key(const struct radv_graphics_pipeline *pipeline,
    key.color_is_int10 = device->physical_device->rad_info.gfx_level < GFX8 ? is_int10 : 0;
    key.enable_mrt_output_nan_fixup = device->instance->enable_mrt_output_nan_fixup ? is_float32 : 0;
    key.mrt0_is_dual_src = state->mrt0_is_dual_src;
-   key.need_src_alpha = state->need_src_alpha;
 
    return key;
 }
@@ -2473,7 +2296,8 @@ radv_pipeline_generate_ps_epilog_key(const struct radv_graphics_pipeline *pipeli
 static struct radv_pipeline_key
 radv_generate_graphics_pipeline_key(const struct radv_graphics_pipeline *pipeline,
                                     const VkGraphicsPipelineCreateInfo *pCreateInfo,
-                                    const struct vk_graphics_pipeline_state *state)
+                                    const struct vk_graphics_pipeline_state *state,
+                                    VkGraphicsPipelineLibraryFlagBitsEXT lib_flags)
 {
    struct radv_device *device = pipeline->base.device;
    const struct radv_physical_device *pdevice = device->physical_device;
@@ -2482,6 +2306,12 @@ radv_generate_graphics_pipeline_key(const struct radv_graphics_pipeline *pipelin
    key.has_multiview_view_index = state->rp ? !!state->rp->view_mask : 0;
 
    if (pipeline->dynamic_states & RADV_DYNAMIC_VERTEX_INPUT) {
+      key.vs.has_prolog = true;
+   }
+
+   /* Compile the pre-rasterization stages only when the vertex input interface is missing. */
+   if ((lib_flags & VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT) &&
+       !(lib_flags & VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT)) {
       key.vs.has_prolog = true;
    }
 
@@ -2579,12 +2409,18 @@ radv_generate_graphics_pipeline_key(const struct radv_graphics_pipeline *pipelin
    if (device->primitives_generated_query)
       key.primitives_generated_query = true;
 
-   if (radv_pipeline_has_dynamic_ps_epilog(pipeline))
+   if (radv_pipeline_needs_dynamic_ps_epilog(pipeline))
       key.ps.dynamic_ps_epilog = true;
 
    key.ps.has_epilog =
       (!!(pipeline->active_stages & VK_SHADER_STAGE_FRAGMENT_BIT) && !!pipeline->ps_epilog) ||
       key.ps.dynamic_ps_epilog;
+
+   /* Compile the main FS only when the fragment shader output interface is missing. */
+   if ((lib_flags & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT) &&
+       !(lib_flags & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT)) {
+      key.ps.has_epilog = true;
+   }
 
    key.dynamic_patch_control_points =
       !!(pipeline->dynamic_states & RADV_DYNAMIC_PATCH_CONTROL_POINTS);
@@ -2622,11 +2458,11 @@ radv_generate_graphics_pipeline_key(const struct radv_graphics_pipeline *pipelin
 }
 
 static void
-radv_fill_shader_info_ngg(struct radv_pipeline *pipeline,
+radv_fill_shader_info_ngg(struct radv_graphics_pipeline *pipeline,
                           const struct radv_pipeline_key *pipeline_key,
                           struct radv_pipeline_stage *stages)
 {
-   struct radv_device *device = pipeline->device;
+   struct radv_device *device = pipeline->base.device;
 
    if (pipeline_key->use_ngg) {
       if (stages[MESA_SHADER_TESS_CTRL].nir) {
@@ -2673,12 +2509,12 @@ radv_fill_shader_info_ngg(struct radv_pipeline *pipeline,
 }
 
 static void
-radv_fill_shader_info(struct radv_pipeline *pipeline,
+radv_fill_shader_info(struct radv_graphics_pipeline *pipeline,
                       struct radv_pipeline_layout *pipeline_layout,
                       const struct radv_pipeline_key *pipeline_key,
                       struct radv_pipeline_stage *stages)
 {
-   struct radv_device *device = pipeline->device;
+   struct radv_device *device = pipeline->base.device;
 
    for (int i = 0; i < MESA_VULKAN_SHADER_STAGES; i++) {
       if (!stages[i].nir)
@@ -2686,7 +2522,7 @@ radv_fill_shader_info(struct radv_pipeline *pipeline,
 
       radv_nir_shader_info_init(&stages[i].info);
       radv_nir_shader_info_pass(device, stages[i].nir, pipeline_layout, pipeline_key,
-                                &stages[i].info);
+                                pipeline->base.type, &stages[i].info);
    }
 
    radv_nir_shader_info_link(device, pipeline_key, stages);
@@ -3007,21 +2843,20 @@ radv_upload_shaders(struct radv_device *device, struct radv_pipeline *pipeline,
 }
 
 static bool
-radv_consider_force_vrs(const struct radv_pipeline *pipeline, bool noop_fs,
-                        const struct radv_pipeline_stage *stages,
-                        gl_shader_stage last_vgt_api_stage)
+radv_consider_force_vrs(const struct radv_graphics_pipeline *pipeline, bool noop_fs,
+                        const struct radv_pipeline_stage *stages)
 {
-   struct radv_device *device = pipeline->device;
+   struct radv_device *device = pipeline->base.device;
 
    if (!device->force_vrs_enabled)
       return false;
 
-   if (last_vgt_api_stage != MESA_SHADER_VERTEX &&
-       last_vgt_api_stage != MESA_SHADER_TESS_EVAL &&
-       last_vgt_api_stage != MESA_SHADER_GEOMETRY)
+   if (pipeline->last_vgt_api_stage != MESA_SHADER_VERTEX &&
+       pipeline->last_vgt_api_stage != MESA_SHADER_TESS_EVAL &&
+       pipeline->last_vgt_api_stage != MESA_SHADER_GEOMETRY)
       return false;
 
-   nir_shader *last_vgt_shader = stages[last_vgt_api_stage].nir;
+   nir_shader *last_vgt_shader = stages[pipeline->last_vgt_api_stage].nir;
    if (last_vgt_shader->info.outputs_written & BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_SHADING_RATE))
       return false;
 
@@ -3176,7 +3011,6 @@ radv_pipeline_stage_init(const VkPipelineShaderStageCreateInfo *sinfo,
 
    if (sinfo->module != VK_NULL_HANDLE) {
       struct vk_shader_module *module = vk_shader_module_from_handle(sinfo->module);
-      STATIC_ASSERT(sizeof(out_stage->spirv.sha1) == sizeof(module->sha1));
 
       out_stage->spirv.data = module->data;
       out_stage->spirv.size = module->size;
@@ -3213,7 +3047,7 @@ radv_pipeline_create_gs_copy_shader(struct radv_pipeline *pipeline,
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
    struct radv_shader_info info = {0};
-   radv_nir_shader_info_pass(device, nir, pipeline_layout, pipeline_key, &info);
+   radv_nir_shader_info_pass(device, nir, pipeline_layout, pipeline_key, pipeline->type, &info);
    info.wave_size = 64; /* Wave32 not supported. */
    info.workgroup_size = 64; /* HW VS: separate waves, no workgroups */
    info.so = gs_info->so;
@@ -3245,15 +3079,15 @@ radv_pipeline_create_gs_copy_shader(struct radv_pipeline *pipeline,
 }
 
 static void
-radv_pipeline_nir_to_asm(struct radv_pipeline *pipeline, struct radv_pipeline_stage *stages,
+radv_pipeline_nir_to_asm(struct radv_graphics_pipeline *pipeline,
+                         struct radv_pipeline_stage *stages,
                          const struct radv_pipeline_key *pipeline_key,
                          const struct radv_pipeline_layout *pipeline_layout,
                          bool keep_executable_info, bool keep_statistic_info,
-                         gl_shader_stage last_vgt_api_stage,
                          struct radv_shader_binary **binaries,
                          struct radv_shader_binary **gs_copy_binary)
 {
-   struct radv_device *device = pipeline->device;
+   struct radv_device *device = pipeline->base.device;
    unsigned active_stages = 0;
 
    for (int i = 0; i < MESA_VULKAN_SHADER_STAGES; i++) {
@@ -3261,11 +3095,8 @@ radv_pipeline_nir_to_asm(struct radv_pipeline *pipeline, struct radv_pipeline_st
          active_stages |= (1 << i);
    }
 
-   bool pipeline_has_ngg = last_vgt_api_stage != MESA_SHADER_NONE &&
-                           stages[last_vgt_api_stage].info.is_ngg;
-
    for (int s = MESA_VULKAN_SHADER_STAGES - 1; s >= 0; s--) {
-      if (!(active_stages & (1 << s)) || pipeline->shaders[s])
+      if (!(active_stages & (1 << s)) || pipeline->base.shaders[s])
          continue;
 
       nir_shader *shaders[2] = { stages[s].nir, NULL };
@@ -3289,13 +3120,13 @@ radv_pipeline_nir_to_asm(struct radv_pipeline *pipeline, struct radv_pipeline_st
 
       int64_t stage_start = os_time_get_nano();
 
-      pipeline->shaders[s] = radv_shader_nir_to_asm(device, &stages[s], shaders, shader_count,
-                                                    pipeline_key, keep_executable_info,
-                                                    keep_statistic_info, &binaries[s]);
+      pipeline->base.shaders[s] =
+         radv_shader_nir_to_asm(device, &stages[s], shaders, shader_count, pipeline_key,
+                                keep_executable_info, keep_statistic_info, &binaries[s]);
 
-      if (s == MESA_SHADER_GEOMETRY && !pipeline_has_ngg) {
-         pipeline->gs_copy_shader = radv_pipeline_create_gs_copy_shader(
-            pipeline, stages, pipeline_key, pipeline_layout, keep_executable_info,
+      if (s == MESA_SHADER_GEOMETRY && !stages[s].info.is_ngg) {
+         pipeline->base.gs_copy_shader = radv_pipeline_create_gs_copy_shader(
+            &pipeline->base, stages, pipeline_key, pipeline_layout, keep_executable_info,
             keep_statistic_info, gs_copy_binary);
       }
 
@@ -3308,46 +3139,42 @@ radv_pipeline_nir_to_asm(struct radv_pipeline *pipeline, struct radv_pipeline_st
 }
 
 static void
-radv_pipeline_stage_retain_shader(struct radv_pipeline *pipeline, struct radv_pipeline_stage *stage)
-{
-   gl_shader_stage s = stage->stage;
-
-   pipeline->retained_shaders[s].nir = stage->nir;
-}
-
-static void
-radv_pipeline_get_nir(struct radv_pipeline *pipeline, struct radv_pipeline_stage *stages,
+radv_pipeline_get_nir(struct radv_graphics_pipeline *pipeline, struct radv_pipeline_stage *stages,
                       const struct radv_pipeline_key *pipeline_key, bool retain_shaders)
 {
-   struct radv_device *device = pipeline->device;
+   struct radv_device *device = pipeline->base.device;
 
    for (unsigned s = 0; s < MESA_VULKAN_SHADER_STAGES; s++) {
       if (!stages[s].entrypoint)
          continue;
 
       /* Do not try to get the NIR when we already have the assembly. */
-      if (pipeline->shaders[s])
+      if (pipeline->base.shaders[s])
          continue;
 
       int64_t stage_start = os_time_get_nano();
 
-      assert(retain_shaders || pipeline->shaders[s] == NULL);
+      assert(retain_shaders || pipeline->base.shaders[s] == NULL);
 
       if (pipeline->retained_shaders[s].nir) {
+         /* Clone the NIR shader because it's imported from a library. */
          stages[s].nir = nir_shader_clone(NULL, pipeline->retained_shaders[s].nir);
       } else {
-         stages[s].nir = radv_shader_spirv_to_nir(device, &stages[s], pipeline_key);
+         stages[s].nir =
+            radv_shader_spirv_to_nir(device, &stages[s], pipeline_key, pipeline->base.is_internal);
       }
 
-      if (retain_shaders)
-         radv_pipeline_stage_retain_shader(pipeline, &stages[s]);
+      if (retain_shaders) {
+         /* Clone the NIR shader because NIR passes after this step will change it. */
+         pipeline->retained_shaders[s].nir = nir_shader_clone(NULL, stages[s].nir);
+      }
 
       stages[s].feedback.duration += os_time_get_nano() - stage_start;
    }
 }
 
 static void
-radv_pipeline_load_retained_shaders(struct radv_pipeline *pipeline,
+radv_pipeline_load_retained_shaders(struct radv_graphics_pipeline *pipeline,
                                     struct radv_pipeline_stage *stages)
 {
    for (uint32_t s = 0; s < MESA_VULKAN_SHADER_STAGES; s++) {
@@ -3356,7 +3183,7 @@ radv_pipeline_load_retained_shaders(struct radv_pipeline *pipeline,
 
       int64_t stage_start = os_time_get_nano();
 
-      assert(pipeline->shaders[s] == NULL);
+      assert(pipeline->base.shaders[s] == NULL);
 
       stages[s].stage = s;
       stages[s].entrypoint =
@@ -3371,7 +3198,7 @@ static void
 radv_postprocess_nir(struct radv_pipeline *pipeline,
                      const struct radv_pipeline_layout *pipeline_layout,
                      const struct radv_pipeline_key *pipeline_key,
-                     bool pipeline_has_ngg, unsigned last_vgt_api_stage,
+                     unsigned last_vgt_api_stage,
                      struct radv_pipeline_stage *stage)
 {
    struct radv_device *device = pipeline->device;
@@ -3471,7 +3298,7 @@ radv_postprocess_nir(struct radv_pipeline *pipeline,
 
    /* Lower I/O intrinsics to memory instructions. */
    bool io_to_mem = radv_lower_io_to_mem(device, stage);
-   bool lowered_ngg = pipeline_has_ngg && stage->stage == last_vgt_api_stage;
+   bool lowered_ngg = stage->info.is_ngg && stage->stage == last_vgt_api_stage;
    if (lowered_ngg)
       radv_lower_ngg(device, stage, pipeline_key);
 
@@ -3585,63 +3412,121 @@ radv_pipeline_create_ps_epilog(struct radv_graphics_pipeline *pipeline,
    return true;
 }
 
-VkResult
-radv_create_shaders(struct radv_pipeline *pipeline, struct radv_pipeline_layout *pipeline_layout,
-                    struct radv_device *device, struct radv_pipeline_cache *cache,
-                    const struct radv_pipeline_key *pipeline_key,
-                    const VkPipelineShaderStageCreateInfo *pStages,
-                    uint32_t stageCount,
-                    const VkPipelineCreateFlags flags, const uint8_t *custom_hash,
-                    const VkPipelineCreationFeedbackCreateInfo *creation_feedback,
-                    struct radv_pipeline_shader_stack_size **stack_sizes,
-                    uint32_t *num_stack_sizes,
-                    gl_shader_stage *last_vgt_api_stage)
+static bool
+radv_pipeline_capture_shaders(const struct radv_device *device, VkPipelineCreateFlags flags)
+{
+   return (flags & VK_PIPELINE_CREATE_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR) ||
+          device->keep_shader_info;
+}
+
+bool
+radv_pipeline_capture_shader_stats(const struct radv_device *device, VkPipelineCreateFlags flags)
+{
+   return (flags & VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR) ||
+          (device->instance->debug_flags & RADV_DEBUG_DUMP_SHADER_STATS) ||
+          device->keep_shader_info;
+}
+
+static bool
+radv_skip_graphics_pipeline_compile(const struct radv_graphics_pipeline *pipeline,
+                                    VkGraphicsPipelineLibraryFlagBitsEXT lib_flags,
+                                    bool fast_linking_enabled)
+{
+   const struct radv_device *device = pipeline->base.device;
+   VkShaderStageFlagBits binary_stages = 0;
+
+   /* Do not skip when fast-linking isn't enabled. */
+   if (!fast_linking_enabled)
+      return false;
+
+   /* Do not skip when the linked pipeline needs a noop FS. */
+   if ((lib_flags & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT) &&
+        pipeline->active_stages & VK_SHADER_STAGE_FRAGMENT_BIT)
+      return false;
+
+   /* Do not skip when the PS epilog needs to be compiled. */
+   if (!radv_pipeline_needs_dynamic_ps_epilog(pipeline) &&
+       (pipeline->active_stages & VK_SHADER_STAGE_FRAGMENT_BIT) &&
+       pipeline->base.shaders[MESA_SHADER_FRAGMENT]->info.ps.has_epilog &&
+       !pipeline->ps_epilog)
+      return false;
+
+   /* Determine which shader stages have been imported. */
+   if (pipeline->base.shaders[MESA_SHADER_MESH]) {
+      binary_stages |= VK_SHADER_STAGE_MESH_BIT_EXT;
+      if (pipeline->base.shaders[MESA_SHADER_TASK]) {
+         binary_stages |= VK_SHADER_STAGE_TASK_BIT_EXT;
+      }
+   } else {
+      for (uint32_t i = 0; i < MESA_SHADER_COMPUTE; i++) {
+         if (!pipeline->base.shaders[i])
+            continue;
+
+         binary_stages |= mesa_to_vk_shader_stage(i);
+      }
+
+      if (device->physical_device->rad_info.gfx_level >= GFX9) {
+         /* On GFX9+, TES is merged with GS and VS is merged with TCS or GS. */
+         if (binary_stages & VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT) {
+            binary_stages |= VK_SHADER_STAGE_VERTEX_BIT;
+         }
+
+         if (binary_stages & VK_SHADER_STAGE_GEOMETRY_BIT) {
+            if (binary_stages & VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT) {
+               binary_stages |= VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+            } else {
+               binary_stages |= VK_SHADER_STAGE_VERTEX_BIT;
+            }
+         }
+      }
+   }
+
+   /* Only skip compilation when all binaries have been imported. */
+   return binary_stages == pipeline->active_stages;
+}
+
+static VkResult
+radv_graphics_pipeline_compile(struct radv_graphics_pipeline *pipeline,
+                               const VkGraphicsPipelineCreateInfo *pCreateInfo,
+                               struct radv_pipeline_layout *pipeline_layout,
+                               struct radv_device *device, struct radv_pipeline_cache *cache,
+                               const struct radv_pipeline_key *pipeline_key,
+                               VkGraphicsPipelineLibraryFlagBitsEXT lib_flags,
+                               bool fast_linking_enabled)
 {
    const char *noop_fs_entrypoint = "noop_fs";
    struct radv_shader_binary *binaries[MESA_VULKAN_SHADER_STAGES] = {NULL};
    struct radv_shader_binary *gs_copy_binary = NULL;
    unsigned char hash[20];
    bool keep_executable_info =
-      (flags & VK_PIPELINE_CREATE_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR) ||
-      device->keep_shader_info;
-   bool keep_statistic_info = (flags & VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR) ||
-                              (device->instance->debug_flags & RADV_DEBUG_DUMP_SHADER_STATS) ||
-                              device->keep_shader_info;
+      radv_pipeline_capture_shaders(pipeline->base.device, pCreateInfo->flags);
+   bool keep_statistic_info =
+      radv_pipeline_capture_shader_stats(pipeline->base.device, pCreateInfo->flags);
    struct radv_pipeline_stage stages[MESA_VULKAN_SHADER_STAGES] = {0};
+   const VkPipelineCreationFeedbackCreateInfo *creation_feedback =
+      vk_find_struct_const(pCreateInfo->pNext, PIPELINE_CREATION_FEEDBACK_CREATE_INFO);
    VkPipelineCreationFeedback pipeline_feedback = {
       .flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT,
    };
    bool noop_fs = false;
    VkResult result = VK_SUCCESS;
    const bool retain_shaders =
-      !!(flags & VK_PIPELINE_CREATE_RETAIN_LINK_TIME_OPTIMIZATION_INFO_BIT_EXT);
+      !!(pCreateInfo->flags & VK_PIPELINE_CREATE_RETAIN_LINK_TIME_OPTIMIZATION_INFO_BIT_EXT);
 
    int64_t pipeline_start = os_time_get_nano();
 
-   for (uint32_t i = 0; i < stageCount; i++) {
-      const VkPipelineShaderStageCreateInfo *sinfo = &pStages[i];
+   for (uint32_t i = 0; i < pCreateInfo->stageCount; i++) {
+      const VkPipelineShaderStageCreateInfo *sinfo = &pCreateInfo->pStages[i];
       gl_shader_stage stage = vk_to_mesa_shader_stage(sinfo->stage);
+
+      /* Ignore graphics shader stages that don't need to be imported. */
+      if (!(shader_stage_to_pipeline_library_flags(sinfo->stage) & lib_flags))
+         continue;
 
       radv_pipeline_stage_init(sinfo, &stages[stage], stage);
    }
 
    radv_pipeline_load_retained_shaders(pipeline, stages);
-
-   if (pipeline->type == RADV_PIPELINE_GRAPHICS ||
-       pipeline->type == RADV_PIPELINE_GRAPHICS_LIB) {
-      VkShaderStageFlags active_stages;
-
-      if (pipeline->type == RADV_PIPELINE_GRAPHICS) {
-         active_stages = radv_pipeline_to_graphics(pipeline)->active_stages;
-      } else {
-         active_stages = radv_pipeline_to_graphics_lib(pipeline)->base.active_stages;
-      }
-
-      radv_foreach_stage(s, active_stages) {
-         if (s < MESA_SHADER_FRAGMENT || s == MESA_SHADER_MESH)
-            *last_vgt_api_stage = s;
-      }
-   }
 
    ASSERTED bool primitive_shading =
       stages[MESA_SHADER_VERTEX].entrypoint || stages[MESA_SHADER_TESS_CTRL].entrypoint ||
@@ -3656,19 +3541,16 @@ radv_create_shaders(struct radv_pipeline *pipeline, struct radv_pipeline_layout 
    /* Mesh shaders always need NGG. */
    assert(!mesh_shading || pipeline_key->use_ngg);
 
-   if (custom_hash)
-      memcpy(hash, custom_hash, 20);
-   else {
-      radv_hash_shaders(hash, stages, pipeline_layout, pipeline_key,
+   if (!fast_linking_enabled) {
+      radv_hash_shaders(hash, stages, MESA_VULKAN_SHADER_STAGES, pipeline_layout, pipeline_key,
                         radv_get_hash_flags(device, keep_statistic_info));
+
+      pipeline->base.pipeline_hash = *(uint64_t *)hash;
    }
 
-   pipeline->pipeline_hash = *(uint64_t *)hash;
-
    bool found_in_application_cache = true;
-   if (!keep_executable_info &&
-       radv_create_shaders_from_pipeline_cache(device, cache, hash, pipeline,
-                                               stack_sizes, num_stack_sizes,
+   if (!fast_linking_enabled && !keep_executable_info &&
+       radv_create_shaders_from_pipeline_cache(device, cache, hash, &pipeline->base, NULL, NULL,
                                                &found_in_application_cache)) {
       if (found_in_application_cache)
          pipeline_feedback.flags |= VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT;
@@ -3676,15 +3558,14 @@ radv_create_shaders(struct radv_pipeline *pipeline, struct radv_pipeline_layout 
       goto done;
    }
 
-   if (flags & VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT) {
-      if (found_in_application_cache)
-         pipeline_feedback.flags |= VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT;
-      result = VK_PIPELINE_COMPILE_REQUIRED;
-      goto done;
-   }
+   if (pCreateInfo->flags & VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT)
+      return VK_PIPELINE_COMPILE_REQUIRED;
 
-   if (pipeline->type == RADV_PIPELINE_GRAPHICS &&
-       !(radv_pipeline_to_graphics(pipeline)->active_stages & VK_SHADER_STAGE_FRAGMENT_BIT)) {
+   if ((pipeline->base.type == RADV_PIPELINE_GRAPHICS &&
+        !(radv_pipeline_to_graphics(&pipeline->base)->active_stages & VK_SHADER_STAGE_FRAGMENT_BIT)) ||
+       (pipeline->base.type == RADV_PIPELINE_GRAPHICS_LIB &&
+        (lib_flags & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT) &&
+        !(radv_pipeline_to_graphics_lib(&pipeline->base)->base.active_stages & VK_SHADER_STAGE_FRAGMENT_BIT))) {
       nir_builder fs_b = radv_meta_init_shader(device, MESA_SHADER_FRAGMENT, "noop_fs");
 
       stages[MESA_SHADER_FRAGMENT] = (struct radv_pipeline_stage) {
@@ -3701,17 +3582,10 @@ radv_create_shaders(struct radv_pipeline *pipeline, struct radv_pipeline_layout 
 
    radv_pipeline_get_nir(pipeline, stages, pipeline_key, retain_shaders);
 
-   if (retain_shaders) {
-      result = VK_SUCCESS;
-      goto done;
-   }
-
    /* Force per-vertex VRS. */
-   if (radv_consider_force_vrs(pipeline, noop_fs, stages, *last_vgt_api_stage)) {
-      assert(*last_vgt_api_stage == MESA_SHADER_VERTEX ||
-             *last_vgt_api_stage == MESA_SHADER_TESS_EVAL ||
-             *last_vgt_api_stage == MESA_SHADER_GEOMETRY);
-      nir_shader *last_vgt_shader = stages[*last_vgt_api_stage].nir;
+   if (radv_consider_force_vrs(pipeline, noop_fs, stages)) {
+      assert(pipeline->last_vgt_api_stage != MESA_SHADER_MESH);
+      nir_shader *last_vgt_shader = stages[pipeline->last_vgt_api_stage].nir;
       NIR_PASS(_, last_vgt_shader, radv_force_primitive_shading_rate, device);
    }
 
@@ -3720,14 +3594,12 @@ radv_create_shaders(struct radv_pipeline *pipeline, struct radv_pipeline_layout 
    /* Determine if shaders uses NGG before linking because it's needed for some NIR pass. */
    radv_fill_shader_info_ngg(pipeline, pipeline_key, stages);
 
-   bool pipeline_has_ngg = (stages[MESA_SHADER_VERTEX].nir && stages[MESA_SHADER_VERTEX].info.is_ngg) ||
-                           (stages[MESA_SHADER_TESS_EVAL].nir && stages[MESA_SHADER_TESS_EVAL].info.is_ngg) ||
-                           (stages[MESA_SHADER_MESH].nir && stages[MESA_SHADER_MESH].info.is_ngg);
-
    if (stages[MESA_SHADER_GEOMETRY].nir) {
+      gl_shader_stage pre_stage =
+         stages[MESA_SHADER_TESS_EVAL].nir ? MESA_SHADER_TESS_EVAL : MESA_SHADER_VERTEX;
       unsigned nir_gs_flags = nir_lower_gs_intrinsics_per_stream;
 
-      if (pipeline_has_ngg) {
+      if (stages[pre_stage].info.is_ngg) {
          nir_gs_flags |= nir_lower_gs_intrinsics_count_primitives |
                          nir_lower_gs_intrinsics_count_vertices_per_primitive |
                          nir_lower_gs_intrinsics_overwrite_incomplete;
@@ -3767,8 +3639,8 @@ radv_create_shaders(struct radv_pipeline *pipeline, struct radv_pipeline_layout 
 
       int64_t stage_start = os_time_get_nano();
 
-      radv_postprocess_nir(pipeline, pipeline_layout, pipeline_key, pipeline_has_ngg,
-                           *last_vgt_api_stage, &stages[i]);
+      radv_postprocess_nir(&pipeline->base, pipeline_layout, pipeline_key,
+                           pipeline->last_vgt_api_stage, &stages[i]);
 
       stages[i].feedback.duration += os_time_get_nano() - stage_start;
 
@@ -3778,11 +3650,11 @@ radv_create_shaders(struct radv_pipeline *pipeline, struct radv_pipeline_layout 
 
    /* Compile NIR shaders to AMD assembly. */
    radv_pipeline_nir_to_asm(pipeline, stages, pipeline_key, pipeline_layout, keep_executable_info,
-                            keep_statistic_info, *last_vgt_api_stage, binaries, &gs_copy_binary);
+                            keep_statistic_info, binaries, &gs_copy_binary);
 
    if (keep_executable_info) {
       for (int i = 0; i < MESA_VULKAN_SHADER_STAGES; ++i) {
-         struct radv_shader *shader = pipeline->shaders[i];
+         struct radv_shader *shader = pipeline->base.shaders[i];
          if (!shader)
             continue;
 
@@ -3795,8 +3667,8 @@ radv_create_shaders(struct radv_pipeline *pipeline, struct radv_pipeline_layout 
       }
    }
 
-   if (pipeline->type == RADV_PIPELINE_GRAPHICS) {
-      struct radv_graphics_pipeline *graphics_pipeline = radv_pipeline_to_graphics(pipeline);
+   if (pipeline->base.type == RADV_PIPELINE_GRAPHICS) {
+      struct radv_graphics_pipeline *graphics_pipeline = radv_pipeline_to_graphics(&pipeline->base);
 
       if (noop_fs && graphics_pipeline->ps_epilog) {
          /* Discard the PS epilog when the pipeline doesn't use a FS because it makes no sense. */
@@ -3812,22 +3684,20 @@ radv_create_shaders(struct radv_pipeline *pipeline, struct radv_pipeline_layout 
    }
 
    /* Upload shader binaries. */
-   radv_upload_shaders(device, pipeline, binaries, gs_copy_binary);
+   radv_upload_shaders(device, &pipeline->base, binaries, gs_copy_binary);
 
-   if (!keep_executable_info) {
-      if (pipeline->gs_copy_shader) {
-         assert(!binaries[MESA_SHADER_COMPUTE] && !pipeline->shaders[MESA_SHADER_COMPUTE]);
+   if (!fast_linking_enabled && !keep_executable_info) {
+      if (pipeline->base.gs_copy_shader) {
+         assert(!binaries[MESA_SHADER_COMPUTE] && !pipeline->base.shaders[MESA_SHADER_COMPUTE]);
          binaries[MESA_SHADER_COMPUTE] = gs_copy_binary;
-         pipeline->shaders[MESA_SHADER_COMPUTE] = pipeline->gs_copy_shader;
+         pipeline->base.shaders[MESA_SHADER_COMPUTE] = pipeline->base.gs_copy_shader;
       }
 
-      radv_pipeline_cache_insert_shaders(device, cache, hash, pipeline, binaries,
-                                         stack_sizes ? *stack_sizes : NULL,
-                                         num_stack_sizes ? *num_stack_sizes : 0);
+      radv_pipeline_cache_insert_shaders(device, cache, hash, &pipeline->base, binaries, NULL, 0);
 
-      if (pipeline->gs_copy_shader) {
-         pipeline->gs_copy_shader = pipeline->shaders[MESA_SHADER_COMPUTE];
-         pipeline->shaders[MESA_SHADER_COMPUTE] = NULL;
+      if (pipeline->base.gs_copy_shader) {
+         pipeline->base.gs_copy_shader = pipeline->base.shaders[MESA_SHADER_COMPUTE];
+         pipeline->base.shaders[MESA_SHADER_COMPUTE] = NULL;
          binaries[MESA_SHADER_COMPUTE] = NULL;
       }
    }
@@ -3836,8 +3706,8 @@ radv_create_shaders(struct radv_pipeline *pipeline, struct radv_pipeline_layout 
    for (int i = 0; i < MESA_VULKAN_SHADER_STAGES; ++i) {
       free(binaries[i]);
       if (stages[i].nir) {
-         if (radv_can_dump_shader_stats(device, stages[i].nir) && pipeline->shaders[i]) {
-            radv_dump_shader_stats(device, pipeline, i, stderr);
+         if (radv_can_dump_shader_stats(device, stages[i].nir) && pipeline->base.shaders[i]) {
+            radv_dump_shader_stats(device, &pipeline->base, i, stderr);
          }
 
          ralloc_free(stages[i].nir);
@@ -3851,9 +3721,9 @@ done:
       *creation_feedback->pPipelineCreationFeedback = pipeline_feedback;
 
       uint32_t stage_count = creation_feedback->pipelineStageCreationFeedbackCount;
-      assert(stage_count == 0 || stageCount == stage_count);
+      assert(stage_count == 0 || pCreateInfo->stageCount == stage_count);
       for (uint32_t i = 0; i < stage_count; i++) {
-         gl_shader_stage s = vk_to_mesa_shader_stage(pStages[i].stage);
+         gl_shader_stage s = vk_to_mesa_shader_stage(pCreateInfo->pStages[i].stage);
          creation_feedback->pPipelineStageCreationFeedbacks[i] = stages[s].feedback;
       }
    }
@@ -3933,7 +3803,7 @@ radv_pipeline_emit_blend_state(struct radeon_cmdbuf *ctx_cs,
                                const struct radv_graphics_pipeline *pipeline,
                                const struct radv_blend_state *blend)
 {
-   if (pipeline->ps_epilog || radv_pipeline_has_dynamic_ps_epilog(pipeline))
+   if (pipeline->ps_epilog || radv_pipeline_needs_dynamic_ps_epilog(pipeline))
       return;
 
    radeon_set_context_reg(ctx_cs, R_028714_SPI_SHADER_COL_FORMAT, blend->spi_shader_col_format);
@@ -5123,9 +4993,10 @@ radv_graphics_pipeline_init(struct radv_graphics_pipeline *pipeline, struct radv
                             const VkGraphicsPipelineCreateInfo *pCreateInfo,
                             const struct radv_graphics_pipeline_create_info *extra)
 {
-   struct radv_pipeline_layout pipeline_layout = {0};
+   struct radv_pipeline_layout pipeline_layout;
    struct vk_graphics_pipeline_state state = {0};
-   VkResult result;
+   bool fast_linking_enabled = false;
+   VkResult result = VK_SUCCESS;
 
    pipeline->last_vgt_api_stage = MESA_SHADER_NONE;
 
@@ -5150,13 +5021,15 @@ radv_graphics_pipeline_init(struct radv_graphics_pipeline *pipeline, struct radv
          /* If we have link time optimization, all libraries must be created with
           * VK_PIPELINE_CREATE_RETAIN_LINK_TIME_OPTIMIZATION_INFO_BIT_EXT.
           */
-         assert(!link_optimize || gfx_pipeline_lib->base.base.retain_shaders);
+         assert(!link_optimize || gfx_pipeline_lib->base.retain_shaders);
 
          radv_graphics_pipeline_import_lib(pipeline, &state, &pipeline_layout, gfx_pipeline_lib,
                                            link_optimize);
 
          imported_flags |= gfx_pipeline_lib->lib_flags;
       }
+
+      fast_linking_enabled = !link_optimize;
    }
 
    /* Import graphics pipeline info that was not included in the libraries. */
@@ -5167,19 +5040,22 @@ radv_graphics_pipeline_init(struct radv_graphics_pipeline *pipeline, struct radv
       return result;
    }
 
-   radv_pipeline_layout_hash(&pipeline_layout);
+   if (!fast_linking_enabled)
+      radv_pipeline_layout_hash(&pipeline_layout);
 
-   const VkPipelineCreationFeedbackCreateInfo *creation_feedback =
-      vk_find_struct_const(pCreateInfo->pNext, PIPELINE_CREATION_FEEDBACK_CREATE_INFO);
 
-   struct radv_pipeline_key key = radv_generate_graphics_pipeline_key(pipeline, pCreateInfo, &state);
+   if (!radv_skip_graphics_pipeline_compile(pipeline, (~imported_flags) & ALL_GRAPHICS_LIB_FLAGS,
+                                            fast_linking_enabled)) {
+      struct radv_pipeline_key key = radv_generate_graphics_pipeline_key(
+         pipeline, pCreateInfo, &state, (~imported_flags) & ALL_GRAPHICS_LIB_FLAGS);
 
-   result = radv_create_shaders(&pipeline->base, &pipeline_layout, device, cache, &key, pCreateInfo->pStages,
-                                pCreateInfo->stageCount, pCreateInfo->flags, NULL,
-                                creation_feedback, NULL, NULL, &pipeline->last_vgt_api_stage);
-   if (result != VK_SUCCESS) {
-      radv_pipeline_layout_finish(device, &pipeline_layout);
-      return result;
+      result = radv_graphics_pipeline_compile(pipeline, pCreateInfo, &pipeline_layout, device, cache,
+                                              &key, (~imported_flags) & ALL_GRAPHICS_LIB_FLAGS,
+                                              fast_linking_enabled);
+      if (result != VK_SUCCESS) {
+         radv_pipeline_layout_finish(device, &pipeline_layout);
+         return result;
+      }
    }
 
    uint32_t vgt_gs_out_prim_type = radv_pipeline_init_vgt_gs_out(pipeline, &state);
@@ -5196,16 +5072,13 @@ radv_graphics_pipeline_init(struct radv_graphics_pipeline *pipeline, struct radv
    if (device->physical_device->rad_info.gfx_level >= GFX10_3)
       gfx103_pipeline_init_vrs_state(pipeline, &state);
 
-   struct radv_blend_state blend = radv_pipeline_init_blend_state(pipeline, &state, &key);
+   struct radv_blend_state blend = radv_pipeline_init_blend_state(pipeline, &state);
 
    /* Copy the non-compacted SPI_SHADER_COL_FORMAT which is used to emit RBPLUS state. */
    pipeline->col_format_non_compacted = blend.spi_shader_col_format;
 
-   pipeline->mrt0_is_dual_src = key.ps.epilog.mrt0_is_dual_src;
-   pipeline->need_src_alpha = key.ps.epilog.need_src_alpha;
-
    struct radv_shader *ps = pipeline->base.shaders[MESA_SHADER_FRAGMENT];
-   bool enable_mrt_compaction = !key.ps.epilog.mrt0_is_dual_src && !ps->info.ps.has_epilog;
+   bool enable_mrt_compaction = !ps->info.ps.has_epilog && !ps->info.ps.mrt0_is_dual_src;
    if (enable_mrt_compaction) {
       blend.spi_shader_col_format = radv_compact_spi_shader_col_format(ps, &blend);
 
@@ -5232,12 +5105,12 @@ radv_graphics_pipeline_init(struct radv_graphics_pipeline *pipeline, struct radv
     * color and Z formats to SPI_SHADER_ZERO. The hw will skip export
     * instructions if any are present.
     */
-   if ((device->physical_device->rad_info.gfx_level <= GFX9 || ps->info.ps.can_discard) &&
-       !blend.spi_shader_col_format) {
-      if (!ps->info.ps.writes_z && !ps->info.ps.writes_stencil && !ps->info.ps.writes_sample_mask) {
-         blend.spi_shader_col_format = V_028714_SPI_SHADER_32_R;
-         pipeline->col_format_non_compacted = V_028714_SPI_SHADER_32_R;
-      }
+   pipeline->need_null_export_workaround =
+      (device->physical_device->rad_info.gfx_level <= GFX9 || ps->info.ps.can_discard) &&
+      !ps->info.ps.writes_z && !ps->info.ps.writes_stencil && !ps->info.ps.writes_sample_mask;
+   if (pipeline->need_null_export_workaround && !blend.spi_shader_col_format) {
+      blend.spi_shader_col_format = V_028714_SPI_SHADER_32_R;
+      pipeline->col_format_non_compacted = V_028714_SPI_SHADER_32_R;
    }
 
    if (radv_pipeline_has_stage(pipeline, MESA_SHADER_GEOMETRY) && !radv_pipeline_has_ngg(pipeline)) {
@@ -5264,6 +5137,11 @@ radv_graphics_pipeline_init(struct radv_graphics_pipeline *pipeline, struct radv
    pipeline->uses_user_sample_locations = state.ms && state.ms->sample_locations_enable;
    pipeline->rast_prim = vgt_gs_out_prim_type;
    pipeline->last_vgt_api_stage_locs = pipeline->base.shaders[pipeline->last_vgt_api_stage]->info.user_sgprs_locs.shader_data;
+
+   pipeline->has_pv_sgpr = pipeline->last_vgt_api_stage_locs[AC_UD_NGG_PROVOKING_VTX].sgpr_idx != -1;
+   pipeline->has_streamout = pipeline->last_vgt_api_stage_locs[AC_UD_STREAMOUT_BUFFERS].sgpr_idx != -1;
+   pipeline->has_dynamic_samples = ps->info.user_sgprs_locs.shader_data[AC_UD_PS_NUM_SAMPLES].sgpr_idx != -1;
+   pipeline->has_sample_positions = ps->info.ps.needs_sample_positions;
 
    pipeline->base.push_constant_size = pipeline_layout.push_constant_size;
    pipeline->base.dynamic_offset_count = pipeline_layout.dynamic_offset_count;
@@ -5296,6 +5174,7 @@ radv_graphics_pipeline_create(VkDevice _device, VkPipelineCache _cache,
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    radv_pipeline_init(device, &pipeline->base, RADV_PIPELINE_GRAPHICS);
+   pipeline->base.is_internal = is_internal;
 
    result = radv_graphics_pipeline_init(pipeline, device, cache, pCreateInfo, extra);
    if (result != VK_SUCCESS) {
@@ -5326,7 +5205,7 @@ radv_graphics_lib_pipeline_init(struct radv_graphics_lib_pipeline *pipeline,
    struct radv_pipeline_layout *pipeline_layout = &pipeline->layout;
 
    pipeline->base.last_vgt_api_stage = MESA_SHADER_NONE;
-   pipeline->base.base.retain_shaders =
+   pipeline->base.retain_shaders =
       (pCreateInfo->flags & VK_PIPELINE_CREATE_RETAIN_LINK_TIME_OPTIMIZATION_INFO_BIT_EXT) != 0;
    pipeline->lib_flags = lib_flags;
 
@@ -5362,7 +5241,8 @@ radv_graphics_lib_pipeline_init(struct radv_graphics_lib_pipeline *pipeline,
     * fragment shader.
     */
    if ((imported_flags & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT) &&
-       !(imported_flags & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT)) {
+       !(imported_flags & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT) &&
+       !radv_pipeline_needs_dynamic_ps_epilog(&pipeline->base)) {
       struct radv_ps_epilog_key key = radv_pipeline_generate_ps_epilog_key(&pipeline->base, state, true);
 
       pipeline->base.ps_epilog = radv_create_ps_epilog(device, &key);
@@ -5370,32 +5250,22 @@ radv_graphics_lib_pipeline_init(struct radv_graphics_lib_pipeline *pipeline,
          return VK_ERROR_OUT_OF_HOST_MEMORY;
    }
 
-   if (pipeline->base.active_stages != 0) {
-      const VkPipelineCreationFeedbackCreateInfo *creation_feedback =
-         vk_find_struct_const(pCreateInfo->pNext, PIPELINE_CREATION_FEEDBACK_CREATE_INFO);
-
+   if (pipeline->base.active_stages != 0 ||
+       (imported_flags & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT)) {
       struct radv_pipeline_key key =
-         radv_generate_graphics_pipeline_key(&pipeline->base, pCreateInfo, state);
+         radv_generate_graphics_pipeline_key(&pipeline->base, pCreateInfo, state, imported_flags);
 
-      /* Compile the main FS only when the fragment shader output interface is missing. */
-      if ((imported_flags & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT) &&
-          !(imported_flags & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT)) {
-         key.ps.has_epilog = true;
-      }
-
-      /* Compile the pre-rasterization stages only when the vertex input interface is missing. */
-      if ((imported_flags & VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT) &&
-          !(imported_flags & VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT)) {
-         key.vs.has_prolog = true;
-      }
-
-      result = radv_create_shaders(&pipeline->base.base, pipeline_layout, device, cache, &key,
-                                   pCreateInfo->pStages, pCreateInfo->stageCount, pCreateInfo->flags,
-                                   NULL, creation_feedback, NULL, NULL,
-                                   &pipeline->base.last_vgt_api_stage);
-
+      result = radv_graphics_pipeline_compile(&pipeline->base, pCreateInfo, pipeline_layout, device,
+                                              cache, &key, imported_flags, false);
       if (result != VK_SUCCESS)
          return result;
+
+      /* Force add the fragment shader stage when a noop FS has been compiled. */
+      if ((imported_flags & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT) &&
+          !(pipeline->base.active_stages & VK_SHADER_STAGE_FRAGMENT_BIT)) {
+         assert(pipeline->base.base.shaders[MESA_SHADER_FRAGMENT]);
+         pipeline->base.active_stages |= VK_SHADER_STAGE_FRAGMENT_BIT;
+      }
    }
 
    return VK_SUCCESS;
@@ -5568,6 +5438,138 @@ radv_compute_pipeline_init(struct radv_compute_pipeline *pipeline,
 }
 
 VkResult
+radv_compute_pipeline_compile(struct radv_compute_pipeline *pipeline,
+                              struct radv_pipeline_layout *pipeline_layout,
+                              struct radv_device *device, struct radv_pipeline_cache *cache,
+                              const struct radv_pipeline_key *pipeline_key,
+                              const VkPipelineShaderStageCreateInfo *pStage,
+                              const VkPipelineCreateFlags flags, const uint8_t *custom_hash,
+                              const VkPipelineCreationFeedbackCreateInfo *creation_feedback,
+                              struct radv_pipeline_shader_stack_size **stack_sizes,
+                              uint32_t *num_stack_sizes)
+{
+   struct radv_shader_binary *binaries[MESA_VULKAN_SHADER_STAGES] = {NULL};
+   unsigned char hash[20];
+   bool keep_executable_info = radv_pipeline_capture_shaders(pipeline->base.device, flags);
+   bool keep_statistic_info = radv_pipeline_capture_shader_stats(pipeline->base.device, flags);
+   struct radv_pipeline_stage cs_stage = {0};
+   VkPipelineCreationFeedback pipeline_feedback = {
+      .flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT,
+   };
+   VkResult result = VK_SUCCESS;
+
+   int64_t pipeline_start = os_time_get_nano();
+
+   radv_pipeline_stage_init(pStage, &cs_stage, MESA_SHADER_COMPUTE);
+
+   if (custom_hash) {
+      memcpy(hash, custom_hash, 20);
+   } else {
+      radv_hash_shaders(hash, &cs_stage, 1, pipeline_layout, pipeline_key,
+                        radv_get_hash_flags(device, keep_statistic_info));
+   }
+
+   pipeline->base.pipeline_hash = *(uint64_t *)hash;
+
+   bool found_in_application_cache = true;
+   if (!keep_executable_info &&
+       radv_create_shaders_from_pipeline_cache(device, cache, hash, &pipeline->base, stack_sizes,
+                                               num_stack_sizes, &found_in_application_cache)) {
+      if (found_in_application_cache)
+         pipeline_feedback.flags |=
+            VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT;
+      result = VK_SUCCESS;
+      goto done;
+   }
+
+   if (flags & VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT)
+      return VK_PIPELINE_COMPILE_REQUIRED;
+
+   int64_t stage_start = os_time_get_nano();
+
+   /* Compile SPIR-V shader to NIR. */
+   cs_stage.nir = radv_shader_spirv_to_nir(device, &cs_stage, pipeline_key, pipeline->base.is_internal);
+
+   radv_optimize_nir(cs_stage.nir, pipeline_key->optimisations_disabled, false);
+
+   /* Gather info again, information such as outputs_read can be out-of-date. */
+   nir_shader_gather_info(cs_stage.nir,
+                          nir_shader_get_entrypoint(cs_stage.nir));
+
+   cs_stage.feedback.duration += os_time_get_nano() - stage_start;
+
+   /* Run the shader info pass. */
+   radv_nir_shader_info_init(&cs_stage.info);
+   radv_nir_shader_info_pass(device, cs_stage.nir, pipeline_layout, pipeline_key,
+                             pipeline->base.type, &cs_stage.info);
+
+   /* Declare shader arguments. */
+   cs_stage.args.explicit_scratch_args = !radv_use_llvm_for_stage(device, MESA_SHADER_COMPUTE);
+   cs_stage.args.load_grid_size_from_user_sgpr = device->load_grid_size_from_user_sgpr;
+
+   radv_declare_shader_args(device->physical_device->rad_info.gfx_level, pipeline_key,
+                            &cs_stage.info, MESA_SHADER_COMPUTE, false,
+                            MESA_SHADER_VERTEX, &cs_stage.args);
+
+   cs_stage.info.user_sgprs_locs = cs_stage.args.user_sgprs_locs;
+   cs_stage.info.inline_push_constant_mask = cs_stage.args.ac.inline_push_const_mask;
+
+   stage_start = os_time_get_nano();
+
+   /* Postprocess NIR. */
+   radv_postprocess_nir(&pipeline->base, pipeline_layout, pipeline_key, MESA_SHADER_NONE, &cs_stage);
+
+   if (radv_can_dump_shader(device, cs_stage.nir, false))
+      nir_print_shader(cs_stage.nir, stderr);
+
+   /* Compile NIR shader to AMD assembly. */
+   pipeline->base.shaders[MESA_SHADER_COMPUTE] = radv_shader_nir_to_asm(
+      device, &cs_stage, &cs_stage.nir, 1, pipeline_key,
+      keep_executable_info, keep_statistic_info, &binaries[MESA_SHADER_COMPUTE]);
+
+   cs_stage.feedback.duration += os_time_get_nano() - stage_start;
+
+   if (keep_executable_info) {
+      struct radv_shader *shader = pipeline->base.shaders[MESA_SHADER_COMPUTE];
+
+      if (cs_stage.spirv.size) {
+         shader->spirv = malloc(cs_stage.spirv.size);
+         memcpy(shader->spirv, cs_stage.spirv.data, cs_stage.spirv.size);
+         shader->spirv_size = cs_stage.spirv.size;
+      }
+   }
+
+   /* Upload compute shader binary. */
+   radv_upload_shaders(device, &pipeline->base, binaries, NULL);
+
+   if (!keep_executable_info) {
+      radv_pipeline_cache_insert_shaders(device, cache, hash, &pipeline->base, binaries,
+                                         stack_sizes ? *stack_sizes : NULL,
+                                         num_stack_sizes ? *num_stack_sizes : 0);
+   }
+
+   free(binaries[MESA_SHADER_COMPUTE]);
+   if (radv_can_dump_shader_stats(device, cs_stage.nir)) {
+      radv_dump_shader_stats(device, &pipeline->base, MESA_SHADER_COMPUTE, stderr);
+   }
+   ralloc_free(cs_stage.nir);
+
+done:
+   pipeline_feedback.duration = os_time_get_nano() - pipeline_start;
+
+   if (creation_feedback) {
+      *creation_feedback->pPipelineCreationFeedback = pipeline_feedback;
+
+      if (creation_feedback->pipelineStageCreationFeedbackCount) {
+         assert(creation_feedback->pipelineStageCreationFeedbackCount == 1);
+         creation_feedback->pPipelineStageCreationFeedbacks[0] = cs_stage.feedback;
+      }
+   }
+
+   return result;
+}
+
+VkResult
 radv_compute_pipeline_create(VkDevice _device, VkPipelineCache _cache,
                              const VkComputePipelineCreateInfo *pCreateInfo,
                              const VkAllocationCallbacks *pAllocator, VkPipeline *pPipeline,
@@ -5586,16 +5588,16 @@ radv_compute_pipeline_create(VkDevice _device, VkPipelineCache _cache,
    }
 
    radv_pipeline_init(device, &pipeline->base, RADV_PIPELINE_COMPUTE);
+   pipeline->base.is_internal = is_internal;
 
    const VkPipelineCreationFeedbackCreateInfo *creation_feedback =
       vk_find_struct_const(pCreateInfo->pNext, PIPELINE_CREATION_FEEDBACK_CREATE_INFO);
 
    struct radv_pipeline_key key = radv_generate_compute_pipeline_key(pipeline, pCreateInfo);
 
-   UNUSED gl_shader_stage last_vgt_api_stage = MESA_SHADER_NONE;
-   result = radv_create_shaders(&pipeline->base, pipeline_layout, device, cache, &key,
-                                &pCreateInfo->stage, 1, pCreateInfo->flags, NULL, creation_feedback,
-                                NULL, NULL, &last_vgt_api_stage);
+   result = radv_compute_pipeline_compile(pipeline, pipeline_layout, device, cache, &key,
+                                          &pCreateInfo->stage, pCreateInfo->flags, NULL,
+                                          creation_feedback, NULL, NULL);
    if (result != VK_SUCCESS) {
       radv_pipeline_destroy(device, &pipeline->base, pAllocator);
       return result;

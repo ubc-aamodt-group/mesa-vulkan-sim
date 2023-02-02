@@ -318,42 +318,42 @@ init_db_template_entry(struct zink_context *ctx, struct zink_shader *shader, enu
 
     switch (shader->bindings[type][idx].type) {
     case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-       entry->mem = (void*)&ctx->di.db.ubos[stage][index];
+       entry->offset = offsetof(struct zink_context, di.db.ubos[stage][index]);
        entry->stride = sizeof(VkDescriptorAddressInfoEXT);
        entry->db_size = screen->info.db_props.robustUniformBufferDescriptorSize;
        break;
     case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
-       entry->mem = (void*)&ctx->di.textures[stage][index];
+       entry->offset = offsetof(struct zink_context, di.textures[stage][index]);
        entry->stride = sizeof(VkDescriptorImageInfo);
        entry->db_size = screen->info.db_props.combinedImageSamplerDescriptorSize;
        break;
     case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-       entry->mem = (void*)&ctx->di.textures[stage][index];
+       entry->offset = offsetof(struct zink_context, di.textures[stage][index]);
        entry->stride = sizeof(VkDescriptorImageInfo);
        entry->db_size = screen->info.db_props.sampledImageDescriptorSize;
        break;
     case VK_DESCRIPTOR_TYPE_SAMPLER:
-       entry->mem = (void*)&ctx->di.textures[stage][index];
+       entry->offset = offsetof(struct zink_context, di.textures[stage][index]);
        entry->stride = sizeof(VkDescriptorImageInfo);
        entry->db_size = screen->info.db_props.samplerDescriptorSize;
        break;
     case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-       entry->mem = (void*)&ctx->di.db.tbos[stage][index];
+       entry->offset = offsetof(struct zink_context, di.db.tbos[stage][index]);
        entry->stride = sizeof(VkDescriptorAddressInfoEXT);
        entry->db_size = screen->info.db_props.robustUniformTexelBufferDescriptorSize;
        break;
     case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-       entry->mem = (void*)&ctx->di.db.ssbos[stage][index];
+       entry->offset = offsetof(struct zink_context, di.db.ssbos[stage][index]);
        entry->stride = sizeof(VkDescriptorAddressInfoEXT);
        entry->db_size = screen->info.db_props.robustStorageBufferDescriptorSize;
        break;
     case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-       entry->mem = (void*)&ctx->di.images[stage][index];
+       entry->offset = offsetof(struct zink_context, di.images[stage][index]);
        entry->stride = sizeof(VkDescriptorImageInfo);
        entry->db_size = screen->info.db_props.storageImageDescriptorSize;
        break;
     case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-       entry->mem = (void*)&ctx->di.db.texel_images[stage][index];
+       entry->offset = offsetof(struct zink_context, di.db.texel_images[stage][index]);
        entry->stride = sizeof(VkDescriptorAddressInfoEXT);
        entry->db_size = screen->info.db_props.robustStorageTexelBufferDescriptorSize;
        break;
@@ -681,6 +681,8 @@ zink_descriptor_program_deinit(struct zink_screen *screen, struct zink_program *
          pg->dd.pool_key[i]->use_count--;
          pg->dd.pool_key[i] = NULL;
       }
+   }
+   for (unsigned i = 0; pg->num_dsl && i < ZINK_DESCRIPTOR_NON_BINDLESS_TYPES; i++) {
       if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_LAZY && pg->dd.templates[i]) {
          VKSCR(DestroyDescriptorUpdateTemplate)(screen->dev, pg->dd.templates[i], NULL);
          pg->dd.templates[i] = VK_NULL_HANDLE;
@@ -977,7 +979,7 @@ zink_descriptors_update_masked_buffer(struct zink_context *ctx, bool is_compute,
                 key->bindings[i].descriptorCount == 1) {
                for (unsigned j = 0; j < key->bindings[i].descriptorCount; j++) {
                   /* VkDescriptorDataEXT is a union of pointers; the member doesn't matter */
-                  info.data.pSampler = (void*)(pg->dd.db_template[type][i].mem + j * pg->dd.db_template[type][i].stride);
+                  info.data.pSampler = (void*)(((uint8_t*)ctx) + pg->dd.db_template[type][i].offset + j * pg->dd.db_template[type][i].stride);
                   VKSCR(GetDescriptorEXT)(screen->dev, &info, pg->dd.db_template[type][i].db_size, bs->dd.db_map[type] + desc_offset + j * pg->dd.db_template[type][i].db_size);
                }
             } else {
@@ -987,7 +989,7 @@ zink_descriptors_update_masked_buffer(struct zink_context *ctx, bool is_compute,
                uint8_t *samplers = db + key->bindings[i].descriptorCount * screen->info.db_props.sampledImageDescriptorSize;
                for (unsigned j = 0; j < key->bindings[i].descriptorCount; j++) {
                   /* VkDescriptorDataEXT is a union of pointers; the member doesn't matter */
-                  info.data.pSampler = (void*)(pg->dd.db_template[ZINK_DESCRIPTOR_TYPE_SAMPLER_VIEW][i].mem +
+                  info.data.pSampler = (void*)(((uint8_t*)ctx) + pg->dd.db_template[ZINK_DESCRIPTOR_TYPE_SAMPLER_VIEW][i].offset +
                                                j * pg->dd.db_template[ZINK_DESCRIPTOR_TYPE_SAMPLER_VIEW][i].stride);
                   VKSCR(GetDescriptorEXT)(screen->dev, &info, pg->dd.db_template[type][ZINK_DESCRIPTOR_TYPE_SAMPLER_VIEW].db_size, buf);
                   /* drivers that don't support combinedImageSamplerDescriptorSingleArray must have sampler arrays written in memory as
@@ -1254,15 +1256,9 @@ consolidate_pool_alloc(struct zink_screen *screen, struct zink_descriptor_pool_m
    if (!mpool->overflowed_pools[mpool->overflow_idx].size)
       return;
 
-   unsigned old_size = mpool->overflowed_pools[!mpool->overflow_idx].size;
-   if (util_dynarray_resize(&mpool->overflowed_pools[!mpool->overflow_idx], struct zink_descriptor_pool*, sizes[0] + sizes[1])) {
-      /* attempt to consolidate all the overflow into one array to maximize reuse */
-      uint8_t *src = mpool->overflowed_pools[mpool->overflow_idx].data;
-      uint8_t *dst = mpool->overflowed_pools[!mpool->overflow_idx].data;
-      dst += old_size;
-      memcpy(dst, src, mpool->overflowed_pools[mpool->overflow_idx].size);
-      util_dynarray_clear(&mpool->overflowed_pools[mpool->overflow_idx]);
-   }
+   /* attempt to consolidate all the overflow into one array to maximize reuse */
+   util_dynarray_append_dynarray(&mpool->overflowed_pools[!mpool->overflow_idx], &mpool->overflowed_pools[mpool->overflow_idx]);
+   util_dynarray_clear(&mpool->overflowed_pools[mpool->overflow_idx]);
 }
 
 /* called when a batch state is reset, i.e., just before a batch state becomes the current state */
@@ -1323,7 +1319,9 @@ zink_batch_descriptor_init(struct zink_screen *screen, struct zink_batch_state *
       for (unsigned i = 0; i < ZINK_DESCRIPTOR_NON_BINDLESS_TYPES; i++) {
          if (!screen->db_size[i])
             continue;
-         unsigned bind = i == ZINK_DESCRIPTOR_TYPE_SAMPLER_VIEW ? ZINK_BIND_SAMPLER_DESCRIPTOR : ZINK_BIND_RESOURCE_DESCRIPTOR;
+         unsigned bind = ZINK_BIND_RESOURCE_DESCRIPTOR;
+         if (i == ZINK_DESCRIPTOR_TYPE_SAMPLER_VIEW)
+            bind |= ZINK_BIND_SAMPLER_DESCRIPTOR;
          if (screen->compact_descriptors && i == ZINK_DESCRIPTOR_TYPE_SAMPLER_VIEW)
             bind |= ZINK_BIND_RESOURCE_DESCRIPTOR;
          struct pipe_resource *pres = pipe_buffer_create(&screen->base, bind, 0, screen->db_size[i]);

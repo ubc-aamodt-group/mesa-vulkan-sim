@@ -48,6 +48,7 @@
 #include "util/hash_table.h"
 #include "util/u_dynarray.h"
 #include "util/log.h"
+#include "util/xmlconfig.h"
 
 #include "shader_enums.h"
 
@@ -179,7 +180,6 @@ dzn_meta_blits_get_context(struct dzn_device *device,
 
 struct dzn_physical_device {
    struct vk_physical_device vk;
-   struct list_head link;
 
    struct vk_device_extension_table supported_extensions;
    struct vk_physical_device_dispatch_table dispatch;
@@ -207,6 +207,7 @@ struct dzn_physical_device {
    D3D_ROOT_SIGNATURE_VERSION root_sig_version;
    D3D12_FEATURE_DATA_ARCHITECTURE1 architecture;
    D3D12_FEATURE_DATA_D3D12_OPTIONS options;
+   D3D12_FEATURE_DATA_D3D12_OPTIONS1 options1;
    D3D12_FEATURE_DATA_D3D12_OPTIONS2 options2;
    D3D12_FEATURE_DATA_D3D12_OPTIONS3 options3;
    D3D12_FEATURE_DATA_D3D12_OPTIONS12 options12;
@@ -221,7 +222,8 @@ struct dzn_physical_device {
 
 D3D12_FEATURE_DATA_FORMAT_SUPPORT
 dzn_physical_device_get_format_support(struct dzn_physical_device *pdev,
-                                       VkFormat format);
+                                       VkFormat format,
+                                       VkImageCreateFlags create_flags);
 
 uint32_t
 dzn_physical_device_get_mem_type_mask_for_resource(const struct dzn_physical_device *pdev,
@@ -451,7 +453,7 @@ struct dzn_cmd_buffer_query_range {
 };
 
 struct dzn_cmd_buffer_query_pool_state {
-   struct util_dynarray reset, collect, signal;
+   struct util_dynarray reset, collect, signal, zero;
 };
 
 struct dzn_internal_resource {
@@ -553,6 +555,10 @@ struct dzn_cmd_buffer_state {
       struct dxil_spirv_vertex_runtime_data gfx;
       struct dxil_spirv_compute_runtime_data compute;
    } sysvals;
+   struct {
+      uint32_t num_views;
+      uint32_t view_mask;
+   } multiview;
 };
 
 struct dzn_cmd_buffer_rtv_key {
@@ -868,6 +874,11 @@ struct dzn_graphics_pipeline {
    bool rast_disabled_from_missing_position;
 
    struct {
+      uint32_t view_mask;
+      bool native_view_instancing;
+   } multiview;
+
+   struct {
       uintptr_t stream_buf[MAX_GFX_PIPELINE_STATE_STREAM_SIZE / sizeof(uintptr_t)];
       D3D12_PIPELINE_STATE_STREAM_DESC stream_desc;
       struct {
@@ -1021,6 +1032,7 @@ struct dzn_buffer {
    VkBufferUsageFlags usage;
 
    D3D12_BARRIER_ACCESS valid_access;
+   D3D12_GPU_VIRTUAL_ADDRESS gpuva;
 };
 
 DXGI_FORMAT
@@ -1113,12 +1125,12 @@ struct dzn_instance {
    struct {
       PFN_D3D12_SERIALIZE_VERSIONED_ROOT_SIGNATURE serialize_root_sig;
    } d3d12;
-   bool physical_devices_enumerated;
    uint32_t debug_flags;
 
    struct vk_sync_binary_type sync_binary_type;
 
-   struct list_head physical_devices;
+   struct driOptionCache dri_options;
+   struct driOptionCache available_dri_options;
 };
 
 struct dzn_event {

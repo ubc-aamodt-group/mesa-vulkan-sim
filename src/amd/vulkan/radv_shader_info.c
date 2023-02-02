@@ -578,6 +578,10 @@ gather_shader_info_fs(const nir_shader *nir, const struct radv_pipeline_key *pip
       (pipeline_key->ps.alpha_to_coverage_via_mrtz && (info->ps.color0_written & 0x8)) &&
       (info->ps.writes_z || info->ps.writes_stencil || info->ps.writes_sample_mask);
 
+   info->ps.mrt0_is_dual_src = pipeline_key->ps.epilog.mrt0_is_dual_src;
+
+   info->ps.spi_shader_col_format = pipeline_key->ps.epilog.spi_shader_col_format;
+
    nir_foreach_shader_in_variable(var, nir) {
       unsigned attrib_count = glsl_count_attribute_slots(var->type, false);
       int idx = var->data.location;
@@ -683,6 +687,7 @@ void
 radv_nir_shader_info_pass(struct radv_device *device, const struct nir_shader *nir,
                           const struct radv_pipeline_layout *layout,
                           const struct radv_pipeline_key *pipeline_key,
+                          const enum radv_pipeline_type pipeline_type,
                           struct radv_shader_info *info)
 {
    struct nir_function *func = (struct nir_function *)exec_list_get_head_const(&nir->functions);
@@ -823,6 +828,16 @@ radv_nir_shader_info_pass(struct radv_device *device, const struct nir_shader *n
    case MESA_SHADER_TASK:
       info->workgroup_size =
          ac_compute_cs_workgroup_size(nir->info.workgroup_size, false, UINT32_MAX);
+
+      /* Allow the compiler to assume that the shader always has full subgroups,
+       * meaning that the initial EXEC mask is -1 in all waves (all lanes enabled).
+       * This assumption is incorrect for ray tracing and internal (meta) shaders
+       * because they can use unaligned dispatch.
+       */
+      info->cs.uses_full_subgroups =
+         pipeline_type != RADV_PIPELINE_RAY_TRACING &&
+         !nir->info.internal &&
+         (info->workgroup_size % info->wave_size) == 0;
       break;
    case MESA_SHADER_MESH:
       /* Already computed in gather_shader_info_mesh(). */

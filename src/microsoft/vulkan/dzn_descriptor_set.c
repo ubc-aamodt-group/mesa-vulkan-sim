@@ -479,8 +479,8 @@ dzn_GetDescriptorSetLayoutSupport(VkDevice device,
    }
 
    pSupport->supported =
-      sampler_count <= (MAX_DESCS_PER_SAMPLER_HEAP / MAX_SETS) &&
-      other_desc_count <= (MAX_DESCS_PER_CBV_SRV_UAV_HEAP / MAX_SETS);
+      sampler_count <= MAX_DESCS_PER_SAMPLER_HEAP &&
+      other_desc_count <= MAX_DESCS_PER_CBV_SRV_UAV_HEAP;
 }
 
 static void
@@ -985,7 +985,7 @@ dzn_descriptor_heap_write_buffer_desc(struct dzn_descriptor_heap *heap,
        info->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC) {
       assert(!writeable);
       D3D12_CONSTANT_BUFFER_VIEW_DESC cbv_desc = {
-         .BufferLocation = ID3D12Resource_GetGPUVirtualAddress(info->buffer->res) + info->offset,
+         .BufferLocation = info->buffer->gpuva + info->offset,
          .SizeInBytes = ALIGN_POT(size, 256),
       };
       ID3D12Device1_CreateConstantBufferView(heap->dev, &cbv_desc, view_handle);

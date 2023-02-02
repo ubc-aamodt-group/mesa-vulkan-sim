@@ -37,10 +37,8 @@ struct anv_execbuf {
 
    struct drm_i915_gem_exec_object2 *        objects;
    uint32_t                                  bo_count;
+   uint32_t                                  bo_array_length;
    struct anv_bo **                          bos;
-
-   /* Allocated length of the 'objects' and 'bos' arrays */
-   uint32_t                                  array_length;
 
    uint32_t                                  syncobj_count;
    uint32_t                                  syncobj_array_length;
@@ -107,37 +105,28 @@ anv_execbuf_add_bo(struct anv_device *device,
       /* We've never seen this one before.  Add it to the list and assign
        * an id that we can use later.
        */
-      if (exec->bo_count >= exec->array_length) {
-         uint32_t new_len = exec->objects ? exec->array_length * 2 : 64;
+      if (exec->bo_count >= exec->bo_array_length) {
+         uint32_t new_len = exec->objects ? exec->bo_array_length * 2 : 64;
 
          struct drm_i915_gem_exec_object2 *new_objects =
-            vk_alloc(exec->alloc, new_len * sizeof(*new_objects), 8, exec->alloc_scope);
+            vk_realloc(exec->alloc, exec->objects,
+                       new_len * sizeof(*new_objects), 8, exec->alloc_scope);
          if (new_objects == NULL)
             return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
-         struct anv_bo **new_bos =
-            vk_alloc(exec->alloc, new_len * sizeof(*new_bos), 8, exec->alloc_scope);
-         if (new_bos == NULL) {
-            vk_free(exec->alloc, new_objects);
-            return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
-         }
-
-         if (exec->objects) {
-            memcpy(new_objects, exec->objects,
-                   exec->bo_count * sizeof(*new_objects));
-            memcpy(new_bos, exec->bos,
-                   exec->bo_count * sizeof(*new_bos));
-         }
-
-         vk_free(exec->alloc, exec->objects);
-         vk_free(exec->alloc, exec->bos);
-
          exec->objects = new_objects;
+
+         struct anv_bo **new_bos =
+            vk_realloc(exec->alloc, exec->bos, new_len * sizeof(*new_bos), 8,
+                       exec->alloc_scope);
+         if (new_bos == NULL)
+            return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+
          exec->bos = new_bos;
-         exec->array_length = new_len;
+         exec->bo_array_length = new_len;
       }
 
-      assert(exec->bo_count < exec->array_length);
+      assert(exec->bo_count < exec->bo_array_length);
 
       bo->exec_obj_index = exec->bo_count++;
       obj = &exec->objects[bo->exec_obj_index];
@@ -202,25 +191,20 @@ anv_execbuf_add_syncobj(struct anv_device *device,
       uint32_t new_len = MAX2(exec->syncobj_array_length * 2, 16);
 
       struct drm_i915_gem_exec_fence *new_syncobjs =
-         vk_alloc(exec->alloc, new_len * sizeof(*new_syncobjs),
-                  8, exec->alloc_scope);
-      if (!new_syncobjs)
+         vk_realloc(exec->alloc, exec->syncobjs,
+                    new_len * sizeof(*new_syncobjs), 8, exec->alloc_scope);
+      if (new_syncobjs == NULL)
          return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
-
-      if (exec->syncobjs)
-         typed_memcpy(new_syncobjs, exec->syncobjs, exec->syncobj_count);
 
       exec->syncobjs = new_syncobjs;
 
       if (exec->syncobj_values) {
          uint64_t *new_syncobj_values =
-            vk_alloc(exec->alloc, new_len * sizeof(*new_syncobj_values),
-                     8, exec->alloc_scope);
-         if (!new_syncobj_values)
+            vk_realloc(exec->alloc, exec->syncobj_values,
+                       new_len * sizeof(*new_syncobj_values), 8,
+                       exec->alloc_scope);
+         if (new_syncobj_values == NULL)
             return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
-
-         typed_memcpy(new_syncobj_values, exec->syncobj_values,
-                      exec->syncobj_count);
 
          exec->syncobj_values = new_syncobj_values;
       }
@@ -241,7 +225,7 @@ anv_execbuf_add_syncobj(struct anv_device *device,
       .handle = syncobj,
       .flags = flags,
    };
-   if (timeline_value)
+   if (exec->syncobj_values)
       exec->syncobj_values[exec->syncobj_count] = timeline_value;
 
    exec->syncobj_count++;
@@ -292,9 +276,11 @@ setup_execbuf_for_cmd_buffer(struct anv_execbuf *execbuf,
 {
    VkResult result;
    /* Add surface dependencies (BOs) to the execbuf */
-   anv_execbuf_add_bo_bitset(cmd_buffer->device, execbuf,
-                             cmd_buffer->surface_relocs.dep_words,
-                             cmd_buffer->surface_relocs.deps, 0);
+   result = anv_execbuf_add_bo_bitset(cmd_buffer->device, execbuf,
+                                      cmd_buffer->surface_relocs.dep_words,
+                                      cmd_buffer->surface_relocs.deps, 0);
+   if (result != VK_SUCCESS)
+      return result;
 
    /* First, we walk over all of the bos we've seen and add them and their
     * relocations to the validate list.
@@ -391,9 +377,6 @@ setup_execbuf_for_cmd_buffers(struct anv_execbuf *execbuf,
       if (result != VK_SUCCESS)
          return result;
    }
-
-   for (uint32_t i = 0; i < execbuf->bo_count; i++)
-      execbuf->objects[i].offset = execbuf->bos[i]->offset;
 
    struct anv_batch_bo *first_batch_bo =
       list_first_entry(&cmd_buffers[0]->batch_bos, struct anv_batch_bo, link);
@@ -768,7 +751,7 @@ anv_i915_execute_simple_batch(struct anv_queue *queue,
 
    VkResult result = anv_execbuf_add_bo(device, &execbuf, batch_bo, NULL, 0);
    if (result != VK_SUCCESS)
-      return result;
+      goto fail;
 
    execbuf.execbuf = (struct drm_i915_gem_execbuffer2) {
       .buffers_ptr = (uintptr_t) execbuf.objects,

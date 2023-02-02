@@ -843,10 +843,18 @@ wsi_wl_display_init(struct wsi_wayland *wsi_wl,
          /* Round-trip again to fetch dma-buf feedback */
          wl_display_roundtrip_queue(display->wl_display, display->queue);
 
-         if (wsi_wl->wsi->drm_info.hasRender) {
+         if (wsi_wl->wsi->drm_info.hasRender ||
+             wsi_wl->wsi->drm_info.hasPrimary) {
+            /* Apparently some wayland compositor do not send the render
+             * device node but the primary, so test against both.
+             */
             display->same_gpu =
-               major(display->main_device) == wsi_wl->wsi->drm_info.renderMajor &&
-               minor(display->main_device) == wsi_wl->wsi->drm_info.renderMinor;
+               (wsi_wl->wsi->drm_info.hasRender &&
+                major(display->main_device) == wsi_wl->wsi->drm_info.renderMajor &&
+                minor(display->main_device) == wsi_wl->wsi->drm_info.renderMinor) ||
+               (wsi_wl->wsi->drm_info.hasPrimary &&
+                major(display->main_device) == wsi_wl->wsi->drm_info.primaryMajor &&
+                minor(display->main_device) == wsi_wl->wsi->drm_info.primaryMinor);
          }
    }
 
@@ -1104,6 +1112,7 @@ wsi_wl_surface_get_formats2(VkIcdSurfaceBase *icd_surface,
 
 static VkResult
 wsi_wl_surface_get_present_modes(VkIcdSurfaceBase *surface,
+                                 struct wsi_device *wsi_device,
                                  uint32_t* pPresentModeCount,
                                  VkPresentModeKHR* pPresentModes)
 {

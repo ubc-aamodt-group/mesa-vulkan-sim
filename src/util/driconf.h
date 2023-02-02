@@ -516,6 +516,14 @@
                   "Force-enable reading back L8_SRGB textures")
 
 /**
+ * \brief freedreno specific configuration options
+ */
+
+#define DRI_CONF_DISABLE_CONSERVATIVE_LRZ(def) \
+   DRI_CONF_OPT_B(disable_conservative_lrz, def, \
+                  "Disable conservative LRZ")
+
+/**
  * \brief venus specific configuration options
  */
 #define DRI_CONF_VENUS_IMPLICIT_FENCING(def) \
@@ -628,5 +636,12 @@
 #define DRI_CONF_ANV_GENERATED_INDIRECT_THRESHOLD(def) \
    DRI_CONF_OPT_I(generated_indirect_threshold, def, 0, INT32_MAX, \
                   "Indirect threshold count above which we start generating commands")
+
+/**
+ * \brief DZN specific configuration options
+ */
+
+#define DRI_CONF_DZN_CLAIM_WIDE_LINES(def) \
+   DRI_CONF_OPT_B(dzn_claim_wide_lines, def, "Claim wide line support")
 
 #endif

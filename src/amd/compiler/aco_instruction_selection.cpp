@@ -3557,6 +3557,7 @@ visit_alu_instr(isel_context* ctx, nir_alu_instr* instr)
       break;
    }
    case nir_op_pack_32_4x8: bld.copy(Definition(dst), get_alu_src(ctx, instr->src[0], 4)); break;
+   case nir_op_pack_half_2x16_rtz_split:
    case nir_op_pack_half_2x16_split: {
       if (dst.regClass() == v1) {
          if (ctx->program->gfx_level == GFX8 || ctx->program->gfx_level == GFX9)
@@ -5577,43 +5578,7 @@ visit_load_input(isel_context* ctx, nir_intrinsic_instr* instr)
    Temp dst = get_ssa_temp(ctx, &instr->dest.ssa);
    nir_src offset = *nir_get_io_offset_src(instr);
 
-   if (ctx->shader->info.stage == MESA_SHADER_VERTEX && ctx->program->info.vs.dynamic_inputs) {
-      if (!nir_src_is_const(offset) || nir_src_as_uint(offset))
-         isel_err(offset.ssa->parent_instr,
-                  "Unimplemented non-zero nir_intrinsic_load_input offset");
-
-      unsigned location = nir_intrinsic_base(instr) - VERT_ATTRIB_GENERIC0;
-      unsigned bitsize = instr->dest.ssa.bit_size;
-      unsigned component = nir_intrinsic_component(instr) >> (bitsize == 64 ? 1 : 0);
-      unsigned num_components = instr->dest.ssa.num_components;
-
-      aco_ptr<Instruction> vec{create_instruction<Pseudo_instruction>(
-         aco_opcode::p_create_vector, Format::PSEUDO, num_components, 1)};
-      std::array<Temp, NIR_MAX_VEC_COMPONENTS> elems;
-      for (unsigned i = 0; i < num_components; i++) {
-         if (bitsize == 64) {
-            Temp input = get_arg(ctx, ctx->args->vs_inputs[location + (component + i) / 2]);
-            elems[i] = bld.pseudo(aco_opcode::p_create_vector, bld.def(v2),
-                                  emit_extract_vector(ctx, input, (component + i) * 2 % 4, v1),
-                                  emit_extract_vector(ctx, input, (component + i) * 2 % 4 + 1, v1));
-         } else {
-            Temp input = get_arg(ctx, ctx->args->vs_inputs[location]);
-            elems[i] = emit_extract_vector(ctx, input, component + i, v1);
-         }
-         if (bitsize == 16) {
-            if (nir_alu_type_get_base_type(nir_intrinsic_dest_type(instr)) == nir_type_float)
-               elems[i] = bld.vop1(aco_opcode::v_cvt_f16_f32, bld.def(v2b), elems[i]);
-            else
-               elems[i] = bld.pseudo(aco_opcode::p_extract_vector, bld.def(v2b), elems[i],
-                                     Operand::c32(0u));
-         }
-         vec->operands[i] = Operand(elems[i]);
-      }
-      vec->definitions[0] = Definition(dst);
-      ctx->block->instructions.emplace_back(std::move(vec));
-      ctx->allocated_vec.emplace(dst.id(), elems);
-   } else if (ctx->shader->info.stage == MESA_SHADER_VERTEX) {
-
+   if (ctx->shader->info.stage == MESA_SHADER_VERTEX) {
       if (!nir_src_is_const(offset) || nir_src_as_uint(offset))
          isel_err(offset.ssa->parent_instr,
                   "Unimplemented non-zero nir_intrinsic_load_input offset");
@@ -11402,6 +11367,9 @@ create_fs_exports(isel_context* ctx)
 
    if (ctx->program->info.ps.has_epilog) {
       create_fs_jump_to_epilog(ctx);
+
+      /* FS epilogs always have at least one color/null export. */
+      ctx->program->has_color_exports = true;
    } else {
       struct aco_export_mrt mrts[8];
       unsigned compacted_mrt_index = 0;

@@ -86,6 +86,12 @@ Core Mesa environment variables
       print error and performance messages to stderr (or
       ``MESA_LOG_FILE``).
 
+.. envvar:: MESA_PROCESS_NAME
+
+   if set, overrides the process name string used internally for various
+   purposes (e.g. for driconf option matching, logging, artifact storage,
+   etc.).
+
 .. envvar:: MESA_LOG_FILE
 
    specifies a file name for logging all errors, warnings, etc., rather
@@ -167,6 +173,12 @@ Core Mesa environment variables
    features of the given language version if it's higher than what's
    normally reported. (for developers only)
 
+.. envvar:: MESA_DRICONF_EXECUTABLE_OVERRIDE
+
+   if set, overrides the "executable" string used specifically for driconf
+   option matching. This takes higher precedence over more general process
+   name override (e.g. MESA_PROCESS_NAME).
+
 .. envvar:: MESA_SHADER_CACHE_DISABLE
 
    if set to ``true``, disables the on-disk shader cache. If set to
@@ -238,6 +250,17 @@ Core Mesa environment variables
    in ``$XDG_CACHE_HOME/mesa_shader_cache_db`` (if that variable is set)
    or else within ``.cache/mesa_shader_cache_db`` within the user's home
    directory.
+
+.. envvar:: MESA_DISK_CACHE_DATABASE_NUM_PARTS
+
+   specifies number of mesa-db cache parts, default is 50.
+
+.. envvar:: MESA_DISK_CACHE_DATABASE_EVICTION_SCORE_2X_PERIOD
+
+   Mesa-DB cache eviction algorithm calculates weighted score for the
+   cache items. The weight is doubled based on the last access time of
+   cache entry. By default period of weight doubling is set to one month.
+   Period value is given in seconds.
 
 .. envvar:: MESA_DISK_CACHE_READ_ONLY_FOZ_DBS_DYNAMIC_LIST
 
@@ -518,6 +541,25 @@ Intel driver environment variables
    ``wm``
       dump shader assembly for fragment shaders (same as ``fs``)
 
+.. envvar:: INTEL_DECODE
+
+   a comma-separated list of enable/disable flags configuring the
+   output produced by ``INTEL_DEBUG=bat`` (use with
+   ``INTEL_DECODE=+color,-floats``) :
+
+   ``color``
+      print colored output
+
+   ``floats``
+      try to decode floating point data in buffers
+
+   ``full``
+      print additional custom information for instructions (usually
+      pulling more information by inspecting memory)
+
+   ``offsets``
+      print offsets of instructions
+
 .. envvar:: INTEL_MEASURE
 
    Collects GPU timestamps over common intervals, and generates a CSV report
@@ -602,6 +644,43 @@ Intel driver environment variables
    overrode shader with sha1 <SHA-1>" in stderr replacing the original
    assembly.
 
+.. envvar:: INTEL_SIMD_DEBUG
+
+   a comma-separated list of named flags, which control simd dispatch widths:
+
+   ``fs8``
+      allow generation of SIMD8 fragment shader
+   ``fs16``
+      allow generation of SIMD16 fragment shader
+   ``fs32``
+      allow generation of SIMD32 fragment shader
+   ``cs8``
+      allow generation of SIMD8 compute shader
+   ``cs16``
+      allow generation of SIMD16 compute shader
+   ``cs32``
+      allow generation of SIMD32 compute shader
+   ``ts8``
+      allow generation of SIMD8 task shader
+   ``ts16``
+      allow generation of SIMD16 task shader
+   ``ts32``
+      allow generation of SIMD32 task shader
+   ``ms8``
+      allow generation of SIMD8 mesh shader
+   ``ms16``
+      allow generation of SIMD16 mesh shader
+   ``ms32``
+      allow generation of SIMD32 mesh shader
+   ``rt8``
+      allow generation of SIMD8 ray-tracing shader
+   ``rt16``
+      allow generation of SIMD16 ray-tracing shader
+   ``rt32``
+      allow generation of SIMD32 ray-tracing shader
+
+   If none of widths for particular shader stage was specified, then all
+   widths are allowed.
 
 DRI environment variables
 -------------------------
@@ -1023,6 +1102,8 @@ RADV driver environment variables
       dump shaders
    ``shaderstats``
       dump shader statistics
+   ``shadowregs``
+      enable register shadowing
    ``spirv``
       dump SPIR-V
    ``splitfma``

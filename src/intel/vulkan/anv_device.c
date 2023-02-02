@@ -308,6 +308,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .EXT_index_type_uint8                  = true,
       .EXT_inline_uniform_block              = true,
       .EXT_line_rasterization                = true,
+      .EXT_load_store_op_none                = true,
       /* Enable the extension only if we have support on both the local &
        * system memory
        */
@@ -514,19 +515,28 @@ anv_physical_device_init_heaps(struct anv_physical_device *device, int fd)
        * But some game engines can't handle single type well
        * https://gitlab.freedesktop.org/mesa/mesa/-/issues/7360#note_1719438
        *
-       * And Intel on Windows uses 3 types so it's better to add extra one here
+       * The second memory type w/out HOST_CACHED_BIT will get write-combining.
+       * See anv_AllocateMemory()).
+       *
+       * The Intel Vulkan driver for Windows also advertises these memory types.
        */
-      device->memory.type_count = 2;
+      device->memory.type_count = 3;
       device->memory.types[0] = (struct anv_memory_type) {
-          .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-          .heapIndex = 0,
+         .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+         .heapIndex = 0,
       };
       device->memory.types[1] = (struct anv_memory_type) {
-          .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                           VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
-                           VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
-          .heapIndex = 0,
+         .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+         .heapIndex = 0,
+      };
+      device->memory.types[2] = (struct anv_memory_type) {
+         .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                          VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+         .heapIndex = 0,
       };
    } else {
       device->memory.heap_count = 1;
@@ -863,7 +873,7 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
     * we'll need to edit genxml prior to enabling here.
     */
    device->has_protected_contexts = device->info.ver >= 12 &&
-      intel_gem_supports_protected_context(fd);
+      intel_gem_supports_protected_context(fd, device->info.kmd_type);
 
    result = anv_physical_device_init_heaps(device, fd);
    if (result != VK_SUCCESS)
@@ -910,7 +920,9 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
 
    /* Check if we can read the GPU timestamp register from the CPU */
    uint64_t u64_ignore;
-   device->has_reg_timestamp = intel_gem_read_render_timestamp(fd, &u64_ignore);
+   device->has_reg_timestamp = intel_gem_read_render_timestamp(fd,
+                                                               device->info.kmd_type,
+                                                               &u64_ignore);
 
    device->always_flush_cache = INTEL_DEBUG(DEBUG_STALL) ||
       driQueryOptionb(&instance->dri_options, "always_flush_cache");
@@ -939,7 +951,7 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
       master_fd = open(primary_path, O_RDWR | O_CLOEXEC);
       if (master_fd >= 0) {
          /* fail if we don't have permission to even render on this device */
-         if (!intel_gem_can_render_on_fd(master_fd)) {
+         if (!intel_gem_can_render_on_fd(master_fd, device->info.kmd_type)) {
             close(master_fd);
             master_fd = -1;
          }
@@ -947,7 +959,7 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
    }
    device->master_fd = master_fd;
 
-   device->engine_info = intel_engine_get_info(fd);
+   device->engine_info = intel_engine_get_info(fd, device->info.kmd_type);
    anv_physical_device_init_queue_families(device);
 
    anv_physical_device_init_perf(device, fd);
@@ -3474,9 +3486,7 @@ VkResult anv_CreateDevice(
     * to zero and they have a valid descriptor.
     */
    device->null_surface_state =
-      anv_state_pool_alloc(device->info->verx10 >= 125 ?
-                           &device->scratch_surface_state_pool :
-                           &device->internal_surface_state_pool,
+      anv_state_pool_alloc(&device->bindless_surface_state_pool,
                            device->isl_dev.ss.size,
                            device->isl_dev.ss.align);
    isl_null_fill_state(&device->isl_dev, device->null_surface_state.map,
@@ -3817,7 +3827,7 @@ VkResult anv_AllocateMemory(
       return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 
    assert(pAllocateInfo->memoryTypeIndex < pdevice->memory.type_count);
-   struct anv_memory_type *mem_type =
+   const struct anv_memory_type *mem_type =
       &pdevice->memory.types[pAllocateInfo->memoryTypeIndex];
    assert(mem_type->heapIndex < pdevice->memory.heap_count);
    struct anv_memory_heap *mem_heap =
@@ -3912,9 +3922,10 @@ VkResult anv_AllocateMemory(
       alloc_flags |= ANV_BO_ALLOC_NO_LOCAL_MEM;
 
    /* If the allocated buffer might end up in local memory and it's host
-    * visible, make CPU writes are combined, it should be faster.
+    * visible and uncached, enable CPU write-combining. It should be faster.
     */
    if (!(alloc_flags & ANV_BO_ALLOC_NO_LOCAL_MEM) &&
+       (mem_type->propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) == 0 &&
        (mem_type->propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
       alloc_flags |= ANV_BO_ALLOC_WRITE_COMBINE;
 
@@ -4708,7 +4719,9 @@ VkResult anv_GetCalibratedTimestampsEXT(
    for (d = 0; d < timestampCount; d++) {
       switch (pTimestampInfos[d].timeDomain) {
       case VK_TIME_DOMAIN_DEVICE_EXT:
-         if (!intel_gem_read_render_timestamp(device->fd, &pTimestamps[d])) {
+         if (!intel_gem_read_render_timestamp(device->fd,
+                                              device->info->kmd_type,
+                                              &pTimestamps[d])) {
             return vk_device_set_lost(&device->vk, "Failed to read the "
                                       "TIMESTAMP register: %m");
          }

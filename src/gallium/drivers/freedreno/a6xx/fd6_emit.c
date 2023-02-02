@@ -162,11 +162,12 @@ compute_lrz_state(struct fd6_emit *emit) assert_dt
    struct fd6_blend_stateobj *blend = fd6_blend_stateobj(ctx->blend);
    struct fd6_zsa_stateobj *zsa = fd6_zsa_stateobj(ctx->zsa);
    struct fd_resource *rsc = fd_resource(pfb->zsbuf->texture);
+   bool reads_dest = blend->reads_dest;
 
    lrz = zsa->lrz;
 
    /* normalize lrz state: */
-   if (blend->reads_dest || fs->writes_pos || fs->no_earlyz || fs->has_kill ||
+   if (reads_dest || fs->writes_pos || fs->no_earlyz || fs->has_kill ||
        blend->base.alpha_to_coverage) {
       lrz.write = false;
    }
@@ -176,8 +177,39 @@ compute_lrz_state(struct fd6_emit *emit) assert_dt
     * isn't known when blend CSO is constructed so we need to handle
     * that here.
     */
-   if (ctx->all_mrt_channel_mask & ~blend->all_mrt_write_mask)
+   if (ctx->all_mrt_channel_mask & ~blend->all_mrt_write_mask) {
       lrz.write = false;
+      reads_dest = true;
+   }
+
+   /* Writing depth with blend enabled means we need to invalidate LRZ,
+    * because the written depth value could mean that a later draw with
+    * depth enabled (where we would otherwise write LRZ) could have
+    * fragments which don't pass the depth test due to this draw.  For
+    * example, consider this sequence of draws, with depth mode GREATER:
+    *
+    *   draw A:
+    *     z=0.1, fragments pass
+    *   draw B:
+    *     z=0.4, fragments pass
+    *     blend enabled (LRZ write disabled)
+    *     depth write enabled
+    *   draw C:
+    *     z=0.2, fragments don't pass
+    *     blend disabled
+    *     depth write enabled
+    *
+    * Normally looking at the state in draw C, we'd assume we could
+    * enable LRZ write.  But this would cause early-z/lrz to discard
+    * fragments from draw A which should be visible due to draw B.
+    */
+   if (reads_dest && zsa->writes_z && ctx->screen->conservative_lrz) {
+      if (!zsa->perf_warn_blend && rsc->lrz_valid) {
+         perf_debug_ctx(ctx, "Invalidating LRZ due to blend+depthwrite");
+         zsa->perf_warn_blend = true;
+      }
+      rsc->lrz_valid = false;
+   }
 
    /* if we change depthfunc direction, bail out on using LRZ.  The
     * LRZ buffer encodes a min/max depth value per block, but if
@@ -186,6 +218,10 @@ compute_lrz_state(struct fd6_emit *emit) assert_dt
     */
    if (zsa->base.depth_enabled && (rsc->lrz_direction != FD_LRZ_UNKNOWN) &&
        (rsc->lrz_direction != lrz.direction)) {
+      if (!zsa->perf_warn_zdir && rsc->lrz_valid) {
+         perf_debug_ctx(ctx, "Invalidating LRZ due to depth test direction change");
+         zsa->perf_warn_zdir = true;
+      }
       rsc->lrz_valid = false;
    }
 
