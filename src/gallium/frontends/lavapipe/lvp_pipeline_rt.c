@@ -75,11 +75,6 @@ static void translate_nir_to_ptx(nir_shader *shader, char* shaderPath)
    nir_translate_shader_to_ptx(shader, pFile, fullPath);
 
    strcpy(shaderPath, fullPath);
-
-   // if(1){ // debugging: print out current nir shader
-   //    nir_print_shader(shader, stderr);
-   //    nir_translate_shader_to_ptx(shader, stderr, NULL);
-   // }
 }
 
 static void run_rt_translation_passes()
@@ -152,8 +147,9 @@ vsim_compile_ray_tracing_pipeline(
          printf("LVP: Translating shader %d (type %d)\n", i, stages[i].stage);
          translate_nir_to_ptx(stages[i].nir, shaderPaths[i]);
       }
-
+      pipeline->pipeline_nir[i] = ralloc(NULL, struct lvp_pipeline_nir);
       pipeline->pipeline_nir[i]->nir = stages[i].nir;
+      pipeline->pipeline_nir[i]->ref_cnt = 1;
    }
 
    // Vulkan-Sim additions
