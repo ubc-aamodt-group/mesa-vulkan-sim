@@ -1,14 +1,6 @@
 #ifndef ANV_PUBLIC_H
 #define ANV_PUBLIC_H
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdbool.h>
-#include <pthread.h>
-#include <assert.h>
-#include <stdint.h>
-
-
 struct anv_bo {
    uint32_t gem_handle;
 

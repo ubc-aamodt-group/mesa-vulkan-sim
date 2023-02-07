@@ -21,9 +21,9 @@
  * IN THE SOFTWARE.
  */
 
+#include "lvp_private.h"
 #include "gpgpusim_bvh.h"
 #include "vsim_private.h"
-#include "lvp_private.h"
 #include "vk_descriptors.h"
 #include "vk_util.h"
 #include "util/u_math.h"

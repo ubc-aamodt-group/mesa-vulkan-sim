@@ -21,8 +21,8 @@
  * IN THE SOFTWARE.
  */
 
-#include "lvp_acceleration_structure.h"
 #include "lvp_private.h"
+#include "lvp_acceleration_structure.h"
 #include "vsim_private.h"
 #include "gen_rt_pack.h"
 
