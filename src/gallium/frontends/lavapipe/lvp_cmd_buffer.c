@@ -203,6 +203,7 @@ void lvp_CmdTraceRaysKHR(
     uint32_t                                    height,
     uint32_t                                    depth)
 {
+   printf("LVP: Trace ray...\n");
    LVP_FROM_HANDLE(lvp_cmd_buffer, cmd_buffer, commandBuffer);
 
    void *raygen_addr = find_host_address(cmd_buffer->device, pRaygenShaderBindingTable->deviceAddress);

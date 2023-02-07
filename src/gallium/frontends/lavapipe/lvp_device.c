@@ -1906,6 +1906,7 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_MapMemory(
 {
    LVP_FROM_HANDLE(lvp_device, device, _device);
    LVP_FROM_HANDLE(lvp_device_memory, mem, _memory);
+   printf("LVP: Finding mapped memory for mem %p: mem->pmem %p \n", mem, mem->pmem);
    void *map;
    if (mem == NULL) {
       *ppData = NULL;
@@ -1915,6 +1916,8 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_MapMemory(
    map = device->pscreen->map_memory(device->pscreen, mem->pmem);
 
    *ppData = (char *)map + offset;
+
+   printf("LVP: Identified at %p\n", *ppData);
    return VK_SUCCESS;
 }
 
@@ -2111,6 +2114,9 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_BindBufferMemory2(VkDevice _device,
                                              buffer->bo,
                                              mem->pmem,
                                              pBindInfos[i].memoryOffset);
+      printf("LVP: Binding lvp_buffer %p: ", buffer);
+      printf("buffer->bo: %p; buffer->pmem: %p; memory-offset: %ld;\n",
+               buffer->bo, buffer->pmem, buffer->offset);
    }
    return VK_SUCCESS;
 }

@@ -264,10 +264,11 @@ struct lvp_descriptor_set_binding_layout {
       int16_t shader_buffer_index;
       int16_t sampler_index;
       int16_t sampler_view_index;
+      int16_t acceleration_structure_index;
       int16_t image_index;
       int16_t uniform_block_index;
       int16_t uniform_block_offset;
-   } stage[MESA_SHADER_STAGES];
+   } stage[MESA_ALL_SHADER_STAGES];
 
    /* Immutable samplers (or NULL if no immutable samplers) */
    struct pipe_sampler_state **immutable_samplers;
@@ -297,8 +298,9 @@ struct lvp_descriptor_set_layout {
       uint16_t image_count;
       uint16_t uniform_block_count;
       uint16_t uniform_block_size;
+      uint16_t acceleration_structure_count;
       uint16_t uniform_block_sizes[MAX_PER_STAGE_DESCRIPTOR_UNIFORM_BLOCKS]; //zero-indexed
-   } stage[MESA_SHADER_STAGES];
+   } stage[MESA_ALL_SHADER_STAGES];
 
    /* Number of dynamic offsets used by this descriptor set */
    uint16_t dynamic_offset_count;
@@ -395,7 +397,7 @@ struct lvp_pipeline_layout {
       uint16_t uniform_block_size;
       uint16_t uniform_block_count;
       uint16_t uniform_block_sizes[MAX_PER_STAGE_DESCRIPTOR_UNIFORM_BLOCKS * MAX_SETS];
-   } stage[MESA_SHADER_STAGES];
+   } stage[MESA_ALL_SHADER_STAGES];
 };
 
 struct lvp_access_info {
@@ -434,6 +436,7 @@ struct lvp_pipeline {
 
    void *state_data;
    bool is_compute_pipeline;
+   bool is_raytrace_pipeline;
    bool force_min_sample;
    struct lvp_pipeline_nir *pipeline_nir[MESA_SHADER_STAGES];
    struct lvp_pipeline_nir *tess_ccw;

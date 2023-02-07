@@ -49,6 +49,8 @@
 
 #include "vk_cmd_enqueue_entrypoints.h"
 #include "vk_util.h"
+#include "vk_enum_to_str.h"
+#include "gpgpusim_calls_from_mesa.h"
 
 #define VK_PROTOTYPES
 #include <vulkan/vulkan.h>
@@ -82,10 +84,10 @@ struct rendering_state {
    bool blend_color_dirty;
    bool ve_dirty;
    bool vb_dirty;
-   bool constbuf_dirty[PIPE_SHADER_TYPES];
-   bool pcbuf_dirty[PIPE_SHADER_TYPES];
-   bool has_pcbuf[PIPE_SHADER_TYPES];
-   bool inlines_dirty[PIPE_SHADER_TYPES];
+   bool constbuf_dirty[MESA_ALL_SHADER_STAGES];
+   bool pcbuf_dirty[MESA_ALL_SHADER_STAGES];
+   bool has_pcbuf[MESA_ALL_SHADER_STAGES];
+   bool inlines_dirty[MESA_ALL_SHADER_STAGES];
    bool vp_dirty;
    bool scissor_dirty;
    bool ib_dirty;
@@ -124,29 +126,29 @@ struct rendering_state {
    ubyte index_size;
    unsigned index_offset;
    struct pipe_resource *index_buffer;
-   struct pipe_constant_buffer const_buffer[PIPE_SHADER_TYPES][16];
-   int num_const_bufs[PIPE_SHADER_TYPES];
+   struct pipe_constant_buffer const_buffer[MESA_ALL_SHADER_STAGES][16];
+   int num_const_bufs[MESA_ALL_SHADER_STAGES];
    int num_vb;
    unsigned start_vb;
    struct pipe_vertex_buffer vb[PIPE_MAX_ATTRIBS];
    struct cso_velems_state velem;
 
-   struct lvp_access_info access[MESA_SHADER_STAGES];
-   struct pipe_sampler_view *sv[PIPE_SHADER_TYPES][PIPE_MAX_SHADER_SAMPLER_VIEWS];
-   int num_sampler_views[PIPE_SHADER_TYPES];
-   struct pipe_sampler_state ss[PIPE_SHADER_TYPES][PIPE_MAX_SAMPLERS];
+   struct lvp_access_info access[MESA_ALL_SHADER_STAGES];
+   struct pipe_sampler_view *sv[MESA_ALL_SHADER_STAGES][PIPE_MAX_SHADER_SAMPLER_VIEWS];
+   int num_sampler_views[MESA_ALL_SHADER_STAGES];
+   struct pipe_sampler_state ss[MESA_ALL_SHADER_STAGES][PIPE_MAX_SAMPLERS];
    /* cso_context api is stupid */
-   const struct pipe_sampler_state *cso_ss_ptr[PIPE_SHADER_TYPES][PIPE_MAX_SAMPLERS];
-   int num_sampler_states[PIPE_SHADER_TYPES];
-   bool sv_dirty[PIPE_SHADER_TYPES];
-   bool ss_dirty[PIPE_SHADER_TYPES];
+   const struct pipe_sampler_state *cso_ss_ptr[MESA_ALL_SHADER_STAGES][PIPE_MAX_SAMPLERS];
+   int num_sampler_states[MESA_ALL_SHADER_STAGES];
+   bool sv_dirty[MESA_ALL_SHADER_STAGES];
+   bool ss_dirty[MESA_ALL_SHADER_STAGES];
 
-   struct pipe_image_view iv[PIPE_SHADER_TYPES][PIPE_MAX_SHADER_IMAGES];
-   int num_shader_images[PIPE_SHADER_TYPES];
-   struct pipe_shader_buffer sb[PIPE_SHADER_TYPES][PIPE_MAX_SHADER_BUFFERS];
-   int num_shader_buffers[PIPE_SHADER_TYPES];
-   bool iv_dirty[PIPE_SHADER_TYPES];
-   bool sb_dirty[PIPE_SHADER_TYPES];
+   struct pipe_image_view iv[MESA_ALL_SHADER_STAGES][PIPE_MAX_SHADER_IMAGES];
+   int num_shader_images[MESA_ALL_SHADER_STAGES];
+   struct pipe_shader_buffer sb[MESA_ALL_SHADER_STAGES][PIPE_MAX_SHADER_BUFFERS];
+   int num_shader_buffers[MESA_ALL_SHADER_STAGES];
+   bool iv_dirty[MESA_ALL_SHADER_STAGES];
+   bool sb_dirty[MESA_ALL_SHADER_STAGES];
    bool disable_multisample;
    enum gs_output gs_output_lines : 2;
 
@@ -156,12 +158,12 @@ struct rendering_state {
    void *velems_cso;
 
    uint8_t push_constants[128 * 4];
-   uint16_t push_size[2]; //gfx, compute
+   uint16_t push_size[3]; //gfx, compute, raytrace
    struct {
       void *block[MAX_PER_STAGE_DESCRIPTOR_UNIFORM_BLOCKS * MAX_SETS];
       uint16_t size[MAX_PER_STAGE_DESCRIPTOR_UNIFORM_BLOCKS * MAX_SETS];
       uint16_t count;
-   } uniform_blocks[PIPE_SHADER_TYPES];
+   } uniform_blocks[MESA_ALL_SHADER_STAGES];
 
    VkRect2D render_area;
    bool suspending;
@@ -187,7 +189,7 @@ struct rendering_state {
    struct pipe_stream_output_target *so_targets[PIPE_MAX_SO_BUFFERS];
    uint32_t so_offsets[PIPE_MAX_SO_BUFFERS];
 
-   struct lvp_pipeline *pipeline[2];
+   struct lvp_pipeline *pipeline[3];
 
    bool tess_ccw;
    void *tess_states[2];
@@ -551,6 +553,12 @@ static void emit_state(struct rendering_state *state)
       state->pctx->set_scissor_states(state->pctx, 0, state->num_scissors, state->scissors);
       state->scissor_dirty = false;
    }
+}
+
+static void handle_raytrace_pipeline(struct vk_cmd_queue_entry *cmd,
+                                    struct rendering_state *state)
+{
+   // TODO: No idea what goes here...
 }
 
 static void handle_compute_pipeline(struct vk_cmd_queue_entry *cmd,
@@ -1047,21 +1055,63 @@ handle_pipeline_access(struct rendering_state *state, gl_shader_stage stage)
    }
 }
 
+static void handle_trace_ray(struct vk_cmd_queue_entry *cmd,
+                            struct rendering_state *state)
+{
+   printf("LVP: Handling trace ray...\n");
+
+   /* Call trace ray in GPGPU-Sim:
+   extern void gpgpusim_vkCmdTraceRaysKHR(
+                      void *raygen_sbt,
+                      void *miss_sbt,
+                      void *hit_sbt,
+                      void *callable_sbt,
+                      bool is_indirect,               // hard coded to false in original Intel impl.
+                      uint32_t launch_width,
+                      uint32_t launch_height,
+                      uint32_t launch_depth,
+                      uint64_t launch_size_addr       // hard coded to 0 in original Intel impl. 
+   ); */
+
+   gpgpusim_vkCmdTraceRaysKHR(
+      cmd->u.trace_rays_khr.raygen_shader_binding_table,
+      cmd->u.trace_rays_khr.miss_shader_binding_table,
+      cmd->u.trace_rays_khr.hit_shader_binding_table,
+      cmd->u.trace_rays_khr.callable_shader_binding_table,
+      false,
+      cmd->u.trace_rays_khr.width,
+      cmd->u.trace_rays_khr.height,
+      cmd->u.trace_rays_khr.depth,
+      0
+   );
+
+   // Temporarily just crash program here. 
+   abort();
+}
+
 static void handle_pipeline(struct vk_cmd_queue_entry *cmd,
                             struct rendering_state *state)
 {
+   printf("LVP: Bind pipeline...\n");
    LVP_FROM_HANDLE(lvp_pipeline, pipeline, cmd->u.bind_pipeline.pipeline);
    pipeline->used = true;
    if (pipeline->is_compute_pipeline) {
       handle_compute_pipeline(cmd, state);
       handle_pipeline_access(state, MESA_SHADER_COMPUTE);
+      state->push_size[1] = pipeline->layout->push_constant_size;
+      state->pipeline[1] = pipeline;
+   } else if (pipeline->is_raytrace_pipeline) {
+      printf("LVP: Bind ray tracing pipeline...\n");
+      handle_raytrace_pipeline(cmd, state);
+      state->push_size[2] = pipeline->layout->push_constant_size;
+      state->pipeline[2] = pipeline;
    } else {
       handle_graphics_pipeline(cmd, state);
       for (unsigned i = 0; i < MESA_SHADER_COMPUTE; i++)
          handle_pipeline_access(state, i);
+      state->push_size[0] = pipeline->layout->push_constant_size;
+      state->pipeline[0] = pipeline;
    }
-   state->push_size[pipeline->is_compute_pipeline] = pipeline->layout->push_constant_size;
-   state->pipeline[pipeline->is_compute_pipeline] = pipeline;
 }
 
 static void handle_vertex_buffers2(struct vk_cmd_queue_entry *cmd,
@@ -1095,7 +1145,7 @@ struct dyn_info {
       uint16_t sampler_view_count;
       uint16_t image_count;
       uint16_t uniform_block_count;
-   } stage[MESA_SHADER_STAGES];
+   } stage[MESA_ALL_SHADER_STAGES];
 
    uint32_t dyn_index;
    const uint32_t *dynamic_offsets;
@@ -1181,6 +1231,7 @@ static void handle_descriptor(struct rendering_state *state,
    bool is_dynamic = type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC ||
       type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
 
+   printf("LVP: Handling descriptor type %s...\n", vk_DescriptorType_to_str(type));
    switch (type) {
    case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK: {
       int idx = binding->stage[stage].uniform_block_index;
@@ -1245,6 +1296,9 @@ static void handle_descriptor(struct rendering_state *state,
       fill_sampler_stage(state, dyn_info, stage, p_stage, array_idx, descriptor, binding);
       fill_sampler_view_stage(state, dyn_info, stage, p_stage, array_idx, descriptor, binding);
       break;
+   case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+      // TODO: 
+      break;
    default:
       fprintf(stderr, "Unhandled descriptor set %d\n", type);
       unreachable("oops");
@@ -1293,6 +1347,55 @@ static void increment_dyn_info(struct dyn_info *dyn_info,
       dyn_info->dyn_index += layout->dynamic_offset_count;
 }
 
+static void handle_raytrace_descriptor_sets(struct vk_cmd_queue_entry *cmd,
+                                           struct dyn_info *dyn_info,
+                                           struct rendering_state *state)
+{
+   printf("LVP: Bind ray tracing descriptor sets...\n");
+   struct vk_cmd_bind_descriptor_sets *bds = &cmd->u.bind_descriptor_sets;
+   LVP_FROM_HANDLE(lvp_pipeline_layout, layout, bds->layout);
+   int i;
+
+   for (i = 0; i < bds->first_set; i++) {
+      increment_dyn_info(dyn_info, layout->vk.set_layouts[i], false);
+   }
+   for (i = 0; i < bds->descriptor_set_count; i++) {
+      const struct lvp_descriptor_set *set = lvp_descriptor_set_from_handle(bds->descriptor_sets[i]);
+
+      printf("LVP: Binding... \n");
+      if (set->layout->shader_stages & VK_SHADER_STAGE_RAYGEN_BIT_KHR) {
+         printf("Bind raygen... \n");
+         handle_set_stage(state, dyn_info, set, MESA_SHADER_RAYGEN, MESA_SHADER_RAYGEN);
+      }
+      if (set->layout->shader_stages & VK_SHADER_STAGE_ANY_HIT_BIT_KHR) {
+         printf("Bind any hit... \n");
+         handle_set_stage(state, dyn_info, set, MESA_SHADER_ANY_HIT, MESA_SHADER_ANY_HIT);
+      }
+      if (set->layout->shader_stages & VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR) {
+         printf("Bind closest hit... \n");
+         handle_set_stage(state, dyn_info, set, MESA_SHADER_CLOSEST_HIT, MESA_SHADER_CLOSEST_HIT);
+      }
+      if (set->layout->shader_stages & VK_SHADER_STAGE_MISS_BIT_KHR) {
+         printf("Bind miss... \n");
+         handle_set_stage(state, dyn_info, set, MESA_SHADER_MISS, MESA_SHADER_MISS);
+      }
+      if (set->layout->shader_stages & VK_SHADER_STAGE_INTERSECTION_BIT_KHR) {
+         printf("Bind intersection... \n");
+         handle_set_stage(state, dyn_info, set, MESA_SHADER_INTERSECTION, MESA_SHADER_INTERSECTION);
+      }
+      if (set->layout->shader_stages & VK_SHADER_STAGE_CALLABLE_BIT_KHR) {
+         printf("Bind callable... \n");
+         handle_set_stage(state, dyn_info, set, MESA_SHADER_CALLABLE, MESA_SHADER_CALLABLE);
+      }
+
+      printf("\n");
+      
+      increment_dyn_info(dyn_info, layout->vk.set_layouts[bds->first_set + i], true);
+
+      printf("LVP: Setting descriptor set pointer 0x%x...\n", (unsigned int)set);
+      gpgpusim_setDescriptorSet(set);
+   }
+}
 static void handle_compute_descriptor_sets(struct vk_cmd_queue_entry *cmd,
                                            struct dyn_info *dyn_info,
                                            struct rendering_state *state)
@@ -1316,6 +1419,7 @@ static void handle_compute_descriptor_sets(struct vk_cmd_queue_entry *cmd,
 static void handle_descriptor_sets(struct vk_cmd_queue_entry *cmd,
                                    struct rendering_state *state)
 {
+   printf("LVP: Bind descriptor sets...\n");
    struct vk_cmd_bind_descriptor_sets *bds = &cmd->u.bind_descriptor_sets;
    LVP_FROM_HANDLE(lvp_pipeline_layout, layout, bds->layout);
    int i;
@@ -1328,6 +1432,11 @@ static void handle_descriptor_sets(struct vk_cmd_queue_entry *cmd,
    memset(dyn_info.stage, 0, sizeof(dyn_info.stage));
    if (bds->pipeline_bind_point == VK_PIPELINE_BIND_POINT_COMPUTE) {
       handle_compute_descriptor_sets(cmd, &dyn_info, state);
+      return;
+   }
+
+   else if (bds->pipeline_bind_point == VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR) {
+      handle_raytrace_descriptor_sets(cmd, &dyn_info, state);
       return;
    }
 
@@ -3992,6 +4101,8 @@ void lvp_add_enqueue_cmd_entrypoints(struct vk_device_dispatch_table *disp)
    ENQUEUE_CMD(CmdSetColorBlendEquationEXT)
    ENQUEUE_CMD(CmdSetColorWriteMaskEXT)
 
+   ENQUEUE_CMD(CmdTraceRaysKHR)
+
 #undef ENQUEUE_CMD
 }
 
@@ -4002,8 +4113,16 @@ static void lvp_execute_cmd_buffer(struct lvp_cmd_buffer *cmd_buffer,
    bool first = true;
    bool did_flush = false;
 
+   printf("Command Buffer:\n");
+   LIST_FOR_EACH_ENTRY(cmd, &cmd_buffer->vk.cmd_queue.cmds, cmd_link) {
+      printf("\t%s\n", vk_cmd_queue_type_names[cmd->type]);
+   }
+
    LIST_FOR_EACH_ENTRY(cmd, &cmd_buffer->vk.cmd_queue.cmds, cmd_link) {
       switch (cmd->type) {
+      case VK_CMD_TRACE_RAYS_KHR:
+         handle_trace_ray(cmd, state);
+         break;
       case VK_CMD_BIND_PIPELINE:
          handle_pipeline(cmd, state);
          break;

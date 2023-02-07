@@ -237,25 +237,26 @@ lvp_CreateRayTracingPipelinesKHR(
 }
 
 
-// VkResult
-// lvp_GetRayTracingShaderGroupHandlesKHR(
-//     VkDevice                                    device,
-//     VkPipeline                                  _pipeline,
-//     uint32_t                                    firstGroup,
-//     uint32_t                                    groupCount,
-//     size_t                                      dataSize,
-//     void*                                       pData)
-// {
-//    LVP_FROM_HANDLE(lvp_pipeline, pipeline, _pipeline);
+VkResult
+lvp_GetRayTracingShaderGroupHandlesKHR(
+    VkDevice                                    device,
+    VkPipeline                                  _pipeline,
+    uint32_t                                    firstGroup,
+    uint32_t                                    groupCount,
+    size_t                                      dataSize,
+    void*                                       pData)
+{
+   printf("LVP: Get ray tracing shader group handles...\n");
+   LVP_FROM_HANDLE(lvp_pipeline, pipeline, _pipeline);
 
-//    struct anv_ray_tracing_pipeline *rt_pipeline =
-//       anv_pipeline_to_ray_tracing(pipeline);
+   // struct anv_ray_tracing_pipeline *rt_pipeline =
+   //    anv_pipeline_to_ray_tracing(pipeline);
 
-//    for (uint32_t i = 0; i < groupCount; i++) {
-//       struct anv_rt_shader_group *group = &rt_pipeline->groups[firstGroup + i];
-//       memcpy(pData, group->handle, sizeof(group->handle));
-//       pData += sizeof(group->handle);
-//    }
+   // for (uint32_t i = 0; i < groupCount; i++) {
+   //    struct anv_rt_shader_group *group = &rt_pipeline->groups[firstGroup + i];
+   //    memcpy(pData, group->handle, sizeof(group->handle));
+   //    pData += sizeof(group->handle);
+   // }
 
-//    return VK_SUCCESS;
-// }
+   return VK_SUCCESS;
+}

@@ -21,17 +21,25 @@
  * IN THE SOFTWARE.
  */
 
+#include "gpgpusim_bvh.h"
+#include "vsim_private.h"
 #include "lvp_private.h"
 #include "vk_descriptors.h"
 #include "vk_util.h"
 #include "util/u_math.h"
+#include "vk_enum_to_str.h"
 
+VK_DEFINE_NONDISP_HANDLE_CASTS(lvp_acceleration_structure, base,
+                               VkAccelerationStructureKHR,
+                               VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR)
+                               
 VKAPI_ATTR VkResult VKAPI_CALL lvp_CreateDescriptorSetLayout(
     VkDevice                                    _device,
     const VkDescriptorSetLayoutCreateInfo*      pCreateInfo,
     const VkAllocationCallbacks*                pAllocator,
     VkDescriptorSetLayout*                      pSetLayout)
 {
+   printf("LVP: Create descriptor set layout...\n");
    LVP_FROM_HANDLE(lvp_device, device, _device);
    struct lvp_descriptor_set_layout *set_layout;
 
@@ -85,9 +93,14 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_CreateDescriptorSetLayout(
    }
 
    uint32_t dynamic_offset_count = 0;
+   printf("LVP: Set Layout with %d bindings...\n", pCreateInfo->bindingCount);
    for (uint32_t j = 0; j < pCreateInfo->bindingCount; j++) {
       const VkDescriptorSetLayoutBinding *binding = bindings + j;
       uint32_t b = binding->binding;
+
+      printf("LVP: Set Layout: type %s; stage flag 0x%3x\n", 
+         vk_DescriptorType_to_str(binding->descriptorType),
+         binding->stageFlags);
 
       set_layout->binding[b].array_size = binding->descriptorCount;
       set_layout->binding[b].descriptor_index = set_layout->size;
@@ -98,7 +111,7 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_CreateDescriptorSetLayout(
       else
          set_layout->size += binding->descriptorCount;
 
-      for (gl_shader_stage stage = MESA_SHADER_VERTEX; stage < MESA_SHADER_STAGES; stage++) {
+      for (gl_shader_stage stage = MESA_SHADER_VERTEX; stage < MESA_ALL_SHADER_STAGES; stage++) {
          set_layout->binding[b].stage[stage].const_buffer_index = -1;
          set_layout->binding[b].stage[stage].shader_buffer_index = -1;
          set_layout->binding[b].stage[stage].sampler_index = -1;
@@ -176,6 +189,12 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_CreateDescriptorSetLayout(
             set_layout->stage[s].sampler_view_count += binding->descriptorCount;
          }
          break;
+      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+         lvp_foreach_stage(s, binding->stageFlags) {
+            set_layout->binding[b].stage[s].acceleration_structure_index = set_layout->stage[s].acceleration_structure_count;
+            set_layout->stage[s].acceleration_structure_count += binding->descriptorCount;
+         }
+         break;
       default:
          break;
       }
@@ -229,6 +248,7 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_CreatePipelineLayout(
     const VkAllocationCallbacks*                pAllocator,
     VkPipelineLayout*                           pPipelineLayout)
 {
+   printf("LVP: Create pipeline layout...\n");
    LVP_FROM_HANDLE(lvp_device, device, _device);
    struct lvp_pipeline_layout *layout;
 
@@ -242,7 +262,7 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_CreatePipelineLayout(
       const struct lvp_descriptor_set_layout *set_layout =
          vk_to_lvp_descriptor_set_layout(layout->vk.set_layouts[set]);
 
-      for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
+      for (unsigned i = 0; i < MESA_ALL_SHADER_STAGES; i++) {
          layout->stage[i].uniform_block_size += set_layout->stage[i].uniform_block_size;
          for (unsigned j = 0; j < set_layout->stage[i].uniform_block_count; j++) {
             assert(layout->stage[i].uniform_block_count + j < MAX_PER_STAGE_DESCRIPTOR_UNIFORM_BLOCKS * MAX_SETS);
@@ -296,7 +316,7 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_CreatePipelineLayout(
       const VkPushConstantRange *range = pCreateInfo->pPushConstantRanges + i;
       layout->push_constant_size = MAX2(layout->push_constant_size,
                                         range->offset + range->size);
-      layout->push_constant_stages |= (range->stageFlags & BITFIELD_MASK(MESA_SHADER_STAGES));
+      layout->push_constant_stages |= (range->stageFlags & BITFIELD_MASK(MESA_ALL_SHADER_STAGES));
    }
    layout->push_constant_size = align(layout->push_constant_size, 16);
    *pPipelineLayout = lvp_pipeline_layout_to_handle(layout);
@@ -312,7 +332,7 @@ lvp_descriptor_set_create(struct lvp_device *device,
    struct lvp_descriptor_set *set;
    size_t base_size = sizeof(*set) + layout->size * sizeof(set->descriptors[0]);
    size_t size = base_size;
-   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++)
+   for (unsigned i = 0; i < MESA_ALL_SHADER_STAGES; i++)
       size += layout->stage[i].uniform_block_size;
    set = vk_alloc(&device->vk.alloc /* XXX: Use the pool */, size, 8,
                    VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
@@ -332,8 +352,11 @@ lvp_descriptor_set_create(struct lvp_device *device,
    /* Go through and fill out immutable samplers if we have any */
    struct lvp_descriptor *desc = set->descriptors;
    uint8_t *uniform_mem = (uint8_t*)(set) + base_size;
+
+   printf("LVP: Creating descriptor sets with %d bindings at %p...\n", layout->binding_count, set);
    for (uint32_t b = 0; b < layout->binding_count; b++) {
       if (layout->binding[b].type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK) {
+         printf("LVP: uniform_mem at 0x%x\n", (unsigned int) uniform_mem);
          desc->info.uniform = uniform_mem;
          uniform_mem += layout->binding[b].array_size;
          desc++;
@@ -365,6 +388,7 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_AllocateDescriptorSets(
     const VkDescriptorSetAllocateInfo*          pAllocateInfo,
     VkDescriptorSet*                            pDescriptorSets)
 {
+   printf("LVP: Allocate descriptor sets...\n");
    LVP_FROM_HANDLE(lvp_device, device, _device);
    LVP_FROM_HANDLE(lvp_descriptor_pool, pool, pAllocateInfo->descriptorPool);
    VkResult result = VK_SUCCESS;
@@ -415,6 +439,7 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
     uint32_t                                    descriptorCopyCount,
     const VkCopyDescriptorSet*                  pDescriptorCopies)
 {
+   printf("LVP: Update descriptor sets...\n");
    for (uint32_t i = 0; i < descriptorWriteCount; i++) {
       const VkWriteDescriptorSet *write = &pDescriptorWrites[i];
       LVP_FROM_HANDLE(lvp_descriptor_set, set, write->dstSet);
@@ -527,6 +552,13 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
             };
             if (buffer && write->pBufferInfo[j].range == VK_WHOLE_SIZE)
                desc[j].info.ubo.buffer_size = buffer->bo->width0 - desc[j].info.ubo.buffer_offset;
+            
+            printf("LVP: Setting lvp_buffer %p for descriptor %d. ", (void *)buffer, j);
+            printf("info.ubo: buffer %p + offset %d = %p; %d bytes. \n", 
+                     (void *)desc[j].info.ubo.buffer, 
+                     desc[j].info.ubo.buffer_offset,
+                     (void *)desc[j].info.ubo.buffer + desc[j].info.ubo.buffer_offset,
+                     desc[j].info.ubo.buffer_size);
          }
          break;
 
@@ -544,6 +576,19 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
                desc[j].info.ssbo.buffer_size = buffer->bo->width0 - desc[j].info.ssbo.buffer_offset;
          }
          break;
+
+      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
+         const struct VkWriteDescriptorSetAccelerationStructureKHR *accel_write = vk_find_struct_const(write, WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR);
+         for (uint32_t j = 0; j < write->descriptorCount; j++) {
+            LVP_FROM_HANDLE(lvp_acceleration_structure, accel, accel_write->pAccelerationStructures[j]);
+
+            desc[j] = (struct lvp_descriptor) {
+               .type = write->descriptorType,
+               // TODO: Add more information
+            };
+         }
+         break;
+      }
 
       default:
          break;
@@ -586,6 +631,7 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_CreateDescriptorPool(
     const VkAllocationCallbacks*                pAllocator,
     VkDescriptorPool*                           pDescriptorPool)
 {
+   printf("LVP: Create descriptor pool...\n");
    LVP_FROM_HANDLE(lvp_device, device, _device);
    struct lvp_descriptor_pool *pool;
    size_t size = sizeof(struct lvp_descriptor_pool);

@@ -1026,7 +1026,10 @@ llvmpipe_resource_bind_backing(struct pipe_screen *screen,
                                struct pipe_memory_allocation *pmem,
                                uint64_t offset)
 {
+   printf("LLVM: llvmpipe_resource_bind_backing: ");
    struct llvmpipe_resource *lpr = llvmpipe_resource(pt);
+   printf("pipe_screen %p; pipe_resource %p; llvmpipe_resource %p; ", screen, pt, lpr);
+   printf("pipe_memory_allocation %p;\n", pmem);
 
    if (!lpr->backable)
       return FALSE;
@@ -1198,6 +1201,7 @@ llvmpipe_init_screen_resource_funcs(struct pipe_screen *screen)
    screen->map_memory = llvmpipe_map_memory;
    screen->unmap_memory = llvmpipe_unmap_memory;
 
+   printf("MESA: Linking to LLVM resource bind packing.\n");
    screen->resource_bind_backing = llvmpipe_resource_bind_backing;
 }
 
