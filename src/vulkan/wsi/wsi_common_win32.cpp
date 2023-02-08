@@ -491,12 +491,12 @@ wsi_win32_image_init(VkDevice device_h,
 
    VkIcdSurfaceWin32 *win32_surface = (VkIcdSurfaceWin32 *)create_info->surface;
    chain->wnd = win32_surface->hwnd;
-   chain->chain_dc = GetDC(chain->wnd);
    image->chain = chain;
 
-   if (chain->base.blit.type != WSI_SWAPCHAIN_BUFFER_BLIT)
+   if (chain->dxgi)
       return VK_SUCCESS;
 
+   chain->chain_dc = GetDC(chain->wnd);
    image->sw.dc = CreateCompatibleDC(chain->chain_dc);
    HBITMAP bmp = NULL;
 
@@ -662,8 +662,6 @@ wsi_win32_queue_present(struct wsi_swapchain *drv_chain,
 
    if (chain->dxgi)
       return wsi_win32_queue_present_dxgi(chain, image, damage);
-
-   assert(chain->base.blit.type == WSI_SWAPCHAIN_BUFFER_BLIT);
 
    char *ptr = (char *)image->base.cpu_map;
    char *dptr = (char *)image->sw.ppvBits;

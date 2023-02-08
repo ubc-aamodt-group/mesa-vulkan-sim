@@ -250,9 +250,6 @@ struct pvr_winsys_transfer_ctx {
    struct pvr_winsys *ws;
 };
 
-#define PVR_WINSYS_TRANSFER_FLAG_START BITFIELD_BIT(0U)
-#define PVR_WINSYS_TRANSFER_FLAG_END BITFIELD_BIT(1U)
-
 #define PVR_TRANSFER_MAX_PREPARES_PER_SUBMIT 16U
 #define PVR_TRANSFER_MAX_RENDER_TARGETS 3U
 
@@ -339,6 +336,7 @@ struct pvr_winsys_compute_submit_info {
 #define PVR_WINSYS_FRAG_FLAG_PREVENT_CDM_OVERLAP BITFIELD_BIT(2U)
 #define PVR_WINSYS_FRAG_FLAG_SINGLE_CORE BITFIELD_BIT(3U)
 #define PVR_WINSYS_FRAG_FLAG_GET_VIS_RESULTS BITFIELD_BIT(4U)
+#define PVR_WINSYS_FRAG_FLAG_SPMSCRATCHBUFFER (5U)
 
 struct pvr_winsys_render_submit_info {
    struct pvr_winsys_rt_dataset *rt_dataset;

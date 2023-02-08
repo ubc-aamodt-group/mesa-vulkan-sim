@@ -165,6 +165,8 @@ struct radeon_info {
    uint32_t mec_fw_feature;
    uint32_t pfp_fw_version;
    uint32_t pfp_fw_feature;
+   bool has_set_reg_pairs;
+   bool has_set_sh_reg_pairs_n;
 
    /* Multimedia info. */
    struct {
@@ -175,7 +177,7 @@ struct radeon_info {
    uint32_t vce_fw_version;
    uint32_t vce_harvest_config;
    struct video_caps_info {
-      struct {
+      struct video_codec_cap {
          uint32_t valid;
          uint32_t max_width;
          uint32_t max_height;
@@ -225,6 +227,7 @@ struct radeon_info {
    uint32_t max_vgpr_alloc;
    uint32_t wave64_vgpr_alloc_granularity;
    uint32_t max_scratch_waves;
+   uint32_t attribute_ring_size_per_se;
 
    /* Render backends (color + depth blocks). */
    uint32_t r300_num_gb_pipes;

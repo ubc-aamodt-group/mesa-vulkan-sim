@@ -34,7 +34,6 @@ typedef struct {
    const struct radv_shader_args *args;
    const struct radv_shader_info *info;
    const struct radv_pipeline_key *pl_key;
-   bool use_llvm;
    uint32_t address32_hi;
    nir_ssa_def *gsvs_ring[4];
 } lower_abi_state;
@@ -45,7 +44,7 @@ load_ring(nir_builder *b, unsigned ring, lower_abi_state *s)
    struct ac_arg arg =
       b->shader->info.stage == MESA_SHADER_TASK ?
       s->args->task_ring_offsets :
-      s->args->ring_offsets;
+      s->args->ac.ring_offsets;
 
    nir_ssa_def *ring_offsets = ac_nir_load_arg(b, &s->args->ac, arg);
    ring_offsets = nir_pack_64_2x32_split(b, nir_channel(b, ring_offsets, 0), nir_channel(b, ring_offsets, 1));
@@ -128,22 +127,12 @@ lower_abi_instr(nir_builder *b, nir_instr *instr, void *state)
 
    switch (intrin->intrinsic) {
    case nir_intrinsic_load_ring_tess_factors_amd:
-      if (s->use_llvm) {
-         progress = false;
-         break;
-      }
-
       replacement = load_ring(b, RING_HS_TESS_FACTOR, s);
       break;
    case nir_intrinsic_load_ring_tess_factors_offset_amd:
       replacement = ac_nir_load_arg(b, &s->args->ac, s->args->ac.tcs_factor_offset);
       break;
    case nir_intrinsic_load_ring_tess_offchip_amd:
-      if (s->use_llvm) {
-         progress = false;
-         break;
-      }
-
       replacement = load_ring(b, RING_HS_TESS_OFFCHIP, s);
       break;
    case nir_intrinsic_load_ring_tess_offchip_offset_amd:
@@ -162,19 +151,9 @@ lower_abi_instr(nir_builder *b, nir_instr *instr, void *state)
       }
       break;
    case nir_intrinsic_load_ring_esgs_amd:
-      if (s->use_llvm) {
-         progress = false;
-         break;
-      }
-
       replacement = load_ring(b, stage == MESA_SHADER_GEOMETRY ? RING_ESGS_GS : RING_ESGS_VS, s);
       break;
    case nir_intrinsic_load_ring_gsvs_amd:
-      if (s->use_llvm) {
-         progress = false;
-         break;
-      }
-
       if (stage == MESA_SHADER_VERTEX)
          replacement = load_ring(b, RING_GSVS_VS, s);
       else
@@ -188,11 +167,6 @@ lower_abi_instr(nir_builder *b, nir_instr *instr, void *state)
       break;
 
    case nir_intrinsic_load_ring_attr_amd:
-      if (s->use_llvm) {
-         progress = false;
-         break;
-      }
-
       replacement = load_ring(b, RING_PS_ATTR, s);
 
       nir_ssa_def *dword1 = nir_channel(b, replacement, 1);
@@ -361,7 +335,7 @@ lower_abi_instr(nir_builder *b, nir_instr *instr, void *state)
    case nir_intrinsic_load_sample_positions_amd: {
       uint32_t sample_pos_offset = (RING_PS_SAMPLE_POSITIONS * 16) - 8;
 
-      nir_ssa_def *ring_offsets = ac_nir_load_arg(b, &s->args->ac, s->args->ring_offsets);
+      nir_ssa_def *ring_offsets = ac_nir_load_arg(b, &s->args->ac, s->args->ac.ring_offsets);
       nir_ssa_def *addr = nir_pack_64_2x32(b, ring_offsets);
       nir_ssa_def *sample_id = nir_umin(b, intrin->src[0].ssa, nir_imm_int(b, 7));
       nir_ssa_def *offset = nir_ishl_imm(b, sample_id, 3); /* 2 floats containing samplepos.xy */
@@ -499,6 +473,9 @@ lower_abi_instr(nir_builder *b, nir_instr *instr, void *state)
 
       break;
    }
+   case nir_intrinsic_load_force_vrs_rates_amd:
+      replacement = ac_nir_load_arg(b, &s->args->ac, s->args->ac.force_vrs_rates);
+      break;
    default:
       progress = false;
       break;
@@ -547,14 +524,13 @@ load_gsvs_ring(nir_builder *b, lower_abi_state *s, unsigned stream_id)
 void
 radv_nir_lower_abi(nir_shader *shader, enum amd_gfx_level gfx_level,
                    const struct radv_shader_info *info, const struct radv_shader_args *args,
-                   const struct radv_pipeline_key *pl_key, bool use_llvm, uint32_t address32_hi)
+                   const struct radv_pipeline_key *pl_key, uint32_t address32_hi)
 {
    lower_abi_state state = {
       .gfx_level = gfx_level,
       .info = info,
       .args = args,
       .pl_key = pl_key,
-      .use_llvm = use_llvm,
       .address32_hi = address32_hi,
    };
 

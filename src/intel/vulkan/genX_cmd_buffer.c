@@ -1855,7 +1855,10 @@ genX(cmd_buffer_apply_pipe_flushes)(struct anv_cmd_buffer *cmd_buffer)
       return;
 
    const bool trace_flush =
-      (bits & (ANV_PIPE_FLUSH_BITS | ANV_PIPE_STALL_BITS | ANV_PIPE_INVALIDATE_BITS)) != 0;
+      (bits & (ANV_PIPE_FLUSH_BITS |
+               ANV_PIPE_STALL_BITS |
+               ANV_PIPE_INVALIDATE_BITS |
+               ANV_PIPE_END_OF_PIPE_SYNC_BIT)) != 0;
    if (trace_flush)
       trace_intel_begin_stall(&cmd_buffer->trace);
 
@@ -1898,7 +1901,7 @@ genX(cmd_buffer_apply_pipe_flushes)(struct anv_cmd_buffer *cmd_buffer)
 }
 
 static void
-cmd_buffer_alloc_push_constants(struct anv_cmd_buffer *cmd_buffer)
+cmd_buffer_alloc_gfx_push_constants(struct anv_cmd_buffer *cmd_buffer)
 {
    VkShaderStageFlags stages =
       cmd_buffer->state.gfx.pipeline->active_stages;
@@ -2711,8 +2714,8 @@ cmd_buffer_emit_push_constant_all(struct anv_cmd_buffer *cmd_buffer,
 #endif
 
 static void
-cmd_buffer_flush_push_constants(struct anv_cmd_buffer *cmd_buffer,
-                                VkShaderStageFlags dirty_stages)
+cmd_buffer_flush_gfx_push_constants(struct anv_cmd_buffer *cmd_buffer,
+                                    VkShaderStageFlags dirty_stages)
 {
    VkShaderStageFlags flushed = 0;
    struct anv_cmd_graphics_state *gfx_state = &cmd_buffer->state.gfx;
@@ -3426,7 +3429,7 @@ genX(cmd_buffer_flush_gfx_state)(struct anv_cmd_buffer *cmd_buffer)
       /* If the pipeline changed, we may need to re-allocate push constant
        * space in the URB.
        */
-      cmd_buffer_alloc_push_constants(cmd_buffer);
+      cmd_buffer_alloc_gfx_push_constants(cmd_buffer);
    }
 
    /* Render targets live in the same binding table as fragment descriptors */
@@ -3455,7 +3458,7 @@ genX(cmd_buffer_flush_gfx_state)(struct anv_cmd_buffer *cmd_buffer)
        * descriptors or push constants is dirty.
        */
       dirty |= cmd_buffer->state.push_constants_dirty & pipeline->active_stages;
-      cmd_buffer_flush_push_constants(cmd_buffer,
+      cmd_buffer_flush_gfx_push_constants(cmd_buffer,
                                       dirty & VK_SHADER_STAGE_ALL_GRAPHICS);
 #if GFX_VERx10 >= 125
       cmd_buffer_flush_mesh_inline_data(

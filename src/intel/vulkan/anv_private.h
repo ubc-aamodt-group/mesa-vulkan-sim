@@ -1050,6 +1050,8 @@ struct anv_queue {
 
    const struct anv_queue_family *           family;
 
+   struct intel_batch_decode_ctx *           decoder;
+
    uint32_t                                  exec_flags;
 
    /** Synchronization object for debug purposes (DEBUG_SYNC) */
@@ -1221,7 +1223,7 @@ struct anv_device {
     pthread_mutex_t                             mutex;
     pthread_cond_t                              queue_submit;
 
-    struct intel_batch_decode_ctx               decoder_ctx;
+    struct intel_batch_decode_ctx               decoder[ANV_MAX_QUEUE_FAMILIES];
     /*
      * When decoding a anv_cmd_buffer, we might need to search for BOs through
      * the cmd_buffer's list.
@@ -1863,6 +1865,7 @@ struct anv_descriptor_pool {
    struct vk_object_base base;
 
    struct anv_bo *bo;
+   void *host_bo;
    struct util_vma_heap bo_heap;
 
    struct anv_state_stream surface_state_stream;
@@ -1876,6 +1879,9 @@ struct anv_descriptor_pool {
 
    /** Allocated size of host_mem */
    uint32_t host_mem_size;
+
+   /** Allocated size of descriptor bo (should be equal to bo->size) */
+   uint32_t bo_mem_size;
 
    /**
     * VK_DESCRIPTOR_POOL_CREATE_HOST_ONLY_BIT_EXT. If set, then

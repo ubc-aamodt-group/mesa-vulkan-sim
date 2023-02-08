@@ -48,6 +48,9 @@ radv_choose_tiling(struct radv_device *device, const VkImageCreateInfo *pCreateI
       return RADEON_SURF_MODE_LINEAR_ALIGNED;
    }
 
+   if (pCreateInfo->usage & (VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR))
+      return RADEON_SURF_MODE_LINEAR_ALIGNED;
+
    /* MSAA resources must be 2D tiled. */
    if (pCreateInfo->samples > 1)
       return RADEON_SURF_MODE_2D;
@@ -742,12 +745,25 @@ radv_make_texel_buffer_descriptor(struct radv_device *device, uint64_t va, VkFor
    if (device->physical_device->rad_info.gfx_level >= GFX10) {
       const struct gfx10_format *fmt = &ac_get_gfx10_format_table(&device->physical_device->rad_info)[vk_format_to_pipe_format(vk_format)];
 
-      /* OOB_SELECT chooses the out-of-bounds check:
+      /* OOB_SELECT chooses the out-of-bounds check.
+       *
+       * GFX10:
        *  - 0: (index >= NUM_RECORDS) || (offset >= STRIDE)
        *  - 1: index >= NUM_RECORDS
        *  - 2: NUM_RECORDS == 0
-       *  - 3: if SWIZZLE_ENABLE == 0: offset >= NUM_RECORDS
-       *       else: swizzle_address >= NUM_RECORDS
+       *  - 3: if SWIZZLE_ENABLE:
+       *          swizzle_address >= NUM_RECORDS
+       *       else:
+       *          offset >= NUM_RECORDS
+       *
+       * GFX11:
+       *  - 0: (index >= NUM_RECORDS) || (offset+payload > STRIDE)
+       *  - 1: index >= NUM_RECORDS
+       *  - 2: NUM_RECORDS == 0
+       *  - 3: if SWIZZLE_ENABLE && STRIDE:
+       *          (index >= NUM_RECORDS) || ( offset+payload > STRIDE)
+       *       else:
+       *          offset+payload > NUM_RECORDS
        */
       rsrc_word3 |= S_008F0C_FORMAT(fmt->img_format) |
                     S_008F0C_OOB_SELECT(V_008F0C_OOB_SELECT_STRUCTURED_WITH_OFFSET) |
@@ -794,8 +810,6 @@ si_set_mutable_tex_desc_fields(struct radv_device *device, struct radv_image *im
       }
    } else
       va += (uint64_t)base_level_info->offset_256B * 256;
-
-   swizzle = radv_adjust_tile_swizzle(device->physical_device, swizzle);
 
    state[0] = va >> 8;
    if (gfx_level >= GFX9 || base_level_info->mode == RADEON_SURF_MODE_2D)
