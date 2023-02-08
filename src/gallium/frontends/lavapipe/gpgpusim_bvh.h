@@ -1,6 +1,12 @@
 #ifndef ANV_PUBLIC_H
 #define ANV_PUBLIC_H
 
+// TODO: Temporary solution to compile gpgpu-sim
+#define HAVE_STRUCT_TIMESPEC
+#define HAVE_PTHREAD
+#define UTIL_ARCH_LITTLE_ENDIAN 1
+#define UTIL_ARCH_BIG_ENDIAN 0
+
 struct anv_bo {
    uint32_t gem_handle;
 
