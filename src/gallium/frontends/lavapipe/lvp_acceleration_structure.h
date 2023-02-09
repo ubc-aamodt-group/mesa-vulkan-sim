@@ -47,6 +47,10 @@ struct vsim_bvh_leaf {
    uint32_t primitive_id;
 };
 
-
+void print_vec4(struct vsim_bvh_vec4f val);
+void print_vec3(struct vsim_bvh_vec3f val);
+void print_tri(struct vsim_bvh_triangle val);
+void print_node(struct vsim_bvh_node val);
+void print_leaf(struct vsim_bvh_leaf val);
 
 #endif /* VSIM_ACCELERATION_STRUCTURE_H */
