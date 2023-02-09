@@ -548,16 +548,18 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
                .type = write->descriptorType,
                .info.ubo.buffer_offset = buffer ? write->pBufferInfo[j].offset : 0,
                .info.ubo.buffer = buffer ? buffer->bo : NULL,
+               .info.ubo.pmem = buffer ? buffer->pmem : NULL,
                .info.ubo.buffer_size = buffer ? write->pBufferInfo[j].range : 0,
             };
             if (buffer && write->pBufferInfo[j].range == VK_WHOLE_SIZE)
                desc[j].info.ubo.buffer_size = buffer->bo->width0 - desc[j].info.ubo.buffer_offset;
             
             printf("LVP: Setting lvp_buffer %p for descriptor %d. ", (void *)buffer, j);
-            printf("info.ubo: buffer %p + offset %d = %p; %d bytes. \n", 
+            printf("info.ubo: buffer %p + offset %d = %p; stored at %p with %d bytes. \n", 
                      (void *)desc[j].info.ubo.buffer, 
                      desc[j].info.ubo.buffer_offset,
                      (void *)desc[j].info.ubo.buffer + desc[j].info.ubo.buffer_offset,
+                     desc[j].info.ubo.pmem,
                      desc[j].info.ubo.buffer_size);
          }
          break;

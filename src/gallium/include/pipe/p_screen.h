@@ -671,6 +671,11 @@ struct pipe_screen {
                                  uint64_t offset);
 
    /**
+    * Bind memory to a resource.
+    */
+   void *(*resource_data)(struct pipe_resource *resource);
+
+   /**
     * Map backing memory.
     */
    void *(*map_memory)(struct pipe_screen *screen,

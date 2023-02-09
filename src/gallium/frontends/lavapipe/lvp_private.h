@@ -655,6 +655,8 @@ void
 lvp_inline_uniforms(nir_shader *shader, const struct lvp_pipeline *pipeline, const uint32_t *uniform_values, uint32_t ubo);
 void *
 lvp_pipeline_compile(struct lvp_pipeline *pipeline, nir_shader *base_nir);
+void *
+lvp_get_resource_data(VkDevice _device, struct pipe_resource *buffer);
 #ifdef __cplusplus
 }
 #endif

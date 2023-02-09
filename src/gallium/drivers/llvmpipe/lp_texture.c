@@ -1203,6 +1203,7 @@ llvmpipe_init_screen_resource_funcs(struct pipe_screen *screen)
 
    printf("MESA: Linking to LLVM resource bind packing.\n");
    screen->resource_bind_backing = llvmpipe_resource_bind_backing;
+   screen->resource_data = llvmpipe_resource_data;
 }
 
 
