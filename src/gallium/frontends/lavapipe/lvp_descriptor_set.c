@@ -587,7 +587,14 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
             desc[j] = (struct lvp_descriptor) {
                .type = write->descriptorType,
                // TODO: Add more information
+               .info.ubo.pmem = (void *)accel->address.bo,
+               .info.ubo.buffer_offset = accel->address.offset,
             };
+            printf("LVP: Setting lvp_acceleration_structure %p for descriptor %d. ", accel, j);
+            printf("info.ubo: address %p + offset %d = %p \n", 
+                     desc[j].info.ubo.pmem,
+                     desc[j].info.ubo.buffer_offset,
+                     (void *)desc[j].info.ubo.pmem + desc[j].info.ubo.buffer_offset);
          }
          break;
       }
