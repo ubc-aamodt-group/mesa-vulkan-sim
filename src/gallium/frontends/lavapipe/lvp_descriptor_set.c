@@ -459,6 +459,7 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
 
       switch (write->descriptorType) {
       case VK_DESCRIPTOR_TYPE_SAMPLER:
+         printf("LVP: Setting descriptor %d VK_DESCRIPTOR_TYPE_SAMPLER\n", i);
          for (uint32_t j = 0; j < write->descriptorCount; j++) {
             LVP_FROM_HANDLE(lvp_sampler, sampler,
                             write->pImageInfo[j].sampler);
@@ -471,6 +472,7 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
          break;
 
       case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+         printf("LVP: Setting descriptor %d VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER\n", i);
          for (uint32_t j = 0; j < write->descriptorCount; j++) {
             LVP_FROM_HANDLE(lvp_image_view, iview,
                             write->pImageInfo[j].imageView);
@@ -493,6 +495,7 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
          break;
 
       case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+         printf("LVP: Setting descriptor %d VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE\n", i);
          for (uint32_t j = 0; j < write->descriptorCount; j++) {
             LVP_FROM_HANDLE(lvp_image_view, iview,
                             write->pImageInfo[j].imageView);
@@ -505,6 +508,7 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
          break;
       case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
       case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+         printf("LVP: Setting descriptor %d VK_DESCRIPTOR_TYPE_STORAGE_IMAGE/VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT\n", i);
          for (uint32_t j = 0; j < write->descriptorCount; j++) {
             LVP_FROM_HANDLE(lvp_image_view, iview,
                             write->pImageInfo[j].imageView);
@@ -517,6 +521,7 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
          break;
 
       case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+         printf("LVP: Setting descriptor %d VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER\n", i);
          for (uint32_t j = 0; j < write->descriptorCount; j++) {
             LVP_FROM_HANDLE(lvp_buffer_view, bview,
                             write->pTexelBufferView[j]);
@@ -529,6 +534,7 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
          break;
 
       case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+         printf("LVP: Setting descriptor %d VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER\n", i);
          for (uint32_t j = 0; j < write->descriptorCount; j++) {
             LVP_FROM_HANDLE(lvp_buffer_view, bview,
                             write->pTexelBufferView[j]);
@@ -554,7 +560,7 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
             if (buffer && write->pBufferInfo[j].range == VK_WHOLE_SIZE)
                desc[j].info.ubo.buffer_size = buffer->bo->width0 - desc[j].info.ubo.buffer_offset;
             
-            printf("LVP: Setting lvp_buffer %p for descriptor %d. ", (void *)buffer, j);
+            printf("LVP: Setting lvp_buffer %p for descriptor %d (%d). ", (void *)buffer, i, j);
             printf("info.ubo: buffer %p + offset %d = %p; stored at %p with %d bytes. \n", 
                      (void *)desc[j].info.ubo.buffer, 
                      desc[j].info.ubo.buffer_offset,
@@ -572,10 +578,18 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
                .type = write->descriptorType,
                .info.ssbo.buffer_offset = buffer ? write->pBufferInfo[j].offset : 0,
                .info.ssbo.buffer = buffer ? buffer->bo : NULL,
+               .info.ssbo.pmem = buffer ? buffer->pmem : NULL,
                .info.ssbo.buffer_size = buffer ? write->pBufferInfo[j].range : 0,
             };
             if (buffer && write->pBufferInfo[j].range == VK_WHOLE_SIZE)
                desc[j].info.ssbo.buffer_size = buffer->bo->width0 - desc[j].info.ssbo.buffer_offset;
+            printf("LVP: Setting lvp_buffer %p for descriptor %d (%d). ", (void *)buffer, i, j);
+            printf("info.ssbo: buffer %p + offset %d = %p; stored at %p with %d bytes. \n", 
+                     (void *)desc[j].info.ssbo.buffer, 
+                     desc[j].info.ssbo.buffer_offset,
+                     (void *)desc[j].info.ssbo.buffer + desc[j].info.ssbo.buffer_offset,
+                     desc[j].info.ssbo.pmem,
+                     desc[j].info.ssbo.buffer_size);
          }
          break;
 
@@ -590,7 +604,7 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
                .info.ubo.pmem = (void *)accel->address.bo,
                .info.ubo.buffer_offset = accel->address.offset,
             };
-            printf("LVP: Setting lvp_acceleration_structure %p for descriptor %d. ", accel, j);
+            printf("LVP: Setting lvp_acceleration_structure %p for descriptor %d (%d). ", accel, i, j);
             printf("info.ubo: address %p + offset %d = %p \n", 
                      desc[j].info.ubo.pmem,
                      desc[j].info.ubo.buffer_offset,
