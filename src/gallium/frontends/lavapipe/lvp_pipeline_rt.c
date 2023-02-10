@@ -186,6 +186,12 @@ lvp_ray_tracing_pipeline_create(
    struct lvp_pipeline *pipeline;
    pipeline = vk_zalloc(&device->vk.alloc, sizeof(*pipeline), 8,
                          VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+   pipeline->group_count = pCreateInfo->groupCount;
+   pipeline->group_handles = vk_zalloc(&device->vk.alloc, 
+         sizeof(*pipeline->group_handles) * pipeline->group_count,
+         8, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+   
+   
    if (pipeline == NULL)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -198,11 +204,47 @@ lvp_ray_tracing_pipeline_create(
       return result;
    }
 
-   pipeline->group_count = pCreateInfo->groupCount;
 
    // Ray tracing shaders
    vsim_compile_ray_tracing_pipeline(pipeline, pCreateInfo);
 
+   // Allocate memory for shader groups
+   // Don't need the actual binary since GPGPU-Sim runs PTX
+
+   // Need pipeline group handles
+   for (unsigned i=0; i<pipeline->group_count; i++) {
+      const VkRayTracingShaderGroupCreateInfoKHR *group_info = &pCreateInfo->pGroups[i];
+      switch (group_info->type) {
+      // TODO: AMD adds 2 to each index (not sure why...)
+      case VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR:
+         if (group_info->generalShader != VK_SHADER_UNUSED_KHR)
+            pipeline->group_handles[i].general_index = group_info->generalShader;
+         printf("LVP: Adding group handle for general group.\n");
+         break;
+      case VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR:
+         if (group_info->closestHitShader != VK_SHADER_UNUSED_KHR)
+            pipeline->group_handles[i].closest_hit_index = group_info->closestHitShader;
+         if (group_info->intersectionShader != VK_SHADER_UNUSED_KHR)
+            pipeline->group_handles[i].intersection_index = i;
+         printf("LVP: Adding group handle for procedural hit group.\n");
+         break;
+      case VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR:
+         if (group_info->closestHitShader != VK_SHADER_UNUSED_KHR)
+            pipeline->group_handles[i].closest_hit_index = group_info->closestHitShader;
+         if (group_info->anyHitShader != VK_SHADER_UNUSED_KHR)
+            pipeline->group_handles[i].any_hit_index = i;
+         printf("LVP: Adding group handle for triangle hit group.\n");
+         break;
+      case VK_SHADER_GROUP_SHADER_MAX_ENUM_KHR:
+         unreachable("VK_SHADER_GROUP_SHADER_MAX_ENUM_KHR");
+         break;
+      default:
+         unreachable("Undefined hit group type");
+         break;
+      }
+   }
+
+   // TODO: Add VK_PIPELINE_CREATE_RAY_TRACING_SHADER_GROUP_HANDLE_CAPTURE_REPLAY_BIT_KHR
 
    gpgpusim_setPipelineInfo(pCreateInfo);
    *pPipeline = lvp_pipeline_to_handle(pipeline);
@@ -249,14 +291,18 @@ lvp_GetRayTracingShaderGroupHandlesKHR(
    printf("LVP: Get ray tracing shader group handles...\n");
    LVP_FROM_HANDLE(lvp_pipeline, pipeline, _pipeline);
 
-   // struct anv_ray_tracing_pipeline *rt_pipeline =
-   //    anv_pipeline_to_ray_tracing(pipeline);
+   // Handle size is 32 (from GetDeviceProperties); matches Intel and AMD
+   #define PIPELINE_HANDLE_SIZE 32
+   assert(sizeof(*pipeline->group_handles) <= PIPELINE_HANDLE_SIZE);
 
-   // for (uint32_t i = 0; i < groupCount; i++) {
-   //    struct anv_rt_shader_group *group = &rt_pipeline->groups[firstGroup + i];
-   //    memcpy(pData, group->handle, sizeof(group->handle));
-   //    pData += sizeof(group->handle);
-   // }
+   // Copy handles to pData
+   memset(pData, 0, groupCount * PIPELINE_HANDLE_SIZE);
+   for (unsigned i = 0; i < groupCount; i++) {
+      printf("LVP: Copying handle %d to %p\n", i, pData + i * PIPELINE_HANDLE_SIZE);
+      memcpy(pData + i * PIPELINE_HANDLE_SIZE, 
+             &pipeline->group_handles[firstGroup + i], 
+             sizeof(*pipeline->group_handles));
+   }
 
    return VK_SUCCESS;
 }

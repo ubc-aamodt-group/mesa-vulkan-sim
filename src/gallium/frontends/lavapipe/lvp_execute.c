@@ -1073,11 +1073,16 @@ static void handle_trace_ray(struct vk_cmd_queue_entry *cmd,
                       uint64_t launch_size_addr       // hard coded to 0 in original Intel impl. 
    ); */
 
+   printf("LVP: SBT: raygen %p, miss %p, hit %p, callable %p \n",
+      (void *)cmd->u.trace_rays_khr.raygen_shader_binding_table->deviceAddress,
+      (void *)cmd->u.trace_rays_khr.miss_shader_binding_table->deviceAddress,
+      (void *)cmd->u.trace_rays_khr.hit_shader_binding_table->deviceAddress,
+      (void *)cmd->u.trace_rays_khr.callable_shader_binding_table->deviceAddress);
    gpgpusim_vkCmdTraceRaysKHR(
-      cmd->u.trace_rays_khr.raygen_shader_binding_table,
-      cmd->u.trace_rays_khr.miss_shader_binding_table,
-      cmd->u.trace_rays_khr.hit_shader_binding_table,
-      cmd->u.trace_rays_khr.callable_shader_binding_table,
+      (void *)cmd->u.trace_rays_khr.raygen_shader_binding_table->deviceAddress,
+      (void *)cmd->u.trace_rays_khr.miss_shader_binding_table->deviceAddress,
+      (void *)cmd->u.trace_rays_khr.hit_shader_binding_table->deviceAddress,
+      (void *)cmd->u.trace_rays_khr.callable_shader_binding_table->deviceAddress,
       false,
       cmd->u.trace_rays_khr.width,
       cmd->u.trace_rays_khr.height,

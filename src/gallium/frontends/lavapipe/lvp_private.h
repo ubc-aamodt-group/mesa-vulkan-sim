@@ -427,6 +427,18 @@ lvp_pipeline_nir_ref(struct lvp_pipeline_nir **dst, struct lvp_pipeline_nir *src
    *dst = src;
 }
 
+
+struct lvp_pipeline_group_handle {
+   union {
+      uint32_t general_index;
+      uint32_t closest_hit_index;
+   };
+   union {
+      uint32_t intersection_index;
+      uint32_t any_hit_index;
+   };
+};
+
 struct lvp_pipeline {
    struct vk_object_base base;
    struct lvp_device *                          device;
@@ -461,6 +473,7 @@ struct lvp_pipeline {
    bool compiled;
    bool used;
    uint32_t group_count;
+   struct lvp_pipeline_group_handle *group_handles;
 };
 
 void
