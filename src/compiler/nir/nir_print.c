@@ -5070,7 +5070,7 @@ print_var_decl_as_ptx(nir_variable *var, print_state *state)
    const char *const per_view = (var->data.per_view) ? "per_view " : "";
    fprintf(fp, "%s%s%s%s%s%s %s ",
            cent, samp, patch, inv, per_view,
-           get_variable_mode_str(var->data.mode, false),
+           get_variable_mode_str(var->data.mode, true),
            glsl_interp_mode_name(var->data.interpolation));
 
    enum gl_access_qualifier access = var->data.access;
