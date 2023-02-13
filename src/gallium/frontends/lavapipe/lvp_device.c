@@ -2169,6 +2169,7 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_BindImageMemory2(VkDevice _device,
          image->pmem = mem->pmem;
          image->memory_offset = bind_info->memoryOffset;
       }
+      printf("LVP: Image %p bound to pmem %p\n", image, image->pmem);
    }
    return VK_SUCCESS;
 }

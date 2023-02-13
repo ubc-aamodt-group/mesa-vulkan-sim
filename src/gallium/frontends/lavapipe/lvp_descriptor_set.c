@@ -508,7 +508,6 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
          break;
       case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
       case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
-         printf("LVP: Setting descriptor %d VK_DESCRIPTOR_TYPE_STORAGE_IMAGE/VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT\n", i);
          for (uint32_t j = 0; j < write->descriptorCount; j++) {
             LVP_FROM_HANDLE(lvp_image_view, iview,
                             write->pImageInfo[j].imageView);
@@ -516,7 +515,13 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
             desc[j] = (struct lvp_descriptor) {
                .type = write->descriptorType,
                .info.image_view = iview ? iview->iv : ((struct pipe_image_view){0}),
+               .info.image_view.pmem = iview ? iview->image->pmem : NULL,
             };
+
+            printf("LVP: Setting lvp_image_view %p for descriptor %d (%d). ", (void *)iview, i, j);
+            printf("Type: %s; ", vk_Format_to_str(iview->image->vk.format));
+            printf("Tiling: %s\n", vk_ImageTiling_to_str(iview->image->vk.tiling));
+            printf("LVP: Image stored at pmem %p\n", desc[j].info.image_view.pmem);
          }
          break;
 

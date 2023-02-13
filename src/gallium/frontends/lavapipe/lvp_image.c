@@ -268,6 +268,9 @@ lvp_CreateImageView(VkDevice _device,
 {
    LVP_FROM_HANDLE(lvp_device, device, _device);
    LVP_FROM_HANDLE(lvp_image, image, pCreateInfo->image);
+
+   printf("LVP: Creating image_view for image %p\n", image);
+
    struct lvp_image_view *view;
 
    view = vk_image_view_create(&device->vk, false, pCreateInfo,
