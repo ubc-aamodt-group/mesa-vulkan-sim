@@ -515,13 +515,13 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
             desc[j] = (struct lvp_descriptor) {
                .type = write->descriptorType,
                .info.image_view = iview ? iview->iv : ((struct pipe_image_view){0}),
-               .info.image_view.pmem = iview ? iview->image->pmem : NULL,
+               .info.image_view.image = iview ? iview->image : NULL,
             };
 
             printf("LVP: Setting lvp_image_view %p for descriptor %d (%d). ", (void *)iview, i, j);
             printf("Type: %s; ", vk_Format_to_str(iview->image->vk.format));
             printf("Tiling: %s\n", vk_ImageTiling_to_str(iview->image->vk.tiling));
-            printf("LVP: Image stored at pmem %p\n", desc[j].info.image_view.pmem);
+            printf("LVP: Image stored at %p\n", desc[j].info.image_view.image);
          }
          break;
 
