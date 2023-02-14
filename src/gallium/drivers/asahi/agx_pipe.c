@@ -964,8 +964,8 @@ agx_flush_batch(struct agx_context *ctx, struct agx_batch *batch)
 
    assert(agx_batch_is_active(batch));
 
-   /* Nothing to do */
-   if (!(batch->draw | batch->clear)) {
+   /* Make sure there's something to submit. */
+   if (!batch->clear && !batch->any_draws) {
       agx_batch_cleanup(ctx, batch);
       return;
    }
@@ -1366,7 +1366,7 @@ agx_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MAX_TEXTURE_GATHER_OFFSET:
       return is_deqp ? 7 : 0;
    case PIPE_CAP_DRAW_INDIRECT:
-      return is_deqp;
+      return true;
 
    case PIPE_CAP_VIDEO_MEMORY: {
       uint64_t system_memory;
@@ -1782,6 +1782,12 @@ static const struct u_transfer_vtbl transfer_vtbl = {
    .get_stencil = agx_resource_get_stencil,
 };
 
+static int
+agx_screen_get_fd(struct pipe_screen *pscreen)
+{
+   return agx_device(pscreen)->fd;
+}
+
 struct pipe_screen *
 agx_screen_create(int fd, struct renderonly *ro, struct sw_winsys *winsys)
 {
@@ -1822,6 +1828,7 @@ agx_screen_create(int fd, struct renderonly *ro, struct sw_winsys *winsys)
    }
 
    screen->destroy = agx_destroy_screen;
+   screen->get_screen_fd = agx_screen_get_fd;
    screen->get_name = agx_get_name;
    screen->get_vendor = agx_get_vendor;
    screen->get_device_vendor = agx_get_device_vendor;

@@ -105,6 +105,7 @@ zink_destroy_resource_object(struct zink_screen *screen, struct zink_resource_ob
       while (util_dynarray_contains(&obj->views, VkImageView))
          VKSCR(DestroyImageView)(screen->dev, util_dynarray_pop(&obj->views, VkImageView), NULL);
    }
+   util_dynarray_fini(&obj->views);
    if (obj->is_buffer) {
       VKSCR(DestroyBuffer)(screen->dev, obj->buffer, NULL);
       VKSCR(DestroyBuffer)(screen->dev, obj->storage_buffer, NULL);
@@ -180,7 +181,6 @@ create_bci(struct zink_screen *screen, const struct pipe_resource *templ, unsign
 
    if (bind & ZINK_BIND_DESCRIPTOR) {
       /* gallium sizes are all uint32_t, while the total size of this buffer may exceed that limit */
-      bci.size *= ZINK_DESCRIPTOR_BUFFER_MULTIPLIER;
       bci.usage = 0;
       if (bind & ZINK_BIND_SAMPLER_DESCRIPTOR)
          bci.usage |= VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT;
@@ -468,6 +468,10 @@ create_ici(struct zink_screen *screen, VkImageCreateInfo *ici, const struct pipe
       ici->flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
    ici->usage = 0;
    ici->queueFamilyIndexCount = 0;
+
+   /* assume we're going to be doing some CompressedTexSubImage */
+   if (util_format_is_compressed(templ->format) && (ici->flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT))
+      ici->flags |= VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT;
 
    if (templ->flags & PIPE_RESOURCE_FLAG_SPARSE)
       ici->flags |= VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT;
@@ -1309,7 +1313,7 @@ add_resource_bind(struct zink_context *ctx, struct zink_resource *res, unsigned 
    }
    struct zink_resource_object *new_obj = resource_object_create(screen, &res->base.b, NULL, &res->linear, res->modifiers, res->modifiers_count, NULL);
    if (!new_obj) {
-      debug_printf("new backing resource alloc failed!");
+      debug_printf("new backing resource alloc failed!\n");
       res->base.b.bind &= ~bind;
       return false;
    }
@@ -1658,7 +1662,7 @@ invalidate_buffer(struct zink_context *ctx, struct zink_resource *res)
 
    struct zink_resource_object *new_obj = resource_object_create(screen, &res->base.b, NULL, NULL, NULL, 0, NULL);
    if (!new_obj) {
-      debug_printf("new backing resource alloc failed!");
+      debug_printf("new backing resource alloc failed!\n");
       return false;
    }
    /* this ref must be transferred before rebind or else BOOM */

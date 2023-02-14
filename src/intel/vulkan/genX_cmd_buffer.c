@@ -26,20 +26,15 @@
 
 #include "anv_private.h"
 #include "anv_measure.h"
-#include "vk_format.h"
 #include "vk_render_pass.h"
 #include "vk_util.h"
-#include "util/fast_idiv_by_const.h"
 
 #include "common/intel_aux_map.h"
-#include "common/intel_l3_config.h"
 #include "genxml/gen_macros.h"
 #include "genxml/genX_pack.h"
 #include "genxml/genX_rt_pack.h"
 #include "common/intel_guardband.h"
 #include "compiler/brw_prim.h"
-
-#include "nir/nir_xfb_info.h"
 
 #include "ds/intel_tracepoints.h"
 
@@ -97,6 +92,13 @@ is_render_queue_cmd_buffer(const struct anv_cmd_buffer *cmd_buffer)
 {
    struct anv_queue_family *queue_family = cmd_buffer->queue_family;
    return (queue_family->queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0;
+}
+
+static bool
+is_video_queue_cmd_buffer(const struct anv_cmd_buffer *cmd_buffer)
+{
+   struct anv_queue_family *queue_family = cmd_buffer->queue_family;
+   return (queue_family->queueFlags & VK_QUEUE_VIDEO_DECODE_BIT_KHR) != 0;
 }
 
 ALWAYS_INLINE static void
@@ -3290,9 +3292,14 @@ genX(cmd_buffer_flush_gfx_state)(struct anv_cmd_buffer *cmd_buffer)
     */
    genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
 
-   uint32_t vb_emit = cmd_buffer->state.gfx.vb_dirty & pipeline->vb_used;
-   if (cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_PIPELINE)
-      vb_emit |= pipeline->vb_used;
+   /* Check what vertex buffers have been rebound against the set of bindings
+    * being used by the current set of vertex attributes.
+    */
+   uint32_t vb_emit = cmd_buffer->state.gfx.vb_dirty & dyn->vi->bindings_valid;
+   /* If the pipeline changed, the we have to consider all the valid bindings. */
+   if ((cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_PIPELINE) ||
+       BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_VI_BINDING_STRIDES))
+      vb_emit |= dyn->vi->bindings_valid;
 
    if (vb_emit) {
       const uint32_t num_buffers = __builtin_popcount(vb_emit);
@@ -3555,6 +3562,9 @@ genX(BeginCommandBuffer)(
    if (cmd_buffer->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY)
       cmd_buffer->usage_flags &= ~VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
 
+   if (is_video_queue_cmd_buffer(cmd_buffer))
+      return VK_SUCCESS;
+
    trace_intel_begin_cmd_buffer(&cmd_buffer->trace);
 
    genX(cmd_buffer_emit_state_base_address)(cmd_buffer);
@@ -3720,6 +3730,11 @@ genX(EndCommandBuffer)(
 
    if (anv_batch_has_error(&cmd_buffer->batch))
       return cmd_buffer->batch.status;
+
+   if (is_video_queue_cmd_buffer(cmd_buffer)) {
+      anv_cmd_buffer_end_batch_buffer(cmd_buffer);
+      return VK_SUCCESS;
+   }
 
    anv_measure_endcommandbuffer(cmd_buffer);
 
@@ -3926,6 +3941,9 @@ cmd_buffer_barrier(struct anv_cmd_buffer *cmd_buffer,
     */
    VkAccessFlags2 src_flags = 0;
    VkAccessFlags2 dst_flags = 0;
+
+   if (is_video_queue_cmd_buffer(cmd_buffer))
+      return;
 
    for (uint32_t i = 0; i < dep_info->memoryBarrierCount; i++) {
       src_flags |= dep_info->pMemoryBarriers[i].srcAccessMask;
@@ -7719,6 +7737,17 @@ void genX(CmdSetEvent2)(
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    ANV_FROM_HANDLE(anv_event, event, _event);
 
+   if (is_video_queue_cmd_buffer(cmd_buffer)) {
+      anv_batch_emit(&cmd_buffer->batch, GENX(MI_FLUSH_DW), flush) {
+         flush.PostSyncOperation = WriteImmediateData;
+         flush.Address = anv_state_pool_state_address(
+            &cmd_buffer->device->dynamic_state_pool,
+            event->state);
+         flush.ImmediateData = VK_EVENT_SET;
+      }
+      return;
+   }
+
    VkPipelineStageFlags2 src_stages = 0;
 
    for (uint32_t i = 0; i < pDependencyInfo->memoryBarrierCount; i++)
@@ -7754,6 +7783,17 @@ void genX(CmdResetEvent2)(
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    ANV_FROM_HANDLE(anv_event, event, _event);
+
+   if (is_video_queue_cmd_buffer(cmd_buffer)) {
+      anv_batch_emit(&cmd_buffer->batch, GENX(MI_FLUSH_DW), flush) {
+         flush.PostSyncOperation = WriteImmediateData;
+         flush.Address = anv_state_pool_state_address(
+            &cmd_buffer->device->dynamic_state_pool,
+            event->state);
+         flush.ImmediateData = VK_EVENT_RESET;
+      }
+      return;
+   }
 
    cmd_buffer->state.pending_pipe_bits |= ANV_PIPE_POST_SYNC_BIT;
    genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);

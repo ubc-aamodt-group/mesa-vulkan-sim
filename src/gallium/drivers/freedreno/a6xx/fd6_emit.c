@@ -42,6 +42,7 @@
 #include "fd6_blend.h"
 #include "fd6_const.h"
 #include "fd6_context.h"
+#include "fd6_compute.h"
 #include "fd6_emit.h"
 #include "fd6_image.h"
 #include "fd6_pack.h"
@@ -529,6 +530,27 @@ fd6_emit_non_ring(struct fd_ringbuffer *ring, struct fd6_emit *emit) assert_dt
    }
 }
 
+static struct fd_ringbuffer*
+build_prim_mode(struct fd6_emit *emit, struct fd_context *ctx, bool gmem)
+   assert_dt
+{
+   struct fd_ringbuffer *ring =
+      fd_submit_new_ringbuffer(emit->ctx->batch->submit, 2 * 4, FD_RINGBUFFER_STREAMING);
+   uint32_t prim_mode = NO_FLUSH;
+   if (emit->fs->fs.uses_fbfetch_output) {
+      if (gmem) {
+         prim_mode = ctx->blend->blend_coherent ? FLUSH_PER_OVERLAP : NO_FLUSH;
+      } else {
+         prim_mode = FLUSH_PER_OVERLAP_AND_OVERWRITE;
+      }
+   } else {
+      prim_mode = NO_FLUSH;
+   }
+   OUT_REG(ring, A6XX_GRAS_SC_CNTL(.ccusinglecachelinesize = 2,
+                                   .single_prim_mode = prim_mode));
+   return ring;
+}
+
 void
 fd6_emit_3d_state(struct fd_ringbuffer *ring, struct fd6_emit *emit)
 {
@@ -661,6 +683,14 @@ fd6_emit_3d_state(struct fd_ringbuffer *ring, struct fd6_emit *emit)
       case FD6_GROUP_SO:
          fd6_emit_streamout(ring, emit);
          break;
+      case FD6_GROUP_PRIM_MODE_SYSMEM:
+         state = build_prim_mode(emit, ctx, false);
+         fd6_state_take_group(&emit->state, state, FD6_GROUP_PRIM_MODE_SYSMEM);
+         break;
+      case FD6_GROUP_PRIM_MODE_GMEM:
+         state = build_prim_mode(emit, ctx, true);
+         fd6_state_take_group(&emit->state, state, FD6_GROUP_PRIM_MODE_GMEM);
+         break;
       case FD6_GROUP_NON_GROUP:
          fd6_emit_non_ring(ring, emit);
          break;
@@ -674,14 +704,31 @@ fd6_emit_3d_state(struct fd_ringbuffer *ring, struct fd6_emit *emit)
 
 void
 fd6_emit_cs_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
-                  struct ir3_shader_variant *cp)
+                  struct fd6_compute_state *cs)
 {
    struct fd6_state state = {};
 
-   u_foreach_bit (b, ctx->gen_dirty) {
+   /* We want CP_SET_DRAW_STATE to execute immediately, otherwise we need to
+    * emit consts as draw state groups (which otherwise has no benefit outside
+    * of GMEM 3d using viz stream from binning pass).
+    *
+    * In particular, the PROG state group sets up the configuration for the
+    * const state, so it must execute before we start loading consts, rather
+    * than be deferred until CP_EXEC_CS.
+    */
+   OUT_PKT7(ring, CP_SET_MODE, 1);
+   OUT_RING(ring, 1);
+
+   uint32_t gen_dirty = ctx->gen_dirty &
+         (BIT(FD6_GROUP_PROG) | BIT(FD6_GROUP_CS_TEX) | BIT(FD6_GROUP_CS_BINDLESS));
+
+   u_foreach_bit (b, gen_dirty) {
       enum fd6_state_id group = b;
 
       switch (group) {
+      case FD6_GROUP_PROG:
+         fd6_state_add_group(&state, cs->stateobj, FD6_GROUP_PROG);
+         break;
       case FD6_GROUP_CS_TEX:
          fd6_state_take_group(
                &state,

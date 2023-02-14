@@ -44,6 +44,7 @@
 #include "util/u_memory.h"
 #include "util/u_screen.h"
 #include "util/u_string.h"
+#include "util/perf/u_trace.h"
 #include "util/u_transfer_helper.h"
 #include "util/xmlconfig.h"
 
@@ -187,6 +188,8 @@ zink_is_parallel_shader_compilation_finished(struct pipe_screen *screen, void *s
    }
 
    struct zink_shader *zs = shader;
+   if (!util_queue_fence_is_signalled(&zs->precompile.fence))
+      return false;
    bool finished = true;
    set_foreach(zs->programs, entry) {
       struct zink_gfx_program *prog = (void*)entry->key;
@@ -321,7 +324,7 @@ cache_put_job(void *data, void *gdata, int thread_index)
 void
 zink_screen_update_pipeline_cache(struct zink_screen *screen, struct zink_program *pg, bool in_thread)
 {
-   if (!screen->disk_cache)
+   if (!screen->disk_cache || !pg->pipeline_cache)
       return;
 
    if (in_thread)
@@ -528,6 +531,10 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_NATIVE_FENCE_FD:
       return screen->instance_info.have_KHR_external_semaphore_capabilities && screen->info.have_KHR_external_semaphore_fd;
 
+   case PIPE_CAP_SURFACE_REINTERPRET_BLOCKS:
+      return screen->info.have_vulkan11 || screen->info.have_KHR_maintenance2;
+
+   case PIPE_CAP_VALIDATE_ALL_DIRTY_STATES:
    case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
    case PIPE_CAP_MAP_UNSYNCHRONIZED_THREAD_SAFE:
    case PIPE_CAP_SHAREABLE_SHADERS:
@@ -1428,6 +1435,12 @@ zink_destroy_screen(struct pipe_screen *pscreen)
    }
 #endif
    disk_cache_destroy(screen->disk_cache);
+
+   for (unsigned i = 0; i < ARRAY_SIZE(screen->pipeline_libs); i++)
+      _mesa_set_clear(&screen->pipeline_libs[i], NULL);
+   for (unsigned i = 0; i < ARRAY_SIZE(screen->pipeline_libs_lock); i++)
+      simple_mtx_destroy(&screen->pipeline_libs_lock[i]);
+
    zink_bo_deinit(screen);
    util_live_shader_cache_deinit(&screen->shaders);
 
@@ -1445,6 +1458,8 @@ zink_destroy_screen(struct pipe_screen *pscreen)
    simple_mtx_destroy(&screen->semaphores_lock);
    while (util_dynarray_contains(&screen->semaphores, VkSemaphore))
       VKSCR(DestroySemaphore)(screen->dev, util_dynarray_pop(&screen->semaphores, VkSemaphore), NULL);
+   if (screen->bindless_layout)
+      VKSCR(DestroyDescriptorSetLayout)(screen->dev, screen->bindless_layout, NULL);
 
    simple_mtx_destroy(&screen->queue_lock);
    VKSCR(DestroyDevice)(screen->dev, NULL);
@@ -2498,9 +2513,12 @@ init_driver_workarounds(struct zink_screen *screen)
       screen->info.rb_image_feats.robustImageAccess;
 
    /* once more testing has been done, use the #if 0 block */
-   if (zink_debug & ZINK_DEBUG_RP)
-      screen->driver_workarounds.track_renderpasses = true;
-#if 0
+   unsigned illegal = ZINK_DEBUG_RP | ZINK_DEBUG_NORP;
+   if ((zink_debug & illegal) == illegal) {
+      mesa_loge("Cannot specify ZINK_DEBUG=rp and ZINK_DEBUG=norp");
+      abort();
+   }
+
    /* these drivers benefit from renderpass optimization */
    switch (screen->info.driver_props.driverID) {
    //* llvmpipe is broken: #7489
@@ -2518,7 +2536,10 @@ init_driver_workarounds(struct zink_screen *screen)
    default:
       break;
    }
-#endif
+   if (zink_debug & ZINK_DEBUG_RP)
+      screen->driver_workarounds.track_renderpasses = true;
+   else if (zink_debug & ZINK_DEBUG_NORP)
+      screen->driver_workarounds.track_renderpasses = false;
 }
 
 static struct disk_cache *
@@ -2550,6 +2571,52 @@ zink_create_semaphore(struct zink_screen *screen)
    return ret == VK_SUCCESS ? sem : VK_NULL_HANDLE;
 }
 
+static bool
+init_layouts(struct zink_screen *screen)
+{
+   if (screen->info.have_EXT_descriptor_indexing) {
+      VkDescriptorSetLayoutBinding bindings[4];
+      const unsigned num_bindings = 4;
+      VkDescriptorSetLayoutCreateInfo dcslci = {0};
+      dcslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+      dcslci.pNext = NULL;
+      VkDescriptorSetLayoutBindingFlagsCreateInfo fci = {0};
+      VkDescriptorBindingFlags flags[4];
+      dcslci.pNext = &fci;
+      if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_DB)
+         dcslci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+      else
+         dcslci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+      fci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+      fci.bindingCount = num_bindings;
+      fci.pBindingFlags = flags;
+      for (unsigned i = 0; i < num_bindings; i++) {
+         flags[i] = VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+         if (zink_descriptor_mode != ZINK_DESCRIPTOR_MODE_DB)
+            flags[i] |= VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+      }
+      /* there is exactly 1 bindless descriptor set per context, and it has 4 bindings, 1 for each descriptor type */
+      for (unsigned i = 0; i < num_bindings; i++) {
+         bindings[i].binding = i;
+         bindings[i].descriptorType = zink_descriptor_type_from_bindless_index(i);
+         bindings[i].descriptorCount = ZINK_MAX_BINDLESS_HANDLES;
+         bindings[i].stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT;
+         bindings[i].pImmutableSamplers = NULL;
+      }
+
+      dcslci.bindingCount = num_bindings;
+      dcslci.pBindings = bindings;
+      VkResult result = VKSCR(CreateDescriptorSetLayout)(screen->dev, &dcslci, 0, &screen->bindless_layout);
+      if (result != VK_SUCCESS) {
+         mesa_loge("ZINK: vkCreateDescriptorSetLayout failed (%s)", vk_Result_to_str(result));
+         return false;
+      }
+   }
+
+   screen->gfx_push_constant_layout = zink_pipeline_layout_create(screen, NULL, 0, false, 0);
+   return !!screen->gfx_push_constant_layout;
+}
+
 static struct zink_screen *
 zink_internal_create_screen(const struct pipe_screen_config *config)
 {
@@ -2567,6 +2634,8 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
 
    zink_debug = debug_get_option_zink_debug();
    zink_descriptor_mode = debug_get_option_zink_descriptor_mode();
+
+   u_trace_state_init();
 
    screen->loader_lib = util_dl_open(VK_LIBNAME);
    if (!screen->loader_lib)
@@ -2858,6 +2927,7 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
       }
       screen->db_size[ZINK_DESCRIPTOR_TYPE_UNIFORMS] = screen->info.db_props.robustUniformBufferDescriptorSize;
       screen->info.have_KHR_push_descriptor = false;
+      screen->base_descriptor_size = MAX4(screen->db_size[0], screen->db_size[1], screen->db_size[2], screen->db_size[3]);
    }
 
    simple_mtx_init(&screen->dt_lock, mtx_plain);
@@ -2881,8 +2951,9 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
       screen->buffer_barrier = zink_resource_buffer_barrier;
    }
 
-   screen->gfx_push_constant_layout = zink_pipeline_layout_create(screen, NULL, 0, false);
-   if (screen->gfx_push_constant_layout == VK_NULL_HANDLE)
+   zink_init_screen_pipeline_libs(screen);
+
+   if (!init_layouts(screen))
       goto fail;
 
    if (!zink_descriptor_layouts_init(screen))

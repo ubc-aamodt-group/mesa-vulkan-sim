@@ -42,6 +42,13 @@
 #include "freedreno_state.h"
 #include "freedreno_util.h"
 
+static bool
+batch_references_resource(struct fd_batch *batch, struct pipe_resource *prsc)
+   assert_dt
+{
+   return fd_batch_references_resource(batch, fd_resource(prsc));
+}
+
 static void
 resource_read(struct fd_batch *batch, struct pipe_resource *prsc) assert_dt
 {
@@ -185,10 +192,39 @@ batch_draw_tracking_for_dirty_bits(struct fd_batch *batch) assert_dt
             resource_written(batch, ctx->streamout.targets[i]->buffer);
    }
 
+   if (ctx->dirty & FD_DIRTY_QUERY) {
+      list_for_each_entry (struct fd_acc_query, aq, &ctx->acc_active_queries, node) {
+         resource_written(batch, aq->prsc);
+      }
+   }
+
    /* any buffers that haven't been cleared yet, we need to restore: */
    batch->restore |= restore_buffers & (FD_BUFFER_ALL & ~batch->invalidated);
    /* and any buffers used, need to be resolved: */
    batch->resolve |= buffers;
+}
+
+static bool
+needs_draw_tracking(struct fd_batch *batch, const struct pipe_draw_info *info,
+                    const struct pipe_draw_indirect_info *indirect)
+   assert_dt
+{
+   struct fd_context *ctx = batch->ctx;
+
+   if (ctx->dirty & FD_DIRTY_RESOURCE)
+      return true;
+
+   if (info->index_size && !batch_references_resource(batch, info->index.resource))
+      return true;
+
+   if (indirect) {
+      if (indirect->buffer && !batch_references_resource(batch, indirect->buffer))
+         return true;
+      if (indirect->count_from_stream_output)
+         return true;
+   }
+
+   return false;
 }
 
 static void
@@ -201,6 +237,9 @@ batch_draw_tracking(struct fd_batch *batch, const struct pipe_draw_info *info,
     * query_buf may not be created yet.
     */
    fd_batch_update_queries(batch);
+
+   if (!needs_draw_tracking(batch, info, indirect))
+      return;
 
    /*
     * Figure out the buffers/features we need:
@@ -226,9 +265,6 @@ batch_draw_tracking(struct fd_batch *batch, const struct pipe_draw_info *info,
    }
 
    resource_written(batch, batch->query_buf);
-
-   list_for_each_entry (struct fd_acc_query, aq, &ctx->acc_active_queries, node)
-      resource_written(batch, aq->prsc);
 
    fd_screen_unlock(ctx->screen);
 }
@@ -355,8 +391,6 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
 
    for (unsigned i = 0; i < num_draws; i++) {
       ctx->draw_vbo(ctx, info, drawid_offset, indirect, &draws[i], index_offset);
-
-      batch->num_vertices += draws[i].count * info->instance_count;
    }
 
    if (unlikely(ctx->stats_users > 0))

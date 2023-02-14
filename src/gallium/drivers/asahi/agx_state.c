@@ -49,6 +49,7 @@
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
 #include "util/u_prim.h"
+#include "util/u_resource.h"
 #include "util/u_transfer.h"
 #include "agx_state.h"
 #include "agx_disk_cache.h"
@@ -2312,21 +2313,35 @@ agx_primitive_for_pipe(enum pipe_prim_type mode)
 }
 
 static uint64_t
-agx_index_buffer_ptr(struct agx_batch *batch,
-                     const struct pipe_draw_start_count_bias *draw,
-                     const struct pipe_draw_info *info)
+agx_index_buffer_rsrc_ptr(struct agx_batch *batch,
+                          const struct pipe_draw_info *info, size_t *extent)
+{
+   assert(!info->has_user_indices && "cannot use user pointers with indirect");
+
+   struct agx_resource *rsrc = agx_resource(info->index.resource);
+   agx_batch_reads(batch, rsrc);
+
+   *extent = ALIGN_POT(util_resource_size(&rsrc->base), 4);
+   return rsrc->bo->ptr.gpu;
+}
+
+static uint64_t
+agx_index_buffer_direct_ptr(struct agx_batch *batch,
+                            const struct pipe_draw_start_count_bias *draw,
+                            const struct pipe_draw_info *info, size_t *extent)
 {
    off_t offset = draw->start * info->index_size;
 
    if (!info->has_user_indices) {
-      struct agx_resource *rsrc = agx_resource(info->index.resource);
-      agx_batch_reads(batch, rsrc);
+      uint64_t base = agx_index_buffer_rsrc_ptr(batch, info, extent);
 
-      return rsrc->bo->ptr.gpu + offset;
+      *extent = ALIGN_POT(*extent - offset, 4);
+      return base + offset;
    } else {
-      return agx_pool_upload_aligned(&batch->pool,
-                                     ((uint8_t *)info->index.user) + offset,
-                                     draw->count * info->index_size, 64);
+      *extent = ALIGN_POT(draw->count * info->index_size, 4);
+
+      return agx_pool_upload_aligned(
+         &batch->pool, ((uint8_t *)info->index.user) + offset, *extent, 64);
    }
 }
 
@@ -2424,6 +2439,8 @@ agx_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
       batch->resolve |= ctx->zs->store;
    }
 
+   batch->any_draws = true;
+
    if (agx_update_vs(ctx))
       ctx->dirty |= AGX_DIRTY_VS | AGX_DIRTY_VS_PROG;
    else if (ctx->stage[PIPE_SHADER_VERTEX].dirty)
@@ -2459,7 +2476,15 @@ agx_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
 
    enum agx_primitive prim = agx_primitive_for_pipe(info->mode);
    unsigned idx_size = info->index_size;
-   uint64_t ib = idx_size ? agx_index_buffer_ptr(batch, draws, info) : 0;
+   uint64_t ib = 0;
+   size_t ib_extent = 0;
+
+   if (idx_size) {
+      if (indirect != NULL)
+         ib = agx_index_buffer_rsrc_ptr(batch, info, &ib_extent);
+      else
+         ib = agx_index_buffer_direct_ptr(batch, draws, info, &ib_extent);
+   }
 
    if (idx_size) {
       /* Index sizes are encoded logarithmically */
@@ -2480,9 +2505,14 @@ agx_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
 
    agx_pack(out, INDEX_LIST, cfg) {
       cfg.primitive = prim;
-      cfg.index_count_present = true;
       cfg.instance_count_present = true;
-      cfg.start_present = true;
+
+      if (indirect != NULL) {
+         cfg.indirect_buffer_present = true;
+      } else {
+         cfg.index_count_present = true;
+         cfg.start_present = true;
+      }
 
       if (idx_size) {
          cfg.restart_enable = info->primitive_restart;
@@ -2501,22 +2531,35 @@ agx_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
       out += AGX_INDEX_LIST_BUFFER_LO_LENGTH;
    }
 
-   agx_pack(out, INDEX_LIST_COUNT, cfg)
-      cfg.count = draws->count;
-   out += AGX_INDEX_LIST_COUNT_LENGTH;
+   if (!indirect) {
+      agx_pack(out, INDEX_LIST_COUNT, cfg)
+         cfg.count = draws->count;
+      out += AGX_INDEX_LIST_COUNT_LENGTH;
+   }
 
    agx_pack(out, INDEX_LIST_INSTANCES, cfg)
       cfg.count = info->instance_count;
    out += AGX_INDEX_LIST_INSTANCES_LENGTH;
 
-   agx_pack(out, INDEX_LIST_START, cfg) {
-      cfg.start = idx_size ? draws->index_bias : draws->start;
+   if (indirect) {
+      struct agx_resource *indirect_rsrc = agx_resource(indirect->buffer);
+      uint64_t address = indirect_rsrc->bo->ptr.gpu + indirect->offset;
+
+      agx_pack(out, INDEX_LIST_INDIRECT_BUFFER, cfg) {
+         cfg.address_hi = address >> 32;
+         cfg.address_lo = address & BITFIELD_MASK(32);
+      }
+      out += AGX_INDEX_LIST_INDIRECT_BUFFER_LENGTH;
+   } else {
+      agx_pack(out, INDEX_LIST_START, cfg) {
+         cfg.start = idx_size ? draws->index_bias : draws->start;
+      }
+      out += AGX_INDEX_LIST_START_LENGTH;
    }
-   out += AGX_INDEX_LIST_START_LENGTH;
 
    if (idx_size) {
       agx_pack(out, INDEX_LIST_BUFFER_SIZE, cfg) {
-         cfg.size = ALIGN_POT(draws->count * idx_size, 4);
+         cfg.size = ib_extent;
       }
       out += AGX_INDEX_LIST_BUFFER_SIZE_LENGTH;
    }

@@ -851,6 +851,16 @@ if with_platform_android
   ]
 endif
 
+# On Android, seccomp kills the process on kernels without
+# CONFIG_KCMP/CONFIG_CHECKPOINT_RESTORE if it attemps to use KCMP.
+# Since we can't detect that, err on the side of caution and disable
+# KCMP by default on Android.
+if get_option('allow-kcmp') \
+    .disable_auto_if(with_platform_android) \
+    .allowed()
+  pre_args += '-DALLOW_KCMP'
+endif
+
 prog_python = import('python').find_installation('python3')
 has_mako = run_command(
   prog_python, '-c',
@@ -1195,8 +1205,7 @@ with_asm_arch = ''
 if host_machine.cpu_family() == 'x86'
   if system_has_kms_drm or host_machine.system() == 'gnu'
     with_asm_arch = 'x86'
-    pre_args += ['-DUSE_X86_ASM', '-DUSE_MMX_ASM', '-DUSE_3DNOW_ASM',
-                 '-DUSE_SSE_ASM']
+    pre_args += ['-DUSE_X86_ASM']
 
     if with_glx_read_only_text
       pre_args += ['-DGLX_X86_READONLY_TEXT']

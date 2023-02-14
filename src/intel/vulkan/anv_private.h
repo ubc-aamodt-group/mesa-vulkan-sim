@@ -90,6 +90,7 @@
 #include "vk_queue.h"
 #include "vk_log.h"
 #include "vk_ycbcr_conversion.h"
+#include "vk_video.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -119,6 +120,7 @@ struct intel_perf_query_result;
 
 #include "anv_android.h"
 #include "anv_entrypoints.h"
+#include "anv_kmd_backend.h"
 #include "isl/isl.h"
 
 #include "dev/intel_debug.h"
@@ -872,7 +874,7 @@ struct anv_queue_family {
    enum intel_engine_class engine_class;
 };
 
-#define ANV_MAX_QUEUE_FAMILIES 3
+#define ANV_MAX_QUEUE_FAMILIES 4
 
 struct anv_memory_type {
    /* Standard bits passed on to the client */
@@ -895,7 +897,7 @@ struct anv_memory_heap {
 };
 
 struct anv_memregion {
-   struct drm_i915_gem_memory_class_instance region;
+   const struct intel_memory_class_instance *region;
    uint64_t size;
    uint64_t available;
 };
@@ -924,6 +926,8 @@ struct anv_physical_device {
      * the total system ram to try and avoid running out of RAM.
      */
     bool                                        supports_48bit_addresses;
+    bool                                        video_decode_enabled;
+
     struct brw_compiler *                       compiler;
     struct isl_device                           isl_dev;
     struct intel_perf_config *                    perf;
@@ -1115,6 +1119,7 @@ struct anv_device {
 
     struct anv_physical_device *                physical;
     const struct intel_device_info *            info;
+    const struct anv_kmd_backend *              kmd_backend;
     struct isl_device                           isl_dev;
     uint32_t                                    context_id;
     int                                         fd;
@@ -1190,6 +1195,12 @@ struct anv_device {
     struct anv_bo                              *rt_scratch_bos[16];
     struct anv_bo                              *btd_fifo_bo;
     struct anv_address                          rt_uuid_addr;
+
+    /** A pre packed VERTEX_ELEMENT_STATE feeding 0s to the VS stage
+     *
+     * For use when a pipeline has no VS input
+     */
+    uint32_t                                    empty_vs_input[2];
 
     /** Shadow ray query BO
      *
@@ -1342,11 +1353,7 @@ VkResult anv_queue_submit_simple_batch(struct anv_queue *queue,
 void* anv_gem_mmap(struct anv_device *device, struct anv_bo *bo,
                    uint64_t offset, uint64_t size, uint32_t flags);
 void anv_gem_munmap(struct anv_device *device, void *p, uint64_t size);
-uint32_t anv_gem_create(struct anv_device *device, uint64_t size);
 void anv_gem_close(struct anv_device *device, uint32_t gem_handle);
-uint32_t anv_gem_create_regions(struct anv_device *device, uint64_t anv_bo_size,
-                                uint32_t flags, uint32_t num_regions,
-                                struct drm_i915_gem_memory_class_instance *regions);
 uint32_t anv_gem_userptr(struct anv_device *device, void *mem, size_t size);
 int anv_gem_wait(struct anv_device *device, uint32_t gem_handle, int64_t *timeout_ns);
 int anv_gem_set_tiling(struct anv_device *device, uint32_t gem_handle,
@@ -1355,8 +1362,6 @@ int anv_gem_get_tiling(struct anv_device *device, uint32_t gem_handle);
 int anv_gem_handle_to_fd(struct anv_device *device, uint32_t gem_handle);
 uint32_t anv_gem_fd_to_handle(struct anv_device *device, int fd);
 int anv_gem_set_caching(struct anv_device *device, uint32_t gem_handle, uint32_t caching);
-int anv_i915_query(int fd, uint64_t query_id, void *buffer,
-                   int32_t *buffer_len);
 
 uint64_t anv_vma_alloc(struct anv_device *device,
                        uint64_t size, uint64_t align,
@@ -2274,6 +2279,7 @@ anv_pipe_invalidate_bits_for_access_flags(struct anv_device *device,
       case VK_ACCESS_2_SHADER_READ_BIT:
       case VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT:
       case VK_ACCESS_2_TRANSFER_READ_BIT:
+      case VK_ACCESS_2_SHADER_SAMPLED_READ_BIT:
          /* Transitioning a buffer to be read through the sampler, so
           * invalidate the texture cache, we don't want any stale data.
           */
@@ -2317,6 +2323,7 @@ anv_pipe_invalidate_bits_for_access_flags(struct anv_device *device,
           */
          pipe_bits |= ANV_PIPE_TILE_CACHE_FLUSH_BIT;
          break;
+      case VK_ACCESS_2_SHADER_STORAGE_READ_BIT:
       default:
          break; /* Nothing to do */
       }
@@ -2325,15 +2332,14 @@ anv_pipe_invalidate_bits_for_access_flags(struct anv_device *device,
    return pipe_bits;
 }
 
-#define VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV (         \
-   VK_IMAGE_ASPECT_COLOR_BIT | \
-   VK_IMAGE_ASPECT_PLANE_0_BIT | \
-   VK_IMAGE_ASPECT_PLANE_1_BIT | \
-   VK_IMAGE_ASPECT_PLANE_2_BIT)
 #define VK_IMAGE_ASPECT_PLANES_BITS_ANV ( \
    VK_IMAGE_ASPECT_PLANE_0_BIT | \
    VK_IMAGE_ASPECT_PLANE_1_BIT | \
    VK_IMAGE_ASPECT_PLANE_2_BIT)
+
+#define VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV (         \
+   VK_IMAGE_ASPECT_COLOR_BIT | \
+   VK_IMAGE_ASPECT_PLANES_BITS_ANV)
 
 struct anv_vertex_binding {
    struct anv_buffer *                          buffer;
@@ -2526,6 +2532,7 @@ struct anv_cmd_graphics_state {
    uint32_t index_type; /**< 3DSTATE_INDEX_BUFFER.IndexFormat */
    uint32_t index_offset;
 
+   struct vk_vertex_input_state vertex_input;
    struct vk_sample_locations_state sample_locations;
 
    bool object_preemption;
@@ -2770,6 +2777,11 @@ struct anv_cmd_buffer {
     * Structure holding tracepoints recorded in the command buffer.
     */
    struct u_trace                               trace;
+
+   struct {
+      struct anv_video_session *vid;
+      struct anv_video_session_params *params;
+   } video;
 };
 
 extern const struct vk_command_buffer_ops anv_cmd_buffer_ops;
@@ -3057,6 +3069,7 @@ struct anv_graphics_pipeline {
 
    VkShaderStageFlags                           active_stages;
 
+   struct vk_vertex_input_state                 vertex_input;
    struct vk_sample_locations_state             sample_locations;
    struct vk_dynamic_graphics_state             dynamic_state;
 
@@ -3073,17 +3086,32 @@ struct anv_graphics_pipeline {
    bool                                         force_fragment_thread_dispatch;
    bool                                         uses_xfb;
 
-   uint32_t                                     vb_used;
-   struct anv_pipeline_vertex_binding {
-      uint32_t                                  stride;
-      bool                                      instanced;
-      uint32_t                                  instance_divisor;
-   } vb[MAX_VBS];
+   /* Number of VERTEX_ELEMENT_STATE input elements used by the shader */
+   uint32_t                                     vs_input_elements;
+
+   /* Number of VERTEX_ELEMENT_STATE elements we need to implement some of the
+    * draw parameters
+    */
+   uint32_t                                     svgs_count;
+
+   /* Pre computed VERTEX_ELEMENT_STATE structures for the vertex input that
+    * can be copied into the anv_cmd_buffer behind a 3DSTATE_VERTEX_BUFFER.
+    *
+    * When MESA_VK_DYNAMIC_VI is not dynamic
+    *
+    *     vertex_input_elems = vs_input_elements + svgs_count
+    *
+    * All the VERTEX_ELEMENT_STATE can be directly copied behind a
+    * 3DSTATE_VERTEX_ELEMENTS instruction in the command buffer. Otherwise
+    * this array only holds the svgs_count elements.
+    */
+   uint32_t                                     vertex_input_elems;
+   uint32_t                                     vertex_input_data[96];
 
    /* Pre computed CS instructions that can directly be copied into
     * anv_cmd_buffer.
     */
-   uint32_t                                     batch_data[512];
+   uint32_t                                     batch_data[416];
 
    /* Pre packed CS instructions & structures that need to be merged later
     * with dynamic state.
@@ -3546,6 +3574,8 @@ struct anv_image {
        */
       bool can_non_zero_fast_clear;
    } planes[3];
+
+   struct anv_image_memory_range vid_dmv_top_surface;
 };
 
 static inline bool
@@ -4087,6 +4117,35 @@ struct anv_acceleration_structure {
    struct anv_address                           address;
 };
 
+struct anv_vid_mem {
+   struct anv_device_memory *mem;
+   VkDeviceSize       offset;
+   VkDeviceSize       size;
+};
+
+#define ANV_VIDEO_MEM_REQS_H264 4
+#define ANV_MB_WIDTH 16
+#define ANV_MB_HEIGHT 16
+
+enum {
+   ANV_VID_MEM_H264_INTRA_ROW_STORE,
+   ANV_VID_MEM_H264_DEBLOCK_FILTER_ROW_STORE,
+   ANV_VID_MEM_H264_BSD_MPC_ROW_SCRATCH,
+   ANV_VID_MEM_H264_MPR_ROW_SCRATCH,
+   ANV_VID_MEM_H264_MAX,
+};
+
+struct anv_video_session {
+   struct vk_video_session vk;
+
+   /* the decoder needs some private memory allocations */
+   struct anv_vid_mem vid_mem[ANV_VID_MEM_H264_MAX];
+};
+
+struct anv_video_session_params {
+   struct vk_video_session_parameters vk;
+};
+
 void
 anv_dump_pipe_bits(enum anv_pipe_bits bits);
 
@@ -4233,6 +4292,12 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(anv_sampler, base, VkSampler,
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_performance_configuration_intel, base,
                                VkPerformanceConfigurationINTEL,
                                VK_OBJECT_TYPE_PERFORMANCE_CONFIGURATION_INTEL)
+VK_DEFINE_NONDISP_HANDLE_CASTS(anv_video_session, vk.base,
+                               VkVideoSessionKHR,
+                               VK_OBJECT_TYPE_VIDEO_SESSION_KHR)
+VK_DEFINE_NONDISP_HANDLE_CASTS(anv_video_session_params, vk.base,
+                               VkVideoSessionParametersKHR,
+                               VK_OBJECT_TYPE_VIDEO_SESSION_PARAMETERS_KHR)
 
 #define anv_genX(devinfo, thing) ({             \
    __typeof(&gfx9_##thing) genX_thing;          \

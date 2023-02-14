@@ -21,24 +21,39 @@
  * SOFTWARE.
  */
 
-#ifndef ROGUE_DUMP_H
-#define ROGUE_DUMP_H
+/**
+ * \file rogue_backend_instrs.def
+ *
+ * \brief Contains macros defining backend instructions.
+ */
 
-#include <stdbool.h>
-#include <stdio.h>
+/*
+ * ROGUE_BUILDER_DEFINE_BACKENDds
+ *    d: Number of destinations.
+ *    s: Number of sources.
+ */
 
-#include "rogue_instr.h"
-#include "rogue_operand.h"
-#include "rogue_shader.h"
-#include "util/macros.h"
+#ifndef ROGUE_BUILDER_DEFINE_BACKEND00
+#define ROGUE_BUILDER_DEFINE_BACKEND00(...)
+#endif /* ROGUE_BUILDER_DEFINE_BACKEND00 */
 
-PUBLIC
-bool rogue_dump_operand(const struct rogue_operand *operand, FILE *fp);
+#ifndef ROGUE_BUILDER_DEFINE_BACKEND11
+#define ROGUE_BUILDER_DEFINE_BACKEND11(...)
+#endif /* ROGUE_BUILDER_DEFINE_BACKEND11 */
 
-PUBLIC
-bool rogue_dump_instr(const struct rogue_instr *instr, FILE *fp);
+#ifndef ROGUE_BUILDER_DEFINE_BACKEND14
+#define ROGUE_BUILDER_DEFINE_BACKEND14(...)
+#endif /* ROGUE_BUILDER_DEFINE_BACKEND14 */
 
-PUBLIC
-bool rogue_dump_shader(const struct rogue_shader *shader, FILE *fp);
+ROGUE_BUILDER_DEFINE_BACKEND00(UVSW_EMIT)
+ROGUE_BUILDER_DEFINE_BACKEND00(UVSW_ENDTASK)
+ROGUE_BUILDER_DEFINE_BACKEND00(UVSW_EMITTHENENDTASK)
 
-#endif /* ROGUE_DUMP_H */
+ROGUE_BUILDER_DEFINE_BACKEND11(UVSW_WRITE)
+ROGUE_BUILDER_DEFINE_BACKEND11(UVSW_WRITETHENEMITTHENENDTASK)
+
+ROGUE_BUILDER_DEFINE_BACKEND14(FITRP_PIXEL)
+
+#undef ROGUE_BUILDER_DEFINE_BACKEND14
+#undef ROGUE_BUILDER_DEFINE_BACKEND11
+#undef ROGUE_BUILDER_DEFINE_BACKEND00

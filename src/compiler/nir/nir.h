@@ -4636,6 +4636,12 @@ void nir_find_inlinable_uniforms(nir_shader *shader);
 void nir_inline_uniforms(nir_shader *shader, unsigned num_uniforms,
                          const uint32_t *uniform_values,
                          const uint16_t *uniform_dw_offsets);
+bool nir_collect_src_uniforms(const nir_src *src, int component,
+                              uint32_t *uni_offsets, uint8_t *num_offsets,
+                              unsigned max_num_bo, unsigned max_offset);
+void nir_add_inlinable_uniforms(const nir_src *cond, nir_loop_info *info,
+                                uint32_t *uni_offsets, uint8_t *num_offsets,
+                                unsigned max_num_bo, unsigned max_offset);
 
 bool nir_propagate_invariant(nir_shader *shader, bool invariant_prim);
 
@@ -5565,8 +5571,14 @@ bool nir_shader_uses_view_index(nir_shader *shader);
 bool nir_can_lower_multiview(nir_shader *shader);
 bool nir_lower_multiview(nir_shader *shader, uint32_t view_mask);
 
-
-bool nir_lower_fp16_casts(nir_shader *shader);
+typedef enum {
+   nir_lower_fp16_rtz = (1 << 0),
+   nir_lower_fp16_rtne = (1 << 1),
+   nir_lower_fp16_ru = (1 << 2),
+   nir_lower_fp16_rd = (1 << 3),
+   nir_lower_fp16_all = 0xf,
+} nir_lower_fp16_cast_options;
+bool nir_lower_fp16_casts(nir_shader *shader, nir_lower_fp16_cast_options options);
 bool nir_normalize_cubemap_coords(nir_shader *shader);
 
 bool nir_shader_supports_implicit_lod(nir_shader *shader);

@@ -275,6 +275,15 @@ init_render_queue_state(struct anv_queue *queue)
       .end = (void *) cmds + sizeof(cmds),
    };
 
+   struct GENX(VERTEX_ELEMENT_STATE) empty_ve = {
+      .Valid = true,
+      .Component0Control = VFCOMP_STORE_0,
+      .Component1Control = VFCOMP_STORE_0,
+      .Component2Control = VFCOMP_STORE_0,
+      .Component3Control = VFCOMP_STORE_0,
+   };
+   GENX(VERTEX_ELEMENT_STATE_pack)(NULL, device->empty_vs_input, &empty_ve);
+
    genX(emit_pipeline_select)(&batch, _3D);
 
 #if GFX_VER == 9
@@ -521,6 +530,9 @@ genX(init_device_state)(struct anv_device *device)
          break;
       case INTEL_ENGINE_CLASS_COMPUTE:
          res = init_compute_queue_state(queue);
+         break;
+      case I915_ENGINE_CLASS_VIDEO:
+         res = VK_SUCCESS;
          break;
       default:
          res = vk_error(device, VK_ERROR_INITIALIZATION_FAILED);

@@ -21,31 +21,45 @@
  * SOFTWARE.
  */
 
-#ifndef ROGUE_CONSTREGS_H
-#define ROGUE_CONSTREGS_H
-
-#include <stddef.h>
-#include <stdint.h>
-
-#include "util/macros.h"
-#include "util/u_math.h"
-
-#define ROGUE_NO_CONST_REG SIZE_MAX
-
-PUBLIC
-size_t rogue_constreg_lookup(uint32_t value);
-
 /**
- * \brief Determines whether a given floating point value exists in a constant
- * register.
+ * \file rogue_ctrl_instrs.def
  *
- * \param[in] value The value required.
- * \return The index of the constant register containing the value, or
- * ROGUE_NO_CONST_REG if the value is not found.
+ * \brief Contains macros defining control instructions.
  */
-static inline size_t rogue_constreg_lookup_float(float value)
-{
-   return rogue_constreg_lookup(fui(value));
-}
 
-#endif /* ROGUE_CONSTREGS_H */
+/*
+ * B - B: Block destination operand.
+ * XY - X: Num destinations, Y: Num sources.
+ */
+
+/*
+ * ROGUE_BUILDER_DEFINE_CTRLB
+ *    B: Block destination operand.
+ *
+ * ROGUE_BUILDER_DEFINE_CTRLds
+ *    d: Number of destinations.
+ *    s: Number of sources.
+ */
+
+#ifndef ROGUE_BUILDER_DEFINE_CTRLB
+#define ROGUE_BUILDER_DEFINE_CTRLB(...)
+#endif /* ROGUE_BUILDER_DEFINE_CTRLB */
+
+#ifndef ROGUE_BUILDER_DEFINE_CTRL00
+#define ROGUE_BUILDER_DEFINE_CTRL00(...)
+#endif /* ROGUE_BUILDER_DEFINE_CTRL00 */
+
+#ifndef ROGUE_BUILDER_DEFINE_CTRL01
+#define ROGUE_BUILDER_DEFINE_CTRL01(...)
+#endif /* ROGUE_BUILDER_DEFINE_CTRL01 */
+
+ROGUE_BUILDER_DEFINE_CTRLB(BA)
+
+ROGUE_BUILDER_DEFINE_CTRL00(END)
+ROGUE_BUILDER_DEFINE_CTRL00(NOP)
+
+ROGUE_BUILDER_DEFINE_CTRL01(WDF)
+
+#undef ROGUE_BUILDER_DEFINE_CTRL01
+#undef ROGUE_BUILDER_DEFINE_CTRL00
+#undef ROGUE_BUILDER_DEFINE_CTRLB
