@@ -113,7 +113,7 @@ lvp_bvh_max_size(VkAccelerationStructureTypeKHR type, uint64_t leaf_count)
       unreachable("Invalid VkAccelerationStructureTypeKHR");
    }
 
-   printf("Size of BVH structure is %ld\n", max_size_B);
+   printf("LVP: Size of BVH structure is 0x%lx\n", max_size_B);
    return max_size_B;
 }
 
@@ -251,6 +251,7 @@ lvp_CreateAccelerationStructureKHR(
       .offset = (buffer->offset + pCreateInfo->offset),
    };
    printf("LVP: Accel structure (size 0x%lx) created from lvp_buffer (size 0x%lx). \n", accel->size, buffer->total_size);
+   printf("LVP: Buffer %p + 0x%lx = %p allocated to accel structure %p\n", accel->address.bo, accel->address.offset, (void *)accel->address.bo + accel->address.offset, accel);
 
    *pAccelerationStructure = lvp_acceleration_structure_to_handle(accel);
 
@@ -286,8 +287,8 @@ lvp_GetAccelerationStructureDeviceAddressKHR(
    // Copied from Intel; might be unnecessary
    assert(!anv_address_is_null(accel->address));
 
-   printf("LVP: Returning BLAS %p address %p\n", accel, accel->address.bo);
-   return (VkDeviceAddress)(accel->address.bo);
+   printf("LVP: Returning BLAS %p address %p\n", accel, (void *)accel->address.bo + accel->address.offset);
+   return (VkDeviceAddress)((void *)accel->address.bo + accel->address.offset);
 }
 
 void
@@ -1323,7 +1324,7 @@ lvp_cpu_build_acceleration_structures(
       node_type_size(root, &root_type, &root_size, &build_state);
 
       void *dst_map = (uint8_t *)dst_accel->address.bo + dst_accel->address.offset;
-      printf("EMBREE: Set dst_map %p = accel->address.bo %p + accel->address.offset %ld for accel %p\n", 
+      printf("EMBREE: Set dst_map %p = accel->address.bo %p + accel->address.offset 0x%lx for accel %p\n", 
                dst_map, dst_accel->address.bo, dst_accel->address.offset, dst_accel);
 
       struct GEN_RT_BVH bvh = { };

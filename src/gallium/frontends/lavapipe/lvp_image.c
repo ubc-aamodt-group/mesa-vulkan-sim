@@ -422,6 +422,8 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_CreateBuffer(
    }
    *pBuffer = lvp_buffer_to_handle(buffer);
 
+   printf("LVP: vkBuffer size %ld created at %p\n", buffer->size, pBuffer);
+
    return VK_SUCCESS;
 }
 
