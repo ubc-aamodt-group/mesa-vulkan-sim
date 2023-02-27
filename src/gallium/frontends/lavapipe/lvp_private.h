@@ -121,6 +121,19 @@ void __lvp_finishme(const char *file, int line, const char *format, ...)
         stage = ffs(__tmp) - 1, __tmp;                     \
         __tmp &= ~(1 << (stage)))
 
+#define VSIM_DPRINTF(...) \
+   if(VSIM_DEBUG_PRINT) { \
+      printf(__VA_ARGS__); \
+      fflush(stdout); \
+   }
+
+
+#ifndef NDEBUG
+#define VSIM_DEBUG_PRINT 1
+#else
+#define VSIM_DEBUG_PRINT 0
+#endif
+
 struct lvp_physical_device {
    struct vk_physical_device vk;
 
