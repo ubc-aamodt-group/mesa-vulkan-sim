@@ -67,6 +67,7 @@
 #include "util/u_math.h"
 #include "util/vma.h"
 #include "util/xmlconfig.h"
+#include "vk_acceleration_structure.h"
 #include "vk_alloc.h"
 #include "vk_buffer.h"
 #include "vk_command_buffer.h"
@@ -107,7 +108,6 @@ struct anv_batch;
 struct anv_buffer;
 struct anv_buffer_view;
 struct anv_image_view;
-struct anv_acceleration_structure;
 struct anv_instance;
 
 struct intel_aux_map_context;
@@ -538,6 +538,9 @@ struct anv_bo {
 
    /** True if this BO should be mapped with Write Combine enabled */
    bool map_wc:1;
+
+   /** True if this BO can only live in VRAM */
+   bool vram_only:1;
 };
 
 static inline struct anv_bo *
@@ -1123,7 +1126,6 @@ struct anv_device {
     struct isl_device                           isl_dev;
     uint32_t                                    context_id;
     int                                         fd;
-    bool                                        robust_buffer_access;
 
     pthread_mutex_t                             vma_mutex;
     struct util_vma_heap                        vma_lo;
@@ -1350,10 +1352,10 @@ VkResult anv_queue_submit(struct vk_queue *queue,
 VkResult anv_queue_submit_simple_batch(struct anv_queue *queue,
                                        struct anv_batch *batch);
 
-void* anv_gem_mmap(struct anv_device *device, struct anv_bo *bo,
-                   uint64_t offset, uint64_t size, uint32_t flags);
+void *
+anv_gem_mmap(struct anv_device *device, struct anv_bo *bo, uint64_t offset,
+             uint64_t size, VkMemoryPropertyFlags property_flags);
 void anv_gem_munmap(struct anv_device *device, void *p, uint64_t size);
-void anv_gem_close(struct anv_device *device, uint32_t gem_handle);
 uint32_t anv_gem_userptr(struct anv_device *device, void *mem, size_t size);
 int anv_gem_wait(struct anv_device *device, uint32_t gem_handle, int64_t *timeout_ns);
 int anv_gem_set_tiling(struct anv_device *device, uint32_t gem_handle,
@@ -1777,7 +1779,7 @@ struct anv_descriptor {
 
       struct anv_buffer_view *buffer_view;
 
-      struct anv_acceleration_structure *accel_struct;
+      struct vk_acceleration_structure *accel_struct;
    };
 };
 
@@ -1939,7 +1941,7 @@ anv_descriptor_write_surface_state(struct anv_device *device,
 void
 anv_descriptor_set_write_acceleration_structure(struct anv_device *device,
                                                 struct anv_descriptor_set *set,
-                                                struct anv_acceleration_structure *accel,
+                                                struct vk_acceleration_structure *accel,
                                                 uint32_t binding,
                                                 uint32_t element);
 
@@ -2276,7 +2278,6 @@ anv_pipe_invalidate_bits_for_access_flags(struct anv_device *device,
             pipe_bits |= ANV_PIPE_UNTYPED_DATAPORT_CACHE_FLUSH_BIT;
          }
          break;
-      case VK_ACCESS_2_SHADER_READ_BIT:
       case VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT:
       case VK_ACCESS_2_TRANSFER_READ_BIT:
       case VK_ACCESS_2_SHADER_SAMPLED_READ_BIT:
@@ -2284,6 +2285,17 @@ anv_pipe_invalidate_bits_for_access_flags(struct anv_device *device,
           * invalidate the texture cache, we don't want any stale data.
           */
          pipe_bits |= ANV_PIPE_TEXTURE_CACHE_INVALIDATE_BIT;
+         break;
+      case VK_ACCESS_2_SHADER_READ_BIT:
+         /* Same as VK_ACCESS_2_UNIFORM_READ_BIT and
+          * VK_ACCESS_2_SHADER_SAMPLED_READ_BIT cases above
+          */
+         pipe_bits |= ANV_PIPE_CONSTANT_CACHE_INVALIDATE_BIT |
+                      ANV_PIPE_TEXTURE_CACHE_INVALIDATE_BIT;
+         if (!device->physical->compiler->indirect_ubos_use_sampler) {
+            pipe_bits |= ANV_PIPE_HDC_PIPELINE_FLUSH_BIT;
+            pipe_bits |= ANV_PIPE_UNTYPED_DATAPORT_CACHE_FLUSH_BIT;
+         }
          break;
       case VK_ACCESS_2_MEMORY_READ_BIT:
          /* Transitioning a buffer for generic read, invalidate all the
@@ -2440,6 +2452,18 @@ struct anv_vb_cache_range {
    uint64_t end;
 };
 
+static inline void
+anv_merge_vb_cache_range(struct anv_vb_cache_range *dirty,
+                         const struct anv_vb_cache_range *bound)
+{
+   if (dirty->start == dirty->end) {
+      *dirty = *bound;
+   } else if (bound->start != bound->end) {
+      dirty->start = MIN2(dirty->start, bound->start);
+      dirty->end = MAX2(dirty->end, bound->end);
+   }
+}
+
 /* Check whether we need to apply the Gfx8-9 vertex buffer workaround*/
 static inline bool
 anv_gfx8_9_vb_cache_range_needs_workaround(struct anv_vb_cache_range *bound,
@@ -2462,9 +2486,7 @@ anv_gfx8_9_vb_cache_range_needs_workaround(struct anv_vb_cache_range *bound,
    bound->start &= ~(64ull - 1ull);
    bound->end = align64(bound->end, 64);
 
-   /* Compute the dirty range */
-   dirty->start = MIN2(dirty->start, bound->start);
-   dirty->end = MAX2(dirty->end, bound->end);
+   anv_merge_vb_cache_range(dirty, bound);
 
    /* If our range is larger than 32 bits, we have to flush */
    assert(bound->end - bound->start <= (1ull << 32));
@@ -3121,8 +3143,8 @@ struct anv_graphics_pipeline {
       uint32_t                                  sf[4];
       uint32_t                                  raster[5];
       uint32_t                                  wm[2];
-      uint32_t                                  blend_state[1 + MAX_RTS * 2];
       uint32_t                                  streamout_state[5];
+      uint32_t                                  hs[9];
    } gfx8;
 };
 
@@ -4110,13 +4132,6 @@ static inline uint32_t khr_perf_query_preamble_offset(const struct anv_query_poo
    return pool->pass_size * pass + 8;
 }
 
-struct anv_acceleration_structure {
-   struct vk_object_base                        base;
-
-   VkDeviceSize                                 size;
-   struct anv_address                           address;
-};
-
 struct anv_vid_mem {
    struct anv_device_memory *mem;
    VkDeviceSize       offset;
@@ -4192,13 +4207,6 @@ anv_device_init_generated_indirect_draws(struct anv_device *device);
 void
 anv_device_finish_generated_indirect_draws(struct anv_device *device);
 
-static inline bool anv_use_generated_draws(const struct anv_device *device,
-                                           uint32_t count)
-{
-   return device->physical->generated_indirect_draws &&
-          count >= device->physical->instance->generated_indirect_threshold;
-}
-
 struct anv_utrace_flush_copy {
    /* Needs to be the first field */
    struct intel_ds_flush_data ds;
@@ -4261,9 +4269,6 @@ VK_DEFINE_HANDLE_CASTS(anv_physical_device, vk.base, VkPhysicalDevice,
                        VK_OBJECT_TYPE_PHYSICAL_DEVICE)
 VK_DEFINE_HANDLE_CASTS(anv_queue, vk.base, VkQueue, VK_OBJECT_TYPE_QUEUE)
 
-VK_DEFINE_NONDISP_HANDLE_CASTS(anv_acceleration_structure, base,
-                               VkAccelerationStructureKHR,
-                               VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_buffer, vk.base, VkBuffer,
                                VK_OBJECT_TYPE_BUFFER)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_buffer_view, base, VkBufferView,

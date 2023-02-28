@@ -2123,8 +2123,11 @@ visit_intrinsic(struct lp_build_nir_context *bld_base,
       visit_shared_atomic(bld_base, instr, result);
       break;
    case nir_intrinsic_control_barrier:
-   case nir_intrinsic_scoped_barrier:
       visit_barrier(bld_base);
+      break;
+   case nir_intrinsic_scoped_barrier:
+      if (nir_intrinsic_execution_scope(instr) != NIR_SCOPE_NONE)
+         visit_barrier(bld_base);
       break;
    case nir_intrinsic_group_memory_barrier:
    case nir_intrinsic_memory_barrier:
@@ -2634,6 +2637,7 @@ visit_if(struct lp_build_nir_context *bld_base, nir_if *if_stmt)
 static void
 visit_loop(struct lp_build_nir_context *bld_base, nir_loop *loop)
 {
+   assert(!nir_loop_has_continue_construct(loop));
    bld_base->bgnloop(bld_base);
    visit_cf_list(bld_base, &loop->body);
    bld_base->endloop(bld_base);

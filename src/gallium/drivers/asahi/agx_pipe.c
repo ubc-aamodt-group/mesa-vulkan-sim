@@ -1103,6 +1103,8 @@ agx_destroy_context(struct pipe_context *pctx)
 
    util_unreference_framebuffer_state(&ctx->framebuffer);
 
+   agx_meta_cleanup(&ctx->meta);
+
    ralloc_free(ctx);
 }
 
@@ -1167,7 +1169,7 @@ agx_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
    agx_init_state_functions(pctx);
    agx_init_query_functions(pctx);
 
-   agx_meta_init(&ctx->meta, agx_device(screen), ctx);
+   agx_meta_init(&ctx->meta, agx_device(screen));
 
    ctx->blitter = util_blitter_create(pctx);
 
@@ -1234,6 +1236,8 @@ agx_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_FRAGMENT_SHADER_DERIVATIVES:
    case PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT:
    case PIPE_CAP_SHADER_PACK_HALF_FLOAT:
+   case PIPE_CAP_FS_FINE_DERIVATIVE:
+   case PIPE_CAP_TEXTURE_BARRIER:
       return 1;
 
    /* We could support ARB_clip_control by toggling the clip control bit for
@@ -1360,11 +1364,11 @@ agx_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return PIPE_ENDIAN_LITTLE;
 
    case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
-      return is_deqp ? 4 : 0;
+      return 4;
    case PIPE_CAP_MIN_TEXTURE_GATHER_OFFSET:
-      return is_deqp ? -8 : 0;
+      return -8;
    case PIPE_CAP_MAX_TEXTURE_GATHER_OFFSET:
-      return is_deqp ? 7 : 0;
+      return 7;
    case PIPE_CAP_DRAW_INDIRECT:
       return true;
 

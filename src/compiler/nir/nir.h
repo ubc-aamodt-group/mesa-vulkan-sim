@@ -2200,6 +2200,7 @@ typedef enum {
    nir_texop_fragment_mask_fetch_amd, /**< Multisample fragment mask texture fetch */
    nir_texop_descriptor_amd,     /**< Returns a buffer or image descriptor. */
    nir_texop_sampler_descriptor_amd, /**< Returns a sampler descriptor. */
+   nir_texop_lod_bias_agx,       /**< Returns the sampler's LOD bias */
 } nir_texop;
 
 /** Represents a texture instruction */
@@ -2974,6 +2975,7 @@ typedef struct {
    nir_cf_node cf_node;
 
    struct exec_list body; /** < list of nir_cf_node */
+   struct exec_list continue_list; /** < (optional) list of nir_cf_node */
 
    nir_loop_info *info;
    nir_loop_control control;
@@ -3207,6 +3209,40 @@ nir_loop_last_block(nir_loop *loop)
 {
    struct exec_node *tail = exec_list_get_tail(&loop->body);
    return nir_cf_node_as_block(exec_node_data(nir_cf_node, tail, node));
+}
+
+static inline bool
+nir_loop_has_continue_construct(const nir_loop *loop)
+{
+   return !exec_list_is_empty(&loop->continue_list);
+}
+
+static inline nir_block *
+nir_loop_first_continue_block(nir_loop *loop)
+{
+   assert(nir_loop_has_continue_construct(loop));
+   struct exec_node *head = exec_list_get_head(&loop->continue_list);
+   return nir_cf_node_as_block(exec_node_data(nir_cf_node, head, node));
+}
+
+static inline nir_block *
+nir_loop_last_continue_block(nir_loop *loop)
+{
+   assert(nir_loop_has_continue_construct(loop));
+   struct exec_node *tail = exec_list_get_tail(&loop->continue_list);
+   return nir_cf_node_as_block(exec_node_data(nir_cf_node, tail, node));
+}
+
+/**
+ * Return the target block of a nir_jump_continue statement
+ */
+static inline nir_block *
+nir_loop_continue_target(nir_loop *loop)
+{
+   if (nir_loop_has_continue_construct(loop))
+      return nir_loop_first_continue_block(loop);
+   else
+      return nir_loop_first_block(loop);
 }
 
 /**
@@ -4783,10 +4819,10 @@ typedef enum {
     * An address format which is a 64-bit global base address and a 32-bit
     * offset.
     *
-    * The address is comprised as a 32-bit vec4 where .xy are a uint64_t base
-    * address stored with the low bits in .x and high bits in .y, .z is
-    * undefined, and .w is an offset.  This is intended to match
-    * 64bit_bounded_global but without the bounds checking.
+    * This is identical to 64bit_bounded_global except that bounds checking
+    * is not applied when lowering to global access.  Even though the size is
+    * never used for an actual bounds check, it needs to be valid so we can
+    * lower deref_buffer_array_length properly.
     */
    nir_address_format_64bit_global_32bit_offset,
 
@@ -4899,6 +4935,24 @@ void nir_lower_explicit_io_instr(struct nir_builder *b,
 bool nir_lower_explicit_io(nir_shader *shader,
                            nir_variable_mode modes,
                            nir_address_format);
+
+typedef struct {
+   uint8_t num_components;
+   uint8_t bit_size;
+   uint16_t align_mul;
+} nir_mem_access_size_align;
+
+typedef nir_mem_access_size_align
+   (*nir_lower_mem_access_bit_sizes_cb)(nir_intrinsic_op intrin,
+                                        uint8_t bytes,
+                                        uint32_t align_mul,
+                                        uint32_t align_offset,
+                                        bool offset_is_const,
+                                        const void *cb_data);
+
+bool nir_lower_mem_access_bit_sizes(nir_shader *shader,
+                                    nir_lower_mem_access_bit_sizes_cb cb,
+                                    const void *cb_data);
 
 typedef bool (*nir_should_vectorize_mem_func)(unsigned align_mul,
                                               unsigned align_offset,
@@ -5045,6 +5099,7 @@ typedef struct nir_lower_subgroups_options {
    bool lower_quad_broadcast_dynamic_to_const:1;
    bool lower_elect:1;
    bool lower_read_invocation_to_cond:1;
+   bool lower_rotate_to_shuffle:1;
 } nir_lower_subgroups_options;
 
 bool nir_lower_subgroups(nir_shader *shader,
@@ -5515,7 +5570,8 @@ struct nir_fold_tex_srcs_options {
 struct nir_fold_16bit_tex_image_options {
    nir_rounding_mode rounding_mode;
    nir_alu_type fold_tex_dest_types;
-   bool fold_image_load_store_data;
+   nir_alu_type fold_image_dest_types;
+   bool fold_image_store_data;
    bool fold_image_srcs;
    unsigned fold_srcs_options_count;
    struct nir_fold_tex_srcs_options *fold_srcs_options;
@@ -5566,6 +5622,7 @@ bool nir_lower_discard_or_demote(nir_shader *shader,
 bool nir_lower_memory_model(nir_shader *shader);
 
 bool nir_lower_goto_ifs(nir_shader *shader);
+bool nir_lower_continue_constructs(nir_shader *shader);
 
 bool nir_shader_uses_view_index(nir_shader *shader);
 bool nir_can_lower_multiview(nir_shader *shader);

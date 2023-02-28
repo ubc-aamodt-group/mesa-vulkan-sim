@@ -26,7 +26,7 @@
 #include "tu_cmd_buffer.h"
 #include "tu_cs.h"
 #include "tu_device.h"
-#include "tu_drm.h"
+#include "tu_knl.h"
 #include "tu_formats.h"
 #include "tu_lrz.h"
 #include "tu_pass.h"
@@ -3152,7 +3152,8 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
          for (unsigned j = 0; j < ARRAY_SIZE(library->shaders); j++) {
             if (library->shaders[j].nir) {
                assert(!nir[j]);
-               nir[j] = nir_shader_clone(NULL, library->shaders[j].nir);
+               nir[j] = nir_shader_clone(builder->mem_ctx,
+                     library->shaders[j].nir);
                keys[j] = library->shaders[j].key;
                must_compile = true;
             }

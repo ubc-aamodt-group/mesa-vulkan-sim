@@ -356,7 +356,7 @@ st_destroy_context_priv(struct st_context *st, bool destroy_pipe)
    st_destroy_drawtex(st);
    st_destroy_pbo_helpers(st);
 
-   if (st->transcode_astc)
+   if (_mesa_has_compute_shaders(st->ctx) && st->transcode_astc)
       st_destroy_texcompress_compute(st);
 
    st_destroy_bound_texture_handles(st);
@@ -656,7 +656,7 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
                                         PIPE_CAP_MAX_TEXTURE_UPLOAD_MEMORY_BUDGET));
 
    /* GL limits and extensions */
-   st_init_limits(screen, &ctx->Const, &ctx->Extensions);
+   st_init_limits(screen, &ctx->Const, &ctx->Extensions, ctx->API);
    st_init_extensions(screen, &ctx->Const,
                       &ctx->Extensions, &st->options, ctx->API);
 
@@ -955,7 +955,7 @@ st_destroy_context(struct st_context *st)
    _mesa_make_current(ctx, NULL, NULL);
 
    /* This must be called first so that glthread has a chance to finish */
-   _mesa_glthread_destroy(ctx, NULL);
+   _mesa_glthread_destroy(ctx);
 
    _mesa_HashWalk(ctx->Shared->TexObjects, destroy_tex_sampler_cb, st);
 

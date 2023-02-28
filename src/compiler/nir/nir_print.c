@@ -1314,6 +1314,9 @@ print_tex_instr(nir_tex_instr *instr, print_state *state)
    case nir_texop_sampler_descriptor_amd:
       fprintf(fp, "sampler_descriptor_amd ");
       break;
+   case nir_texop_lod_bias_agx:
+      fprintf(fp, "lod_bias_agx ");
+      break;
    default:
       unreachable("Invalid texture operation");
       break;
@@ -1658,6 +1661,15 @@ print_loop(nir_loop *loop, print_state *state, unsigned tabs)
       print_cf_node(node, state, tabs + 1);
    }
    print_tabs(tabs, fp);
+
+   if (nir_loop_has_continue_construct(loop)) {
+      fprintf(fp, "} continue {\n");
+      foreach_list_typed(nir_cf_node, node, node, &loop->continue_list) {
+         print_cf_node(node, state, tabs + 1);
+      }
+      print_tabs(tabs, fp);
+   }
+
    fprintf(fp, "}\n");
 }
 

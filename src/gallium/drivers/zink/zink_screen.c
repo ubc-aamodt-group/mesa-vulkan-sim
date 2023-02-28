@@ -83,6 +83,8 @@ zink_debug_options[] = {
    { "gpl", ZINK_DEBUG_GPL, "Force using Graphics Pipeline Library for all shaders" },
    { "shaderdb", ZINK_DEBUG_SHADERDB, "Do stuff to make shader-db work" },
    { "rp", ZINK_DEBUG_RP, "Enable renderpass tracking/optimizations" },
+   { "norp", ZINK_DEBUG_NORP, "Disable renderpass tracking/optimizations" },
+   { "map", ZINK_DEBUG_MAP, "Track amount of mapped VRAM" },
    DEBUG_NAMED_VALUE_END
 };
 
@@ -588,7 +590,7 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return screen->info.have_EXT_provoking_vertex;
 
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP_TO_EDGE:
-      return screen->info.have_KHR_sampler_mirror_clamp_to_edge;
+      return screen->info.have_KHR_sampler_mirror_clamp_to_edge || (screen->info.have_vulkan12 && screen->info.feats12.samplerMirrorClampToEdge);
 
    case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
       return 1;
@@ -1413,6 +1415,7 @@ zink_destroy_screen(struct pipe_screen *pscreen)
       zink_kopper_deinit_displaytarget(screen, entry->data);
    simple_mtx_destroy(&screen->dt_lock);
 
+   simple_mtx_destroy(&screen->copy_context_lock);
    if (screen->copy_context)
       screen->copy_context->base.destroy(&screen->copy_context->base);
 
@@ -2444,6 +2447,11 @@ init_driver_workarounds(struct zink_screen *screen)
       screen->driver_workarounds.no_linesmooth = true;
    }
 
+   screen->driver_workarounds.extra_swapchain_images = 0;
+   if (screen->info.driver_props.driverID == VK_DRIVER_ID_MESA_VENUS) {
+      screen->driver_workarounds.extra_swapchain_images = 1;
+   }
+
    /* This is a workarround for the lack of
     * gl_PointSize + glPolygonMode(..., GL_LINE), in the imagination
     * proprietary driver.
@@ -2521,8 +2529,7 @@ init_driver_workarounds(struct zink_screen *screen)
 
    /* these drivers benefit from renderpass optimization */
    switch (screen->info.driver_props.driverID) {
-   //* llvmpipe is broken: #7489
-   // case VK_DRIVER_ID_MESA_LLVMPIPE:
+   case VK_DRIVER_ID_MESA_LLVMPIPE:
    case VK_DRIVER_ID_MESA_TURNIP:
    case VK_DRIVER_ID_MESA_PANVK:
    case VK_DRIVER_ID_MESA_VENUS:
@@ -2569,6 +2576,24 @@ zink_create_semaphore(struct zink_screen *screen)
       return sem;
    VkResult ret = VKSCR(CreateSemaphore)(screen->dev, &sci, NULL, &sem);
    return ret == VK_SUCCESS ? sem : VK_NULL_HANDLE;
+}
+
+void
+zink_screen_lock_context(struct zink_screen *screen)
+{
+   simple_mtx_lock(&screen->copy_context_lock);
+   if (!screen->copy_context)
+      screen->copy_context = zink_context(screen->base.context_create(&screen->base, NULL, ZINK_CONTEXT_COPY_ONLY));
+   if (!screen->copy_context) {
+      mesa_loge("zink: failed to create copy context");
+      /* realistically there's nothing that can be done here */
+   }
+}
+
+void
+zink_screen_unlock_context(struct zink_screen *screen)
+{
+   simple_mtx_unlock(&screen->copy_context_lock);
 }
 
 static bool
@@ -2751,9 +2776,6 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
       screen->desc_set_id[ZINK_DESCRIPTOR_TYPE_IMAGE] = 4;
       screen->desc_set_id[ZINK_DESCRIPTOR_BINDLESS] = 5;
    }
-   if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_AUTO) {
-      zink_descriptor_mode = ZINK_DESCRIPTOR_MODE_LAZY;
-   }
 
    if (screen->info.have_EXT_calibrated_timestamps && !check_have_device_time(screen))
       goto fail;
@@ -2884,35 +2906,70 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
          screen->resizable_bar = true;
    }
 
-   if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_DB) {
+   bool can_db = true;
+   {
       if (!screen->info.have_EXT_descriptor_buffer) {
-         mesa_loge("Cannot use db descriptor mode without EXT_descriptor_buffer");
-         goto fail;
+         if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_DB) {
+            mesa_loge("Cannot use db descriptor mode without EXT_descriptor_buffer");
+            goto fail;
+         }
+         can_db = false;
       }
       if (!screen->resizable_bar) {
-         mesa_loge("Cannot use db descriptor mode without resizable bar");
-         goto fail;
+         if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_DB) {
+            mesa_loge("Cannot use db descriptor mode without resizable bar");
+            goto fail;
+         }
+         can_db = false;
       }
       if (!screen->info.have_EXT_non_seamless_cube_map) {
-         mesa_loge("Cannot use db descriptor mode without EXT_non_seamless_cube_map");
-         goto fail;
+         if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_DB) {
+            mesa_loge("Cannot use db descriptor mode without EXT_non_seamless_cube_map");
+            goto fail;
+         }
+         can_db = false;
       }
       if (!screen->info.rb2_feats.nullDescriptor) {
-         mesa_loge("Cannot use db descriptor mode without robustness2.nullDescriptor");
-         goto fail;
+         if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_DB) {
+            mesa_loge("Cannot use db descriptor mode without robustness2.nullDescriptor");
+            goto fail;
+         }
+         can_db = false;
+      }
+      if (ZINK_FBFETCH_DESCRIPTOR_SIZE < screen->info.db_props.inputAttachmentDescriptorSize) {
+         if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_DB) {
+            mesa_loge("Cannot use db descriptor mode with inputAttachmentDescriptorSize(%u) > %u", (unsigned)screen->info.db_props.inputAttachmentDescriptorSize, ZINK_FBFETCH_DESCRIPTOR_SIZE);
+            goto fail;
+         }
+         mesa_logw("zink: bug detected: inputAttachmentDescriptorSize(%u) > %u", (unsigned)screen->info.db_props.inputAttachmentDescriptorSize, ZINK_FBFETCH_DESCRIPTOR_SIZE);
+         can_db = false;
       }
       if (screen->compact_descriptors) {
-         /* TODO: bindless */
          if (screen->info.db_props.maxDescriptorBufferBindings < 3) {
-            mesa_loge("Cannot use db descriptor mode with compact descriptors with maxDescriptorBufferBindings < 3");
-            goto fail;
+            if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_DB) {
+               mesa_loge("Cannot use db descriptor mode with compact descriptors with maxDescriptorBufferBindings < 3");
+               goto fail;
+            }
+            can_db = false;
          }
       } else {
          if (screen->info.db_props.maxDescriptorBufferBindings < 5) {
-            mesa_loge("Cannot use db descriptor mode with maxDescriptorBufferBindings < 5");
-            goto fail;
+            if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_DB) {
+               mesa_loge("Cannot use db descriptor mode with maxDescriptorBufferBindings < 5");
+               goto fail;
+            }
+            can_db = false;
          }
       }
+   }
+   if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_AUTO) {
+      /* descriptor buffer is not performant with virt yet */
+      if (screen->info.driver_props.driverID == VK_DRIVER_ID_MESA_VENUS)
+         zink_descriptor_mode = ZINK_DESCRIPTOR_MODE_LAZY;
+      else
+         zink_descriptor_mode = can_db ? ZINK_DESCRIPTOR_MODE_DB : ZINK_DESCRIPTOR_MODE_LAZY;
+   }
+   if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_DB) {
       const uint32_t sampler_size = MAX2(screen->info.db_props.combinedImageSamplerDescriptorSize, screen->info.db_props.robustUniformTexelBufferDescriptorSize);
       const uint32_t image_size = MAX2(screen->info.db_props.storageImageDescriptorSize, screen->info.db_props.robustStorageTexelBufferDescriptorSize);
       if (screen->compact_descriptors) {
@@ -2959,12 +3016,7 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
    if (!zink_descriptor_layouts_init(screen))
       goto fail;
 
-
-   screen->copy_context = zink_context(screen->base.context_create(&screen->base, NULL, ZINK_CONTEXT_COPY_ONLY));
-   if (!screen->copy_context) {
-      mesa_loge("zink: failed to create copy context");
-      goto fail;
-   }
+   simple_mtx_init(&screen->copy_context_lock, mtx_plain);
 
    screen->optimal_keys = !screen->need_decompose_attrs &&
                           screen->info.have_EXT_non_seamless_cube_map &&

@@ -109,13 +109,13 @@ struct pr_opt_ctx {
          std::fill(instr_idx_by_regs[block->index].begin(), instr_idx_by_regs[block->index].end(),
                    not_written_yet);
       } else if (block->kind & block_kind_loop_header) {
-         /* Initialize with content from loop preheader */
-         memcpy(&instr_idx_by_regs[block->index][0], &instr_idx_by_regs[block->index - 1][0],
-                max_reg_cnt * sizeof(Idx));
-
-         /* Assume exec writes on back-edges */
-         instr_idx_by_regs[block->index][126] = overwritten_untrackable;
-         instr_idx_by_regs[block->index][127] = overwritten_untrackable;
+         /* Instructions inside the loop may overwrite registers of temporaries that are
+          * not live inside the loop, but we can't detect that because we haven't processed
+          * the blocks in the loop yet. As a workaround, mark all registers as untrackable.
+          * TODO: Consider improving this in the future.
+          */
+         std::fill(instr_idx_by_regs[block->index].begin(), instr_idx_by_regs[block->index].end(),
+                   overwritten_untrackable);
       } else {
          reset_block_regs(block->linear_preds, block->index, 0, max_sgpr_cnt);
          reset_block_regs(block->linear_preds, block->index, 251, 3);
@@ -509,6 +509,11 @@ try_combine_dpp(pr_opt_ctx& ctx, aco_ptr<Instruction>& instr)
          continue;
 
       if (i && !can_swap_operands(instr, &instr->opcode))
+         continue;
+
+      bool input_mods = instr_info.can_use_input_modifiers[(int)instr->opcode] &&
+                        instr_info.operand_size[(int)instr->opcode] == 32;
+      if (!dpp8 && (mov->dpp16().neg[0] || mov->dpp16().abs[0]) && !input_mods)
          continue;
 
       if (!dpp8) /* anything else doesn't make sense in SSA */

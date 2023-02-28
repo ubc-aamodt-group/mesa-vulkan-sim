@@ -26,7 +26,7 @@
 
 #include "util/hash_table.h"
 
-#include "radv_acceleration_structure.h"
+#include "bvh/bvh.h"
 #include "radv_private.h"
 #include "radv_rt_common.h"
 #include "radv_shader.h"
@@ -376,7 +376,7 @@ lower_rq_initialize(nir_builder *b, nir_ssa_def *index, nir_intrinsic_instr *ins
                     struct ray_query_vars *vars)
 {
    rq_store_var(b, index, vars->flags, instr->src[2].ssa, 0x1);
-   rq_store_var(b, index, vars->cull_mask, nir_iand_imm(b, instr->src[3].ssa, 0xff), 0x1);
+   rq_store_var(b, index, vars->cull_mask, nir_ishl_imm(b, instr->src[3].ssa, 24), 0x1);
 
    rq_store_var(b, index, vars->origin, instr->src[4].ssa, 0x7);
    rq_store_var(b, index, vars->trav.origin, instr->src[4].ssa, 0x7);

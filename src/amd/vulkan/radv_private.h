@@ -698,6 +698,9 @@ struct radv_meta_state {
       VkPipeline ploc_extended_pipeline;
       VkPipelineLayout encode_p_layout;
       VkPipeline encode_pipeline;
+      VkPipeline encode_compact_pipeline;
+      VkPipelineLayout header_p_layout;
+      VkPipeline header_pipeline;
       VkPipelineLayout copy_p_layout;
       VkPipeline copy_pipeline;
 
@@ -1040,6 +1043,9 @@ struct radv_device {
    bool uses_device_generated_commands;
 
    bool uses_shadow_regs;
+
+   struct hash_table *rt_handles;
+   simple_mtx_t rt_handles_mtx;
 };
 
 bool radv_device_set_pstate(struct radv_device *device, bool enable);
@@ -1983,6 +1989,7 @@ struct radv_event {
 #define RADV_HASH_SHADER_NO_FMASK              (1 << 19)
 #define RADV_HASH_SHADER_NGG_STREAMOUT         (1 << 20)
 
+struct radv_pipeline_group_handle;
 struct radv_pipeline_key;
 
 void radv_pipeline_stage_init(const VkPipelineShaderStageCreateInfo *sinfo,
@@ -1992,12 +1999,14 @@ void radv_hash_shaders(unsigned char *hash, const struct radv_pipeline_stage *st
                        uint32_t stage_count, const struct radv_pipeline_layout *layout,
                        const struct radv_pipeline_key *key, uint32_t flags);
 
+void radv_hash_rt_stages(struct mesa_sha1 *ctx, const VkPipelineShaderStageCreateInfo *stages,
+                         unsigned stage_count);
+
 void radv_hash_rt_shaders(unsigned char *hash, const VkRayTracingPipelineCreateInfoKHR *pCreateInfo,
-                          const struct radv_pipeline_key *key, uint32_t flags);
+                          const struct radv_pipeline_key *key,
+                          const struct radv_pipeline_group_handle *group_handles, uint32_t flags);
 
 uint32_t radv_get_hash_flags(const struct radv_device *device, bool stats);
-
-bool radv_rt_pipeline_has_dynamic_stack_size(const VkRayTracingPipelineCreateInfoKHR *pCreateInfo);
 
 bool radv_enable_rt(const struct radv_physical_device *pdevice, bool rt_pipelines);
 
@@ -2209,6 +2218,8 @@ struct radv_library_pipeline {
    struct {
       uint8_t sha1[SHA1_DIGEST_LENGTH];
    } *hashes;
+
+   struct radv_pipeline_group_handle *group_handles;
 };
 
 struct radv_graphics_lib_pipeline {
@@ -2227,7 +2238,7 @@ struct radv_ray_tracing_pipeline {
    struct radv_pipeline_group_handle *group_handles;
    struct radv_pipeline_shader_stack_size *stack_sizes;
    uint32_t group_count;
-   bool dynamic_stack_size;
+   uint32_t stack_size;
 };
 
 #define RADV_DECL_PIPELINE_DOWNCAST(pipe_type, pipe_enum)            \

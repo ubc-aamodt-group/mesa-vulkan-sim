@@ -27,7 +27,7 @@
 #ifndef ZINK_TYPES_H
 #define ZINK_TYPES_H
 
-#include <vulkan/vulkan.h>
+#include <vulkan/vulkan_core.h>
 
 #include "compiler/nir/nir.h"
 
@@ -79,6 +79,8 @@
 /* enum zink_descriptor_type */
 #define ZINK_MAX_DESCRIPTOR_SETS 6
 #define ZINK_MAX_DESCRIPTORS_PER_TYPE (32 * ZINK_GFX_SHADER_COUNT)
+/* max size from gpuinfo */
+#define ZINK_FBFETCH_DESCRIPTOR_SIZE 64
 
 /* suballocator defines */
 #define NUM_SLAB_ALLOCATORS 3
@@ -217,6 +219,7 @@ enum zink_debug {
    ZINK_DEBUG_SHADERDB = (1<<8),
    ZINK_DEBUG_RP = (1<<9),
    ZINK_DEBUG_NORP = (1<<10),
+   ZINK_DEBUG_MAP = (1<<11),
 };
 
 
@@ -1115,8 +1118,10 @@ struct zink_resource_object {
    VkAccessFlags access;
    bool unordered_read;
    bool unordered_write;
+   bool copies_valid;
 
    unsigned persistent_maps; //if nonzero, requires vkFlushMappedMemoryRanges during batch use
+   struct util_dynarray copies[16]; //regions being copied to; for barrier omission
 
    VkBuffer storage_buffer;
    simple_mtx_t view_lock;
@@ -1203,7 +1208,10 @@ struct zink_resource {
    uint16_t sampler_bind_count[2]; //gfx, compute
    uint16_t image_bind_count[2]; //gfx, compute
    uint16_t write_bind_count[2]; //gfx, compute
-   uint16_t bindless[2]; //tex, img
+   union {
+      uint16_t bindless[2]; //tex, img
+      uint32_t all_bindless;
+   };
    union {
       uint16_t bind_count[2]; //gfx, compute
       uint32_t all_binds;
@@ -1268,6 +1276,7 @@ struct zink_screen {
    VkSemaphore sem;
    VkFence fence;
    struct util_queue flush_queue;
+   simple_mtx_t copy_context_lock;
    struct zink_context *copy_context;
 
    simple_mtx_t semaphores_lock;
@@ -1317,6 +1326,7 @@ struct zink_screen {
    uint64_t total_video_mem;
    uint64_t clamp_video_mem;
    uint64_t total_mem;
+   uint64_t mapped_vram;
 
    VkInstance instance;
    struct zink_instance_info instance_info;
@@ -1396,6 +1406,7 @@ struct zink_screen {
       bool lower_robustImageAccess2;
       unsigned z16_unscaled_bias;
       unsigned z24_unscaled_bias;
+      unsigned extra_swapchain_images;
    } driver_workarounds;
 };
 
@@ -1726,8 +1737,10 @@ struct zink_context {
    struct list_head primitives_generated_queries;
    struct zink_query *vertices_query;
    bool disable_color_writes;
+   bool was_line_loop;
    bool primitives_generated_active;
    bool queries_disabled, render_condition_active;
+   bool queries_in_rp;
    struct {
       struct zink_query *query;
       bool inverted;
@@ -1774,7 +1787,7 @@ struct zink_context {
       };
 
       VkDescriptorImageInfo fbfetch;
-      uint8_t fbfetch_db[64]; //max size from gpuinfo
+      uint8_t fbfetch_db[ZINK_FBFETCH_DESCRIPTOR_SIZE];
 
       /* the current state of the shadow swizzle data */
       struct zink_fs_shadow_key shadow;

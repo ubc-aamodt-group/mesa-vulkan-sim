@@ -4226,10 +4226,30 @@ static bool
 fixup_io_locations(nir_shader *nir)
 {
    nir_variable_mode mode = nir->info.stage == MESA_SHADER_FRAGMENT ? nir_var_shader_in : nir_var_shader_out;
-   nir_foreach_variable_with_modes(var, nir, mode) {
-      if (nir_slot_is_varying(var->data.location))
-         /* these locations should always be consistent between stages...hopefully */
-         var->data.driver_location = var->data.location - VARYING_SLOT_VAR0;
+   /* i/o interface blocks are required to be EXACT matches between stages:
+    * iterate over all locations and set locations incrementally
+    */
+   unsigned slot = 0;
+   for (unsigned i = 0; i < VARYING_SLOT_MAX; i++) {
+      if (nir_slot_is_sysval_output(i))
+         continue;
+      nir_variable *var = nir_find_variable_with_location(nir, mode, i);
+      if (!var) {
+         /* locations used between stages are not required to be contiguous */
+         if (i >= VARYING_SLOT_VAR0)
+            slot++;
+         continue;
+      }
+      unsigned size;
+      /* ensure variable is given enough slots */
+      if (nir_is_arrayed_io(var, nir->info.stage))
+         size = glsl_count_vec4_slots(glsl_get_array_element(var->type), false, false);
+      else
+         size = glsl_count_vec4_slots(var->type, false, false);
+      var->data.driver_location = slot;
+      slot += size;
+      /* ensure the consumed slots aren't double iterated */
+      i += size - 1;
    }
    return true;
 }
@@ -4358,6 +4378,8 @@ zink_shader_create(struct zink_screen *screen, struct nir_shader *nir,
       ret->sinfo.sampler_mask = sampler_mask;
    }
 
+   unsigned ubo_binding_mask = 0;
+   unsigned ssbo_binding_mask = 0;
    foreach_list_typed_reverse_safe(nir_variable, var, node, &nir->variables) {
       if (_nir_shader_variable_has_mode(var, nir_var_uniform |
                                         nir_var_image |
@@ -4380,13 +4402,14 @@ zink_shader_create(struct zink_screen *screen, struct nir_shader *nir,
 
             if (!var->data.driver_location) {
                ret->has_uniforms = true;
-            } else {
+            } else if (!(ubo_binding_mask & BITFIELD_BIT(binding))) {
                ret->bindings[ztype][ret->num_bindings[ztype]].index = var->data.driver_location;
                ret->bindings[ztype][ret->num_bindings[ztype]].binding = binding;
                ret->bindings[ztype][ret->num_bindings[ztype]].type = vktype;
                ret->bindings[ztype][ret->num_bindings[ztype]].size = glsl_get_length(var->type);
                assert(ret->bindings[ztype][ret->num_bindings[ztype]].size);
                ret->num_bindings[ztype]++;
+               ubo_binding_mask |= BITFIELD_BIT(binding);
             }
          } else if (var->data.mode == nir_var_mem_ssbo) {
             ztype = ZINK_DESCRIPTOR_TYPE_SSBO;
@@ -4395,12 +4418,15 @@ zink_shader_create(struct zink_screen *screen, struct nir_shader *nir,
                                              VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                              var->data.driver_location,
                                              screen->compact_descriptors);
-            ret->bindings[ztype][ret->num_bindings[ztype]].index = var->data.driver_location;
-            ret->bindings[ztype][ret->num_bindings[ztype]].binding = var->data.binding;
-            ret->bindings[ztype][ret->num_bindings[ztype]].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            ret->bindings[ztype][ret->num_bindings[ztype]].size = glsl_get_length(var->type);
-            assert(ret->bindings[ztype][ret->num_bindings[ztype]].size);
-            ret->num_bindings[ztype]++;
+            if (!(ssbo_binding_mask & BITFIELD_BIT(var->data.binding))) {
+               ret->bindings[ztype][ret->num_bindings[ztype]].index = var->data.driver_location;
+               ret->bindings[ztype][ret->num_bindings[ztype]].binding = var->data.binding;
+               ret->bindings[ztype][ret->num_bindings[ztype]].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+               ret->bindings[ztype][ret->num_bindings[ztype]].size = glsl_get_length(var->type);
+               assert(ret->bindings[ztype][ret->num_bindings[ztype]].size);
+               ret->num_bindings[ztype]++;
+               ssbo_binding_mask |= BITFIELD_BIT(var->data.binding);
+            }
          } else {
             assert(var->data.mode == nir_var_uniform ||
                    var->data.mode == nir_var_image);
@@ -4425,6 +4451,10 @@ zink_shader_create(struct zink_screen *screen, struct nir_shader *nir,
                else
                   ret->bindings[ztype][ret->num_bindings[ztype]].size = 1;
                ret->num_bindings[ztype]++;
+            } else if (var->data.mode == nir_var_uniform) {
+               /* this is a dead uniform */
+               var->data.mode = 0;
+               exec_node_remove(&var->node);
             }
          }
       }

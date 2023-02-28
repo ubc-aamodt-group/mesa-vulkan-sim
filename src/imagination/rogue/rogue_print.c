@@ -145,11 +145,14 @@ static inline void rogue_print_regarray(FILE *fp,
    const rogue_reg *reg = regarray->regs[0];
    const rogue_reg_info *info = &rogue_reg_infos[reg->class];
    YELLOW(fp);
-   fprintf(fp, "%s%" PRIu32, info->str, reg->index);
-   RESET(fp);
-   fputs("-", fp);
-   YELLOW(fp);
-   fprintf(fp, "%" PRIu32, regarray->size + reg->index - 1);
+   fprintf(fp, "%s[%" PRIu32, info->str, reg->index);
+   if (regarray->size > 1) {
+      RESET(fp);
+      fputs("..", fp);
+      YELLOW(fp);
+      fprintf(fp, "%" PRIu32, regarray->size + reg->index - 1);
+   }
+   fputs("]", fp);
    RESET(fp);
 }
 
@@ -248,11 +251,6 @@ static inline void rogue_print_alu_instr(FILE *fp, const rogue_alu_instr *alu)
    /* TODO: Print conditional info once supported. */
 
    fprintf(fp, "%s", info->str);
-
-   if (alu->op == ROGUE_ALU_OP_TST) {
-      fprintf(fp, "%s", rogue_comp_test_str[alu->comp_test]);
-      fprintf(fp, ".%s", rogue_comp_type_str[alu->comp_type]);
-   }
 
    rogue_print_alu_mods(fp, alu);
 
@@ -378,9 +376,50 @@ static inline void rogue_print_ctrl_instr(FILE *fp,
    }
 }
 
+static inline void rogue_print_bitwise_dst(FILE *fp, const rogue_instr_dst *dst)
+{
+   rogue_print_ref(fp, &dst->ref);
+}
+
+static inline void rogue_print_bitwise_src(FILE *fp, const rogue_instr_src *src)
+{
+   rogue_print_ref(fp, &src->ref);
+}
+
+static inline void rogue_print_bitwise_instr(FILE *fp,
+                                             const rogue_bitwise_instr *bitwise)
+{
+   const rogue_bitwise_op_info *info = &rogue_bitwise_op_infos[bitwise->op];
+
+   fprintf(fp, "%s", info->str);
+
+   /* rogue_print_bitwise_mods(fp, bitwise); */
+
+   for (unsigned i = 0; i < info->num_dsts; ++i) {
+      if (i > 0)
+         fputs(",", fp);
+
+      fputs(" ", fp);
+
+      rogue_print_bitwise_dst(fp, &bitwise->dst[i]);
+   }
+
+   for (unsigned i = 0; i < info->num_srcs; ++i) {
+      if (i == 0 && !info->num_dsts)
+         fputs(" ", fp);
+      else
+         fputs(", ", fp);
+
+      rogue_print_bitwise_src(fp, &bitwise->src[i]);
+   }
+}
+
 PUBLIC
 void rogue_print_instr(FILE *fp, const rogue_instr *instr)
 {
+   if (instr->exec_cond > ROGUE_EXEC_COND_PE_TRUE)
+      fprintf(fp, "%s ", rogue_exec_cond_str[instr->exec_cond]);
+
    if (instr->repeat > 1)
       fprintf(fp, "(rpt%u) ", instr->repeat);
 
@@ -396,6 +435,10 @@ void rogue_print_instr(FILE *fp, const rogue_instr *instr)
 
    case ROGUE_INSTR_TYPE_CTRL:
       rogue_print_ctrl_instr(fp, rogue_instr_as_ctrl(instr));
+      break;
+
+   case ROGUE_INSTR_TYPE_BITWISE:
+      rogue_print_bitwise_instr(fp, rogue_instr_as_bitwise(instr));
       break;
 
    default:
@@ -491,6 +534,8 @@ rogue_print_instr_group_io_sel(FILE *fp, const rogue_instr_group_io_sel *io_sel)
 
       if (rogue_ref_is_reg(&io_sel->dsts[i]))
          rogue_print_reg(fp, io_sel->dsts[i].reg);
+      else if (rogue_ref_is_regarray(&io_sel->dsts[i]))
+         rogue_print_regarray(fp, io_sel->dsts[i].regarray);
       else if (rogue_ref_is_io(&io_sel->dsts[i]))
          rogue_print_io(fp, io_sel->dsts[i].io);
       else
@@ -538,13 +583,16 @@ static inline void rogue_print_instr_group(FILE *fp,
    fprintf(fp, "%u", group->index);
    fputs(": ", fp);
 
+   if (group->header.exec_cond > ROGUE_EXEC_COND_PE_TRUE)
+      fprintf(fp, "%s ", rogue_exec_cond_str[group->header.exec_cond]);
+
    if (group->header.repeat > 1)
       fprintf(fp, "(rpt%u) ", group->header.repeat);
 
    fputs("{ ", fp);
 
    CYAN(fp);
-   fprintf(fp, "%s ", rogue_alu_str[group->header.alu]);
+   fprintf(fp, "%s", rogue_alu_str[group->header.alu]);
    RESET(fp);
 
    /* Print each instruction. */
@@ -552,6 +600,7 @@ static inline void rogue_print_instr_group(FILE *fp,
       const rogue_instr *instr = group->instrs[p];
       assert(instr);
 
+      fputs(" ", fp);
       rogue_print_instr_phase(fp, group->header.alu, p);
       fputs(": ", fp);
       rogue_print_instr(fp, instr);
@@ -636,16 +685,14 @@ void rogue_print_reg_writes(FILE *fp, const rogue_shader *shader)
    for (enum rogue_reg_class class = 0; class < ROGUE_REG_CLASS_COUNT;
         ++class) {
       rogue_foreach_reg (reg, shader, class) {
+         bool unused = true;
+
          rogue_print_reg(fp, reg);
          fputs(":", fp);
 
-         if (list_is_empty(&reg->writes)) {
-            fputs(" <none>\n", fp);
-            continue;
-         }
-
          rogue_foreach_reg_write (write, reg) {
             assert(write->instr);
+            unused = false;
 
             fputs(" ", fp);
             rogue_print_instr_ref(fp,
@@ -653,6 +700,44 @@ void rogue_print_reg_writes(FILE *fp, const rogue_shader *shader)
                                   true,
                                   write->dst_index,
                                   shader->is_grouped);
+         }
+
+         if (reg->regarray) {
+            rogue_foreach_regarray_write (write, reg->regarray) {
+               assert(write->instr);
+               unused = false;
+
+               fputs(" ", fp);
+               rogue_print_instr_ref(fp,
+                                     write->instr,
+                                     false,
+                                     write->dst_index,
+                                     shader->is_grouped);
+            }
+
+            rogue_foreach_subarray (subarray, reg->regarray) {
+               unsigned subarray_start = subarray->regs[0]->index;
+               unsigned subarray_end = subarray_start + subarray->size - 1;
+               if (reg->index < subarray_start || reg->index > subarray_end)
+                  continue;
+
+               rogue_foreach_regarray_write (write, subarray) {
+                  assert(write->instr);
+                  unused = false;
+
+                  fputs(" ", fp);
+                  rogue_print_instr_ref(fp,
+                                        write->instr,
+                                        false,
+                                        write->dst_index,
+                                        shader->is_grouped);
+               }
+            }
+         }
+
+         if (unused) {
+            fputs(" <none>\n", fp);
+            continue;
          }
 
          fputs("\n", fp);
@@ -667,16 +752,14 @@ void rogue_print_reg_uses(FILE *fp, const rogue_shader *shader)
    for (enum rogue_reg_class class = 0; class < ROGUE_REG_CLASS_COUNT;
         ++class) {
       rogue_foreach_reg (reg, shader, class) {
+         bool unused = true;
+
          rogue_print_reg(fp, reg);
          fputs(":", fp);
 
-         if (list_is_empty(&reg->uses)) {
-            fputs(" <none>\n", fp);
-            continue;
-         }
-
          rogue_foreach_reg_use (use, reg) {
             assert(use->instr);
+            unused = false;
 
             fputs(" ", fp);
             rogue_print_instr_ref(fp,
@@ -684,6 +767,44 @@ void rogue_print_reg_uses(FILE *fp, const rogue_shader *shader)
                                   false,
                                   use->src_index,
                                   shader->is_grouped);
+         }
+
+         if (reg->regarray) {
+            rogue_foreach_regarray_use (use, reg->regarray) {
+               assert(use->instr);
+               unused = false;
+
+               fputs(" ", fp);
+               rogue_print_instr_ref(fp,
+                                     use->instr,
+                                     false,
+                                     use->src_index,
+                                     shader->is_grouped);
+            }
+
+            rogue_foreach_subarray (subarray, reg->regarray) {
+               unsigned subarray_start = subarray->regs[0]->index;
+               unsigned subarray_end = subarray_start + subarray->size - 1;
+               if (reg->index < subarray_start || reg->index > subarray_end)
+                  continue;
+
+               rogue_foreach_regarray_use (use, subarray) {
+                  assert(use->instr);
+                  unused = false;
+
+                  fputs(" ", fp);
+                  rogue_print_instr_ref(fp,
+                                        use->instr,
+                                        false,
+                                        use->src_index,
+                                        shader->is_grouped);
+               }
+            }
+         }
+
+         if (unused) {
+            fputs(" <none>\n", fp);
+            continue;
          }
 
          fputs("\n", fp);

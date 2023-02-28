@@ -142,6 +142,7 @@ radv_pipeline_destroy(struct radv_device *device, struct radv_pipeline *pipeline
       struct radv_library_pipeline *library_pipeline = radv_pipeline_to_library(pipeline);
 
       ralloc_free(library_pipeline->ctx);
+      free(library_pipeline->group_handles);
    } else if (pipeline->type == RADV_PIPELINE_GRAPHICS_LIB) {
       struct radv_graphics_lib_pipeline *gfx_pipeline_lib =
          radv_pipeline_to_graphics_lib(pipeline);
@@ -225,9 +226,10 @@ radv_pipeline_init_scratch(const struct radv_device *device, struct radv_pipelin
 {
    unsigned scratch_bytes_per_wave = 0;
    unsigned max_waves = 0;
+   bool is_rt = pipeline->type == RADV_PIPELINE_RAY_TRACING;
 
    for (int i = 0; i < MESA_VULKAN_SHADER_STAGES; ++i) {
-      if (pipeline->shaders[i] && pipeline->shaders[i]->config.scratch_bytes_per_wave) {
+      if (pipeline->shaders[i] && (pipeline->shaders[i]->config.scratch_bytes_per_wave || is_rt)) {
          unsigned max_stage_waves = device->scratch_waves;
 
          scratch_bytes_per_wave =
@@ -515,7 +517,7 @@ gfx103_pipeline_init_vrs_state(struct radv_graphics_pipeline *pipeline,
        *    16-bit sample coverage mask isn't enough for MSAA8x and
        *    2x2 coarse shading isn't enough.
        */
-      vrs->pa_cl_vrs_cntl = S_028848_SAMPLE_ITER_COMBINER_MODE(V_028848_VRS_COMB_MODE_OVERRIDE);
+      vrs->pa_cl_vrs_cntl = S_028848_SAMPLE_ITER_COMBINER_MODE(V_028848_SC_VRS_COMB_MODE_OVERRIDE);
 
       /* Make sure sample shading is enabled even if only MSAA1x is
        * used because the SAMPLE_ITER combiner is in passthrough
@@ -525,7 +527,7 @@ gfx103_pipeline_init_vrs_state(struct radv_graphics_pipeline *pipeline,
       if (!G_028A4C_PS_ITER_SAMPLE(pipeline->pa_sc_mode_cntl_1))
          pipeline->pa_sc_mode_cntl_1 |= S_028A4C_PS_ITER_SAMPLE(1);
    } else {
-      vrs->pa_cl_vrs_cntl = S_028848_SAMPLE_ITER_COMBINER_MODE(V_028848_VRS_COMB_MODE_PASSTHRU);
+      vrs->pa_cl_vrs_cntl = S_028848_SAMPLE_ITER_COMBINER_MODE(V_028848_SC_VRS_COMB_MODE_PASSTHRU);
    }
 }
 
@@ -1733,6 +1735,10 @@ radv_lower_io_to_scalar_early(nir_shader *nir, nir_variable_mode mask)
 {
    bool progress = false;
 
+   NIR_PASS(progress, nir, nir_lower_array_deref_of_vec, mask,
+            nir_lower_direct_array_deref_of_vec_load | nir_lower_indirect_array_deref_of_vec_load |
+               nir_lower_direct_array_deref_of_vec_store |
+               nir_lower_indirect_array_deref_of_vec_store);
    NIR_PASS(progress, nir, nir_lower_io_to_scalar_early, mask);
    if (progress) {
       /* Optimize the new vector code and then remove dead vars */
@@ -3208,6 +3214,14 @@ radv_postprocess_nir(struct radv_pipeline *pipeline,
                nir_move_load_input | nir_move_const_undef | nir_move_copies);
    }
 
+   /* Lower VS inputs. We need to do this after nir_opt_sink, because
+    * load_input can be reordered, but buffer loads can't.
+    */
+   if (stage->stage == MESA_SHADER_VERTEX) {
+      NIR_PASS(_, stage->nir, radv_nir_lower_vs_inputs, stage, pipeline_key,
+               device->physical_device->rad_info.address32_hi);
+   }
+
    /* Lower I/O intrinsics to memory instructions. */
    bool io_to_mem = radv_lower_io_to_mem(device, stage);
    bool lowered_ngg = stage->info.is_ngg && stage->stage == last_vgt_api_stage;
@@ -3281,9 +3295,10 @@ radv_postprocess_nir(struct radv_pipeline *pipeline,
          },
       };
       struct nir_fold_16bit_tex_image_options fold_16bit_options = {
-         .rounding_mode = nir_rounding_mode_rtne,
-         .fold_tex_dest_types = nir_type_float | nir_type_uint | nir_type_int,
-         .fold_image_load_store_data = true,
+         .rounding_mode = nir_rounding_mode_rtz,
+         .fold_tex_dest_types = nir_type_float,
+         .fold_image_dest_types = nir_type_float,
+         .fold_image_store_data = true,
          .fold_image_srcs = !radv_use_llvm_for_stage(device, stage->stage),
          .fold_srcs_options_count = separate_g16 ? 2 : 1,
          .fold_srcs_options = fold_srcs_options,
@@ -3736,7 +3751,9 @@ radv_pipeline_emit_blend_state(struct radeon_cmdbuf *ctx_cs,
                                const struct radv_graphics_pipeline *pipeline,
                                const struct radv_blend_state *blend)
 {
-   if (pipeline->ps_epilog || radv_pipeline_needs_dynamic_ps_epilog(pipeline))
+   struct radv_shader *ps = pipeline->base.shaders[MESA_SHADER_FRAGMENT];
+
+   if (ps->info.ps.has_epilog)
       return;
 
    radeon_set_context_reg(ctx_cs, R_028714_SPI_SHADER_COL_FORMAT, blend->spi_shader_col_format);
@@ -3815,16 +3832,18 @@ radv_pipeline_emit_hw_vs(struct radeon_cmdbuf *ctx_cs, struct radeon_cmdbuf *cs,
          S_02870C_POS3_EXPORT_FORMAT(outinfo->pos_exports > 3 ? V_02870C_SPI_SHADER_4COMP
                                                               : V_02870C_SPI_SHADER_NONE));
 
-   radeon_set_context_reg(ctx_cs, R_02881C_PA_CL_VS_OUT_CNTL,
-                          S_02881C_USE_VTX_POINT_SIZE(outinfo->writes_pointsize) |
-                             S_02881C_USE_VTX_RENDER_TARGET_INDX(outinfo->writes_layer) |
-                             S_02881C_USE_VTX_VIEWPORT_INDX(outinfo->writes_viewport_index) |
-                             S_02881C_USE_VTX_VRS_RATE(outinfo->writes_primitive_shading_rate) |
-                             S_02881C_VS_OUT_MISC_VEC_ENA(misc_vec_ena) |
-                             S_02881C_VS_OUT_MISC_SIDE_BUS_ENA(misc_vec_ena) |
-                             S_02881C_VS_OUT_CCDIST0_VEC_ENA((total_mask & 0x0f) != 0) |
-                             S_02881C_VS_OUT_CCDIST1_VEC_ENA((total_mask & 0xf0) != 0) |
-                             total_mask << 8 | clip_dist_mask);
+   radeon_set_context_reg(
+      ctx_cs, R_02881C_PA_CL_VS_OUT_CNTL,
+      S_02881C_USE_VTX_POINT_SIZE(outinfo->writes_pointsize) |
+         S_02881C_USE_VTX_RENDER_TARGET_INDX(outinfo->writes_layer) |
+         S_02881C_USE_VTX_VIEWPORT_INDX(outinfo->writes_viewport_index) |
+         S_02881C_USE_VTX_VRS_RATE(outinfo->writes_primitive_shading_rate) |
+         S_02881C_VS_OUT_MISC_VEC_ENA(misc_vec_ena) |
+         S_02881C_VS_OUT_MISC_SIDE_BUS_ENA(
+            misc_vec_ena || (pdevice->rad_info.gfx_level >= GFX10_3 && outinfo->pos_exports > 1)) |
+         S_02881C_VS_OUT_CCDIST0_VEC_ENA((total_mask & 0x0f) != 0) |
+         S_02881C_VS_OUT_CCDIST1_VEC_ENA((total_mask & 0xf0) != 0) | total_mask << 8 |
+         clip_dist_mask);
 
    if (pdevice->rad_info.gfx_level <= GFX8)
       radeon_set_context_reg(ctx_cs, R_028AB4_VGT_REUSE_OFF, outinfo->writes_viewport_index);
@@ -3940,16 +3959,18 @@ radv_pipeline_emit_hw_ngg(struct radeon_cmdbuf *ctx_cs, struct radeon_cmdbuf *cs
          S_02870C_POS3_EXPORT_FORMAT(outinfo->pos_exports > 3 ? V_02870C_SPI_SHADER_4COMP
                                                               : V_02870C_SPI_SHADER_NONE));
 
-   radeon_set_context_reg(ctx_cs, R_02881C_PA_CL_VS_OUT_CNTL,
-                          S_02881C_USE_VTX_POINT_SIZE(outinfo->writes_pointsize) |
-                             S_02881C_USE_VTX_RENDER_TARGET_INDX(outinfo->writes_layer) |
-                             S_02881C_USE_VTX_VIEWPORT_INDX(outinfo->writes_viewport_index) |
-                             S_02881C_USE_VTX_VRS_RATE(outinfo->writes_primitive_shading_rate) |
-                             S_02881C_VS_OUT_MISC_VEC_ENA(misc_vec_ena) |
-                             S_02881C_VS_OUT_MISC_SIDE_BUS_ENA(misc_vec_ena) |
-                             S_02881C_VS_OUT_CCDIST0_VEC_ENA((total_mask & 0x0f) != 0) |
-                             S_02881C_VS_OUT_CCDIST1_VEC_ENA((total_mask & 0xf0) != 0) |
-                             total_mask << 8 | clip_dist_mask);
+   radeon_set_context_reg(
+      ctx_cs, R_02881C_PA_CL_VS_OUT_CNTL,
+      S_02881C_USE_VTX_POINT_SIZE(outinfo->writes_pointsize) |
+         S_02881C_USE_VTX_RENDER_TARGET_INDX(outinfo->writes_layer) |
+         S_02881C_USE_VTX_VIEWPORT_INDX(outinfo->writes_viewport_index) |
+         S_02881C_USE_VTX_VRS_RATE(outinfo->writes_primitive_shading_rate) |
+         S_02881C_VS_OUT_MISC_VEC_ENA(misc_vec_ena) |
+         S_02881C_VS_OUT_MISC_SIDE_BUS_ENA(
+            misc_vec_ena || (pdevice->rad_info.gfx_level >= GFX10_3 && outinfo->pos_exports > 1)) |
+         S_02881C_VS_OUT_CCDIST0_VEC_ENA((total_mask & 0x0f) != 0) |
+         S_02881C_VS_OUT_CCDIST1_VEC_ENA((total_mask & 0xf0) != 0) | total_mask << 8 |
+         clip_dist_mask);
 
    radeon_set_context_reg(ctx_cs, R_028A84_VGT_PRIMITIVEID_EN,
                           S_028A84_PRIMITIVEID_EN(es_enable_prim_id) |
@@ -4603,7 +4624,7 @@ gfx103_pipeline_emit_vrs_state(struct radeon_cmdbuf *ctx_cs,
                                const struct vk_graphics_pipeline_state *state)
 {
    const struct radv_physical_device *pdevice = pipeline->base.device->physical_device;
-   uint32_t mode = V_028064_VRS_COMB_MODE_PASSTHRU;
+   uint32_t mode = V_028064_SC_VRS_COMB_MODE_PASSTHRU;
    uint8_t rate_x = 0, rate_y = 0;
    bool enable_vrs = radv_is_vrs_enabled(pipeline, state);
 
@@ -4611,7 +4632,7 @@ gfx103_pipeline_emit_vrs_state(struct radeon_cmdbuf *ctx_cs,
       /* When per-draw VRS is not enabled at all, try enabling VRS coarse shading 2x2 if the driver
        * determined that it's safe to enable.
        */
-      mode = V_028064_VRS_COMB_MODE_OVERRIDE;
+      mode = V_028064_SC_VRS_COMB_MODE_OVERRIDE;
       rate_x = rate_y = 1;
    } else if (!radv_is_static_vrs_enabled(pipeline, state) && pipeline->force_vrs_per_vertex &&
               get_vs_output_info(pipeline)->writes_primitive_shading_rate) {
@@ -4620,15 +4641,15 @@ gfx103_pipeline_emit_vrs_state(struct radeon_cmdbuf *ctx_cs,
        * in DX12 it's fully dynamic.
        */
       radeon_set_context_reg(ctx_cs, R_028848_PA_CL_VRS_CNTL,
-         S_028848_SAMPLE_ITER_COMBINER_MODE(V_028848_VRS_COMB_MODE_OVERRIDE) |
-         S_028848_VERTEX_RATE_COMBINER_MODE(V_028848_VRS_COMB_MODE_OVERRIDE));
+         S_028848_SAMPLE_ITER_COMBINER_MODE(V_028848_SC_VRS_COMB_MODE_OVERRIDE) |
+         S_028848_VERTEX_RATE_COMBINER_MODE(V_028848_SC_VRS_COMB_MODE_OVERRIDE));
 
       /* If the shader is using discard, turn off coarse shading because discard at 2x2 pixel
        * granularity degrades quality too much. MIN allows sample shading but not coarse shading.
        */
       struct radv_shader *ps = pipeline->base.shaders[MESA_SHADER_FRAGMENT];
 
-      mode = ps->info.ps.can_discard ? V_028064_VRS_COMB_MODE_MIN : V_028064_VRS_COMB_MODE_PASSTHRU;
+      mode = ps->info.ps.can_discard ? V_028064_SC_VRS_COMB_MODE_MIN : V_028064_SC_VRS_COMB_MODE_PASSTHRU;
    }
 
    if (pdevice->rad_info.gfx_level >= GFX11) {

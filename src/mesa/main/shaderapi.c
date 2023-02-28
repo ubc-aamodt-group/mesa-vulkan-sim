@@ -766,8 +766,8 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname,
    /* Is transform feedback available in this context?
     */
    const bool has_xfb =
-      (ctx->API == API_OPENGL_COMPAT && ctx->Extensions.EXT_transform_feedback)
-      || ctx->API == API_OPENGL_CORE
+      (_mesa_is_desktop_gl_compat(ctx) && ctx->Extensions.EXT_transform_feedback)
+      || _mesa_is_desktop_gl_core(ctx)
       || _mesa_is_gles3(ctx);
 
    /* True if geometry shaders (of the form that was adopted into GLSL 1.50
@@ -779,9 +779,9 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname,
    /* Are uniform buffer objects available in this context?
     */
    const bool has_ubo =
-      (ctx->API == API_OPENGL_COMPAT &&
+      (_mesa_is_desktop_gl_compat(ctx) &&
        ctx->Extensions.ARB_uniform_buffer_object)
-      || ctx->API == API_OPENGL_CORE
+      || _mesa_is_desktop_gl_core(ctx)
       || _mesa_is_gles3(ctx);
 
    if (!shProg) {
@@ -3294,6 +3294,7 @@ destroy_shader_include(struct hash_entry *entry)
    _mesa_hash_table_destroy(sh_incl_ht_entry->path, destroy_shader_include);
    free(sh_incl_ht_entry->shader_source);
    free(sh_incl_ht_entry);
+   free((void *)entry->key);
 }
 
 void
@@ -3380,7 +3381,7 @@ validate_and_tokenise_sh_incl(struct gl_context *ctx,
          struct sh_incl_path_entry *path =
             rzalloc(mem_ctx, struct sh_incl_path_entry);
 
-         path->path = strdup(path_str);
+         path->path = ralloc_strdup(mem_ctx, path_str);
          list_addtail(&path->list, &list->list);
       }
 
@@ -3568,7 +3569,8 @@ _mesa_NamedStringARB(GLenum type, GLint namelen, const GLchar *name,
          sh_incl_ht_entry->path =
             _mesa_hash_table_create(NULL, _mesa_hash_string,
                                     _mesa_key_string_equal);
-         _mesa_hash_table_insert(path_ht, entry->path, sh_incl_ht_entry);
+         _mesa_hash_table_insert(path_ht, strdup(entry->path),
+                                 sh_incl_ht_entry);
       } else {
          sh_incl_ht_entry = (struct sh_incl_path_ht_entry *) ht_entry->data;
       }

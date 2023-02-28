@@ -488,11 +488,12 @@ struct fd_context {
    void (*emit_sysmem_fini)(struct fd_batch *batch) dt;
 
    /* draw: */
-   bool (*draw_vbo)(struct fd_context *ctx, const struct pipe_draw_info *info,
-                    unsigned drawid_offset,
-                    const struct pipe_draw_indirect_info *indirect,
-                    const struct pipe_draw_start_count_bias *draw,
-                    unsigned index_offset) dt;
+   void (*draw_vbos)(struct fd_context *ctx, const struct pipe_draw_info *info,
+                     unsigned drawid_offset,
+                     const struct pipe_draw_indirect_info *indirect,
+                     const struct pipe_draw_start_count_bias *draws,
+                     unsigned num_draws,
+                     unsigned index_offset) dt;
    bool (*clear)(struct fd_context *ctx, unsigned buffers,
                  const union pipe_color_union *color, double depth,
                  unsigned stencil) dt;
@@ -600,7 +601,7 @@ fd_stream_output_target(struct pipe_stream_output_target *target)
 static inline bool
 fd_context_dirty_resource(enum fd_dirty_3d_state dirty)
 {
-   return dirty & (FD_DIRTY_FRAMEBUFFER | FD_DIRTY_ZSA | FD_DIRTY_BLEND |
+   return dirty & (FD_DIRTY_FRAMEBUFFER | FD_DIRTY_ZSA |
                    FD_DIRTY_SSBO | FD_DIRTY_IMAGE | FD_DIRTY_VTXBUF |
                    FD_DIRTY_TEX | FD_DIRTY_STREAMOUT | FD_DIRTY_QUERY);
 }

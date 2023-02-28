@@ -24,7 +24,7 @@ inc_anv = include_directories('.')
 
 anv_flags = [
   no_override_init_args,
-  c_sse2_args,
+  sse2_args,
 ]
 
 anv_cpp_flags = []
@@ -206,6 +206,7 @@ libanv_common = static_library(
   [
     libanv_files, anv_entrypoints, sha1_h,
     gen_xml_pack, float64_spv_h,
+    generated_draws_spv_h, generated_draws_count_spv_h
   ],
   include_directories : [
     inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_intel, inc_compiler,
@@ -281,7 +282,7 @@ if with_tests
       executable(
         t,
         ['tests/@0@.c'.format(t), anv_entrypoints[0]],
-        c_args : [ c_sse2_args ],
+        c_args : [ sse2_args ],
         link_with : libvulkan_intel_test,
         dependencies : [
           dep_libdrm, dep_thread, dep_m, dep_valgrind,

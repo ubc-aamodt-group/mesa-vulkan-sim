@@ -182,7 +182,7 @@ radv_sqtt_reloc_graphics_shaders(struct radv_device *device,
       reloc->va[i] = slab_va + slab_offset;
 
       void *dest_ptr = slab_ptr + slab_offset;
-      memcpy(dest_ptr, shader->code_ptr, shader->code_size);
+      memcpy(dest_ptr, shader->code, shader->code_size);
 
       slab_offset += align(shader->code_size, RADV_SHADER_ALLOC_ALIGNMENT);
    }
@@ -512,10 +512,6 @@ radv_handle_thread_trace(VkQueue _queue)
       radv_end_thread_trace(queue);
       thread_trace_enabled = false;
 
-      if (!radv_device_set_pstate(queue->device, false)) {
-         fprintf(stderr, "radv: Failed to restore previous pstate, ignoring.\n");
-      }
-
       /* TODO: Do something better than this whole sync. */
       queue->device->vk.dispatch_table.QueueWaitIdle(_queue);
 
@@ -551,8 +547,7 @@ radv_handle_thread_trace(VkQueue _queue)
 #endif
 
       if (frame_trigger || file_trigger || resize_trigger) {
-         if (!radv_device_set_pstate(queue->device, true) ||
-             ac_check_profile_state(&queue->device->physical_device->rad_info)) {
+         if (ac_check_profile_state(&queue->device->physical_device->rad_info)) {
             fprintf(stderr, "radv: Canceling RGP trace request as a hang condition has been "
                             "detected. Force the GPU into a profiling mode with e.g. "
                             "\"echo profile_peak  > "
@@ -1127,25 +1122,17 @@ radv_add_code_object(struct radv_device *device, struct radv_pipeline *pipeline)
 
    for (unsigned i = 0; i < MESA_VULKAN_SHADER_STAGES; i++) {
       struct radv_shader *shader = pipeline->shaders[i];
-      uint8_t *code;
       uint64_t va;
 
       if (!shader)
          continue;
-
-      code = malloc(shader->code_size);
-      if (!code) {
-         free(record);
-         return VK_ERROR_OUT_OF_HOST_MEMORY;
-      }
-      memcpy(code, shader->code_ptr, shader->code_size);
 
       va = radv_sqtt_shader_get_va_reloc(pipeline, i);
 
       record->shader_data[i].hash[0] = (uint64_t)(uintptr_t)shader;
       record->shader_data[i].hash[1] = (uint64_t)(uintptr_t)shader >> 32;
       record->shader_data[i].code_size = shader->code_size;
-      record->shader_data[i].code = code;
+      record->shader_data[i].code = shader->code;
       record->shader_data[i].vgpr_count = shader->config.num_vgprs;
       record->shader_data[i].sgpr_count = shader->config.num_sgprs;
       record->shader_data[i].scratch_memory_size = shader->config.scratch_bytes_per_wave;
@@ -1241,15 +1228,6 @@ radv_unregister_pipeline(struct radv_device *device, struct radv_pipeline *pipel
    list_for_each_entry_safe(struct rgp_code_object_record, record, &code_object->record, list)
    {
       if (record->pipeline_hash[0] == pipeline->pipeline_hash) {
-         uint32_t mask = record->shader_stages_mask;
-         int i;
-
-         /* Free the disassembly. */
-         while (mask) {
-            i = u_bit_scan(&mask);
-            free(record->shader_data[i].code);
-         }
-
          code_object->record_count--;
          list_del(&record->list);
          free(record);

@@ -509,7 +509,9 @@ agx_create_sampler_state(struct pipe_context *pctx,
    struct agx_sampler_state *so = CALLOC_STRUCT(agx_sampler_state);
    so->base = *state;
 
-   assert(state->lod_bias == 0 && "todo: lod bias");
+   /* We report a max texture LOD bias of 16, so clamp appropriately */
+   float lod_bias = CLAMP(state->lod_bias, -16.0, 16.0);
+   so->lod_bias_as_fp16 = _mesa_float_to_half(lod_bias);
 
    agx_pack(&so->desc, SAMPLER, cfg) {
       cfg.minimum_lod = state->min_lod;
@@ -1088,8 +1090,8 @@ agx_batch_upload_pbe(struct agx_batch *batch, unsigned rt)
       if (desc->nr_channels >= 4)
          cfg.swizzle_a = agx_channel_from_pipe(desc->swizzle[3]) & 3;
 
-      cfg.width = batch->key.width;
-      cfg.height = batch->key.height;
+      cfg.width = surf->texture->width0;
+      cfg.height = surf->texture->height0;
       cfg.level = surf->u.tex.level;
       cfg.buffer = agx_map_texture_gpu(tex, layer);
       cfg.unk_mipmapped = tex->mipmapped;
@@ -1370,8 +1372,17 @@ agx_compile_variant(struct agx_device *dev, struct agx_uncompiled_shader *so,
 
    nir_shader *nir = nir_shader_clone(NULL, so->nir);
 
-   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+   bool force_translucent = false;
+
+   if (nir->info.stage == MESA_SHADER_VERTEX) {
+      struct asahi_vs_shader_key *key = &key_->vs;
+
+      NIR_PASS_V(nir, agx_nir_lower_vbo, &key->vbuf);
+   } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       struct asahi_fs_shader_key *key = &key_->fs;
+
+      struct agx_tilebuffer_layout tib =
+         agx_build_tilebuffer_layout(key->rt_formats, key->nr_cbufs, 1);
 
       nir_lower_blend_options opts = {
          .scalar_blend_const = true,
@@ -1386,31 +1397,34 @@ agx_compile_variant(struct agx_device *dev, struct agx_uncompiled_shader *so,
          opts.format[i] = key->rt_formats[i];
 
       memcpy(opts.rt, key->blend.rt, sizeof(opts.rt));
-      NIR_PASS_V(nir, nir_lower_blend, &opts);
 
-      if (key->clip_plane_enable) {
-         NIR_PASS_V(nir, nir_lower_clip_fs, key->clip_plane_enable, false);
+      /* It's more efficient to use masked stores (with
+       * agx_nir_lower_tilebuffer) than to emulate colour masking with
+       * nir_lower_blend.
+       */
+      uint8_t colormasks[PIPE_MAX_COLOR_BUFS] = {0};
+
+      for (unsigned i = 0; i < PIPE_MAX_COLOR_BUFS; ++i) {
+         if (agx_tilebuffer_supports_mask(&tib, i)) {
+            colormasks[i] = key->blend.rt[i].colormask;
+            opts.rt[i].colormask = BITFIELD_MASK(4);
+         } else {
+            colormasks[i] = BITFIELD_MASK(4);
+         }
       }
-   }
 
-   agx_preprocess_nir(nir);
-
-   if (nir->info.stage == MESA_SHADER_VERTEX) {
-      struct asahi_vs_shader_key *key = &key_->vs;
-
-      NIR_PASS_V(nir, agx_nir_lower_vbo, &key->vbuf);
-   } else {
-      struct asahi_fs_shader_key *key = &key_->fs;
-
-      struct agx_tilebuffer_layout tib =
-         agx_build_tilebuffer_layout(key->rt_formats, key->nr_cbufs, 1);
-
-      NIR_PASS_V(nir, agx_nir_lower_tilebuffer, &tib);
+      NIR_PASS_V(nir, nir_lower_blend, &opts);
+      NIR_PASS_V(nir, agx_nir_lower_tilebuffer, &tib, colormasks,
+                 &force_translucent);
 
       if (key->sprite_coord_enable) {
          NIR_PASS_V(nir, nir_lower_texcoord_replace_late,
                     key->sprite_coord_enable,
                     false /* point coord is sysval */);
+      }
+
+      if (key->clip_plane_enable) {
+         NIR_PASS_V(nir, nir_lower_clip_fs, key->clip_plane_enable, false);
       }
    }
 
@@ -1420,6 +1434,16 @@ agx_compile_variant(struct agx_device *dev, struct agx_uncompiled_shader *so,
               &base_key.reserved_preamble);
 
    agx_compile_shader_nir(nir, &base_key, debug, &binary, &compiled->info);
+
+   /* reads_tib => Translucent pass type */
+   compiled->info.reads_tib |= force_translucent;
+
+   /* Could be optimized to use non-translucent pass types with the appropriate
+    * HSR configuration, but that mechanism is not yet understood. Warn that
+    * we're leaving perf on the table when used.
+    */
+   if (force_translucent)
+      perf_debug(dev, "Translucency forced due to colour masking");
 
    if (binary.size) {
       compiled->bo = agx_bo_create(dev, binary.size,
@@ -1452,8 +1476,17 @@ agx_get_shader_variant(struct agx_screen *screen,
     * hash table key. The clone is logically owned by the hash table.
     */
    union asahi_shader_key *cloned_key =
-      ralloc(so->variants, union asahi_shader_key);
-   memcpy(cloned_key, key, sizeof(union asahi_shader_key));
+      rzalloc(so->variants, union asahi_shader_key);
+
+   if (so->type == PIPE_SHADER_FRAGMENT) {
+      memcpy(cloned_key, key, sizeof(struct asahi_fs_shader_key));
+   } else if (so->type == PIPE_SHADER_VERTEX) {
+      memcpy(cloned_key, key, sizeof(struct asahi_vs_shader_key));
+   } else {
+      assert(gl_shader_stage_is_compute(so->type));
+      /* No key */
+   }
+
    _mesa_hash_table_insert(so->variants, cloned_key, compiled);
 
    return compiled;
@@ -1498,6 +1531,7 @@ agx_create_shader_state(struct pipe_context *pctx,
    blob_finish(&blob);
 
    so->nir = nir;
+   agx_preprocess_nir(nir, true);
 
    /* For shader-db, precompile a shader with a default key. This could be
     * improved but hopefully this is acceptable for now.
@@ -1520,7 +1554,21 @@ agx_create_shader_state(struct pipe_context *pctx,
       }
       case MESA_SHADER_FRAGMENT:
          key.fs.nr_cbufs = 1;
-         key.fs.rt_formats[0] = PIPE_FORMAT_R8G8B8A8_UNORM;
+         for (unsigned i = 0; i < key.fs.nr_cbufs; ++i) {
+            key.fs.rt_formats[i] = PIPE_FORMAT_R8G8B8A8_UNORM;
+            key.fs.blend.rt[i].colormask = 0xF;
+
+            const nir_lower_blend_channel replace = {
+               .func = BLEND_FUNC_ADD,
+               .src_factor = BLEND_FACTOR_ZERO,
+               .invert_src_factor = true,
+               .dst_factor = BLEND_FACTOR_ZERO,
+               .invert_dst_factor = false,
+            };
+
+            key.fs.blend.rt[i].rgb = replace;
+            key.fs.blend.rt[i].alpha = replace;
+         }
          break;
       default:
          unreachable("Unknown shader stage in shader-db precompile");
@@ -1559,6 +1607,7 @@ agx_create_compute_state(struct pipe_context *pctx,
    blob_finish(&blob);
 
    so->nir = nir;
+   agx_preprocess_nir(nir, true);
    agx_get_shader_variant(agx_screen(pctx->screen), so, &pctx->debug, &key);
 
    /* We're done with the NIR, throw it away */

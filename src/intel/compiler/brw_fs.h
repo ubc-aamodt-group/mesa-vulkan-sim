@@ -141,7 +141,6 @@ struct fs_thread_payload : public thread_payload {
    uint8_t sample_mask_in_reg[2];
    uint8_t depth_w_coef_reg[2];
    uint8_t barycentric_coord_reg[BRW_BARYCENTRIC_MODE_COUNT][2];
-   uint8_t local_invocation_id_reg[2];
 };
 
 struct cs_thread_payload : public thread_payload {
@@ -412,8 +411,7 @@ public:
                              const fs_reg &urb_handle);
    void emit_task_mesh_load(const brw::fs_builder &bld,
                             nir_intrinsic_instr *instr,
-                            const fs_reg &urb_handle,
-                            bool mask);
+                            const fs_reg &urb_handle);
 
    void emit_barrier();
    void emit_tcs_barrier();

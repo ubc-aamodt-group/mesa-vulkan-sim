@@ -12,7 +12,6 @@
 #ifdef VK_USE_PLATFORM_METAL_EXT
 #include "QuartzCore/CAMetalLayer.h"
 #endif
-#include "wsi_common.h"
 
 #define MAX_VIEW_COUNT 500
 
@@ -473,9 +472,6 @@ zink_start_batch(struct zink_context *ctx, struct zink_batch *batch)
       screen->renderdoc_capturing = true;
    }
 #endif
-
-   if (!ctx->queries_disabled)
-      zink_resume_queries(ctx, batch);
 
    /* descriptor buffers must always be bound at the start of a batch */
    if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_DB && !(ctx->flags & ZINK_CONTEXT_COPY_ONLY))
