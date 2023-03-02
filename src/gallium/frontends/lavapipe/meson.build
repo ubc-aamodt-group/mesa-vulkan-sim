@@ -6,7 +6,7 @@ dep_embree = declare_dependency(
     include_directories : include_directories(embree_header_dir))
 
 gpgpusim_lib = 'cudart'
-gpgpusim_lib_dir = '/home/lucy/sim/dist-vulkan-sim/gpgpu-sim_emerald/lib/gcc-5.5.0/cuda-10000/release'
+gpgpusim_lib_dir = '/home/lucy/sim/vulkan-simulator/gpgpu-sim_emerald/lib/gcc-5.5.0/cuda-10000/release'
 dep_gpgpusim = declare_dependency(
    link_args : ['-L' + gpgpusim_lib_dir, '-l' + gpgpusim_lib])
 

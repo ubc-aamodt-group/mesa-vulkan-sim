@@ -651,7 +651,7 @@ add_bvh_aabbs_geometry(uint32_t geometry_id,
          .upper_y = pos->maxY,
          .upper_z = pos->maxZ,
       };
-      VSIM_DPRINTF("EMBREE: Add AABB geometry: geomID: %d, primID %d, box (%5.3f, %5.3f, %5.3f), (%5.3f, %5.3f, %5.3f)\n", 
+      MESA_VSIM_DPRINTF("EMBREE: Add AABB geometry: geomID: %d, primID %d, box (%5.3f, %5.3f, %5.3f), (%5.3f, %5.3f, %5.3f)\n", 
             geometry_id, first_primitive_id + p,
             pos->minX, pos->minY, pos->minZ,
             pos->maxX, pos->maxY, pos->maxZ);
@@ -1226,7 +1226,7 @@ lvp_cpu_build_acceleration_structures(
                                                        &build_state) +
                                        pBuildRangeInfos[g].transformOffset);
 
-            VSIM_DPRINTF("EMBREE: Parsed triangles:\n");
+            MESA_VSIM_DPRINTF("EMBREE: Parsed triangles:\n");
 
 #ifndef NDEBUG
             for (unsigned tri = 0; tri < pBuildRangeInfos[g].primitiveCount; tri++) {
@@ -1276,7 +1276,7 @@ lvp_cpu_build_acceleration_structures(
       }
 
       RTCBVH rtc_bvh = rtcNewBVH(rtc);
-      VSIM_DPRINTF("EMBREE: New rtcBVH structure created at %p\n", rtc_bvh);
+      MESA_VSIM_DPRINTF("EMBREE: New rtcBVH structure created at %p\n", rtc_bvh);
 
       struct vsim_bvh_node tmp_root;
       struct vsim_bvh_leaf tmp_leaf;
@@ -1318,7 +1318,7 @@ lvp_cpu_build_acceleration_structures(
          args.createLeaf = rtc_create_leaf_cb;
          args.userPtr = &build_state;
          root = rtcBuildBVH(&args);
-         VSIM_DPRINTF("EMBREE: Build BVH with root %p\n", root);
+         MESA_VSIM_DPRINTF("EMBREE: Build BVH with root %p\n", root);
          print_node(*root);
       }
       assert(!root->is_leaf);
@@ -1327,7 +1327,7 @@ lvp_cpu_build_acceleration_structures(
       node_type_size(root, &root_type, &root_size, &build_state);
 
       void *dst_map = (uint8_t *)dst_accel->address.bo + dst_accel->address.offset;
-      VSIM_DPRINTF("EMBREE: Set dst_map %p = accel->address.bo %p + accel->address.offset 0x%lx for accel %p\n", 
+      MESA_VSIM_DPRINTF("EMBREE: Set dst_map %p = accel->address.bo %p + accel->address.offset 0x%lx for accel %p\n", 
                dst_map, dst_accel->address.bo, dst_accel->address.offset, dst_accel);
 
       struct GEN_RT_BVH bvh = { };
@@ -1355,7 +1355,7 @@ lvp_cpu_build_acceleration_structures(
          gpgpusim_addTreelets(dst_map);
 
       rtcReleaseBVH(rtc_bvh);
-      VSIM_DPRINTF("EMBREE: Release rtcBVH structure created at %p\n", rtc_bvh);
+      MESA_VSIM_DPRINTF("EMBREE: Release rtcBVH structure created at %p\n", rtc_bvh);
    }
 
    rtcReleaseDevice(rtc);
