@@ -222,7 +222,6 @@ enum zink_debug {
    ZINK_DEBUG_MAP = (1<<11),
 };
 
-
 /** fence types */
 struct tc_unflushed_batch_token;
 
@@ -1271,6 +1270,7 @@ struct zink_screen {
    bool threaded;
    bool is_cpu;
    bool abort_on_hang;
+   bool frame_marker_emitted;
    uint64_t curr_batch; //the current batch id
    uint32_t last_finished;
    VkSemaphore sem;
@@ -1739,6 +1739,7 @@ struct zink_context {
    bool disable_color_writes;
    bool was_line_loop;
    bool primitives_generated_active;
+   bool primitives_generated_suspended;
    bool queries_disabled, render_condition_active;
    bool queries_in_rp;
    struct {
