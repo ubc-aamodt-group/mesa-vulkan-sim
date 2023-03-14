@@ -1226,14 +1226,6 @@ lvp_cpu_build_acceleration_structures(
                                                        &build_state) +
                                        pBuildRangeInfos[g].transformOffset);
 
-            MESA_VSIM_DPRINTF("EMBREE: Parsed triangles:\n");
-
-#ifndef NDEBUG
-            for (unsigned tri = 0; tri < pBuildRangeInfos[g].primitiveCount; tri++) {
-               print_tri(build_state.geometries[g].triangles[tri]);
-            }
-#endif
-
             uint32_t tri_added = add_bvh_triangle_geometry(g, &scratch_rtc_prims[prim_count],
                                          build_state.geometries[g].triangles,
                                          0, pBuildRangeInfos[g].primitiveCount);
