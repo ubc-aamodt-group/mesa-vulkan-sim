@@ -49,6 +49,7 @@ class InstructionClass(Enum):
     EntryPoint = auto()
     Functional = auto()
     Empty = auto()
+    Untranslated = auto()
     UNKNOWN = auto()
 
 class PTXLine:
@@ -67,6 +68,7 @@ class PTXLine:
         self.command = self.command.strip()
         self.instructionClass = PTXLine.getInstructionClass(fullLine)
         self.condition = ''
+        self.lineNO = -1
     
     def buildString(self):
         if len(self.condition) > 0:
@@ -83,17 +85,25 @@ class PTXLine:
         self.buildString()
 
     def printLine(self):
-        print("Full line: {}".format(self.fullLine))
-        print("Command: {}".format(self.command))
-        print("Inst. class: {}".format(self.instructionClass))
-        print("Args: {}".format(self.args))
-        print("Whitespace: *{}*".format(self.leadingWhiteSpace))
-        print("Comment: {}".format(self.comment))
+        try:
+            print("Full line: {}".format(self.fullLine))
+            print("Line #: {}".format(self.lineNO))
+            print("Command: {}".format(self.command))
+            print("Inst. class: {}".format(self.instructionClass))
+            if self.instructionClass == InstructionClass.Functional:
+                print("Functional Type: {}".format(self.functionalType))
+            print("Args: {}".format(self.args))
+            print("Whitespace: *{}*".format(self.leadingWhiteSpace))
+            print("Comment: {}".format(self.comment))
+        except:
+            print("Incomplete line")
         
     @staticmethod
     def getInstructionClass(line):
         if len(line) == 0 or line.isspace():
             return InstructionClass.Empty
+        elif "Untranslated" in line:
+            return InstructionClass.Untranslated
         
         #debug_print("-%s-%s" % (line, line.isspace()))
         firstWord = line.split(None, 1)[0]
@@ -320,6 +330,11 @@ class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line t
         if isinstance(function, FunctionalType):
             self.command = function.name
             self.functionalType = function
+
+        elif isinstance(function, str) and function in FunctionalType:
+            self.command = function
+            self.functionalType = FunctionalType[function]
+
         else:
             self.command = function
             self.functionalType = FunctionalType.Other
@@ -365,6 +380,7 @@ class PTXShader:
         for line in f:
             debug_print('parsing line %s: %s' % (lineNO, line))
             ptxLine = PTXLine.createNewLine(line)
+            ptxLine.lineNO = lineNO
             if ptxLine.instructionClass == InstructionClass.VariableDeclaration and ptxLine.declarationType == DeclarationType.Register:
                 if ptxLine.isVector():
                     self.vectorVariables.append(ptxLine.variableName)
@@ -375,6 +391,9 @@ class PTXShader:
                 debug_print(ptxLine.functionalType)
             # if ptxLine.instructionClass == InstructionClass.Functional:
             #     debug_print(ptxLine.functionalType)
+            if ptxLine.instructionClass == InstructionClass.Untranslated:
+                ptxLine.printLine()
+                raise Exception("ERROR: Untranslated line found in shader! Please add this instruction to PTX translator before proceeding. ")
             self.lines.append(ptxLine)
             lineNO += 1
         # exit(-1)

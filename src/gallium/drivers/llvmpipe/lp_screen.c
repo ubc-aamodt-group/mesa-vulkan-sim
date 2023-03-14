@@ -602,6 +602,7 @@ static const struct nir_shader_compiler_options gallivm_nir_options = {
    .lower_hadd64 = true,
    .has_imul24 = true,
    .lower_pack_64_2x32 = true,
+   .lower_mul_high = true,
 
    .lower_image_offset_to_range_base = true,
    .lower_scmp = true,
