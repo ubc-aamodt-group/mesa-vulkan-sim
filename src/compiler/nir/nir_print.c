@@ -2619,7 +2619,7 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
       fprintf(fp, "%s ", info->name); // Intrinsic function name
    }
    else {
-      fprintf(fp, "// untranslated %s instruction. ", info->name);
+      fprintf(fp, "// Untranslated %s instruction. ", info->name);
    }
          
 
