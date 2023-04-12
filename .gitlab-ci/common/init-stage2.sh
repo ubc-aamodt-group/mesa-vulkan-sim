@@ -36,7 +36,9 @@ BACKGROUND_PIDS=
 # Second-stage init, used to set up devices and our job environment before
 # running tests.
 
-. /set-job-env-vars.sh
+for path in '/set-job-env-vars.sh' './set-job-env-vars.sh'; do
+    [ -f "$path" ] && source "$path"
+done
 . "$SCRIPTS_DIR"/setup-test-env.sh
 
 set -ex
@@ -145,21 +147,25 @@ if [ -n "$HWCI_START_XORG" ]; then
 fi
 
 if [ -n "$HWCI_START_WESTON" ]; then
-  export XDG_RUNTIME_DIR=/run/user
-  mkdir -p $XDG_RUNTIME_DIR
+  WESTON_X11_SOCK="/tmp/.X11-unix/X0"
+  if [ -n "$HWCI_START_XORG" ]; then
+    echo "Please consider dropping HWCI_START_XORG and instead using Weston XWayland for testing."
+    WESTON_X11_SOCK="/tmp/.X11-unix/X1"
+  fi
+  export WAYLAND_DISPLAY=wayland-0
 
-  # Xwayland to be used when HWCI_START_XORG is not set
+  # Display server is Weston Xwayland when HWCI_START_XORG is not set or Xorg when it's
   export DISPLAY=:0
   mkdir -p /tmp/.X11-unix
 
   env \
-    VK_ICD_FILENAMES=/install/share/vulkan/icd.d/${VK_DRIVER}_icd.`uname -m`.json \
-    weston -Bheadless-backend.so --use-gl -Swayland-0 --xwayland &
-  export WAYLAND_DISPLAY=wayland-0
-  sleep 1
+    VK_ICD_FILENAMES="/install/share/vulkan/icd.d/${VK_DRIVER}_icd.$(uname -m).json" \
+    weston -Bheadless-backend.so --use-gl -Swayland-0 --xwayland --idle-time=0 &
+  BACKGROUND_PIDS="$! $BACKGROUND_PIDS"
+
+  while [ ! -S "$WESTON_X11_SOCK" ]; do sleep 1; done
 fi
 
-RESULT=fail
 set +e
 bash -c ". $SCRIPTS_DIR/setup-test-env.sh && $HWCI_TEST_SCRIPT"
 EXIT_CODE=$?
@@ -183,7 +189,7 @@ fi
 
 # We still need to echo the hwci: mesa message, as some scripts rely on it, such
 # as the python ones inside the bare-metal folder
-[ ${EXIT_CODE} -eq 0 ] && RESULT=pass
+[ ${EXIT_CODE} -eq 0 ] && RESULT=pass || RESULT=fail
 
 set +x
 echo "hwci: mesa: $RESULT"

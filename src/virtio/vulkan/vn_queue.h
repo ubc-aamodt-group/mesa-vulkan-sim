@@ -52,6 +52,18 @@ struct vn_sync_payload {
    int fd;
 };
 
+/* For external fences and external semaphores submitted to be signaled. The
+ * Vulkan spec guarantees those external syncs are on permanent payload.
+ */
+struct vn_sync_payload_external {
+   /* ring_idx of the last queue submission */
+   uint32_t ring_idx;
+   /* valid when NO_ASYNC_QUEUE_SUBMIT perf option is not used */
+   bool ring_seqno_valid;
+   /* ring seqno of the last queue submission */
+   uint32_t ring_seqno;
+};
+
 struct vn_fence {
    struct vn_object_base base;
 
@@ -67,11 +79,7 @@ struct vn_fence {
    } feedback;
 
    bool is_external;
-
-   /* ring_idx of the last queue submission (only used for permanent
-    * payload of external fences)
-    */
-   uint32_t ring_idx;
+   struct vn_sync_payload_external external_payload;
 };
 VK_DEFINE_NONDISP_HANDLE_CASTS(vn_fence,
                                base.base,
@@ -121,11 +129,7 @@ struct vn_semaphore {
    } feedback;
 
    bool is_external;
-
-   /* ring_idx of the last queue submission (only used for permanent
-    * payload of external semaphores)
-    */
-   uint32_t ring_idx;
+   struct vn_sync_payload_external external_payload;
 };
 VK_DEFINE_NONDISP_HANDLE_CASTS(vn_semaphore,
                                base.base,

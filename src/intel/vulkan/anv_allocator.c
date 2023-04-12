@@ -1372,16 +1372,29 @@ anv_bo_alloc_flags_to_bo_flags(struct anv_device *device,
 }
 
 static void
-anv_bo_finish(struct anv_device *device, struct anv_bo *bo)
+anv_bo_unmap_close(struct anv_device *device, struct anv_bo *bo)
 {
-   if (bo->offset != 0 && !bo->has_fixed_address)
-      anv_vma_free(device, bo->offset, bo->size + bo->_ccs_size);
-
    if (bo->map && !bo->from_host_ptr)
       anv_device_unmap_bo(device, bo, bo->map, bo->size);
 
    assert(bo->gem_handle != 0);
    device->kmd_backend->gem_close(device, bo->gem_handle);
+}
+
+static void anv_bo_vma_free(struct anv_device *device, struct anv_bo *bo)
+{
+   if (bo->offset != 0 && !bo->has_fixed_address)
+      anv_vma_free(device, bo->offset, bo->size + bo->_ccs_size);
+}
+
+static void
+anv_bo_finish(struct anv_device *device, struct anv_bo *bo)
+{
+   /* Not releasing vma in case unbind fails */
+   if (device->kmd_backend->gem_vm_unbind(device, bo) == 0)
+      anv_bo_vma_free(device, bo);
+
+   anv_bo_unmap_close(device, bo);
 }
 
 static VkResult
@@ -1392,17 +1405,11 @@ anv_bo_vma_alloc_or_close(struct anv_device *device,
 {
    assert(explicit_address == intel_48b_address(explicit_address));
 
-   uint32_t align = 4096;
+   uint32_t align = device->physical->info.mem_alignment;
 
    /* Gen12 CCS surface addresses need to be 64K aligned. */
    if (device->info->ver >= 12 && (alloc_flags & ANV_BO_ALLOC_IMPLICIT_CCS))
-      align = 64 * 1024;
-
-   /* For XeHP, lmem and smem cannot share a single PDE, which means they
-    * can't live in the same 2MiB aligned region.
-    */
-   if (device->info->verx10 >= 125)
-       align = 2 * 1024 * 1024;
+      align = MAX2(64 * 1024, align);
 
    if (alloc_flags & ANV_BO_ALLOC_FIXED_ADDRESS) {
       bo->has_fixed_address = true;
@@ -1411,7 +1418,7 @@ anv_bo_vma_alloc_or_close(struct anv_device *device,
       bo->offset = anv_vma_alloc(device, bo->size + bo->_ccs_size,
                                  align, alloc_flags, explicit_address);
       if (bo->offset == 0) {
-         anv_bo_finish(device, bo);
+         anv_bo_unmap_close(device, bo);
          return vk_errorf(device, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                           "failed to allocate virtual address for BO");
       }
@@ -1478,10 +1485,12 @@ anv_device_alloc_bo(struct anv_device *device,
       regions[nregions++] = device->physical->sys.region;
    }
 
+   uint64_t actual_size;
    uint32_t gem_handle = device->kmd_backend->gem_create(device, regions,
                                                          nregions,
                                                          size + ccs_size,
-                                                         alloc_flags);
+                                                         alloc_flags,
+                                                         &actual_size);
    if (gem_handle == 0)
       return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 
@@ -1492,6 +1501,7 @@ anv_device_alloc_bo(struct anv_device *device,
       .offset = -1,
       .size = size,
       ._ccs_size = ccs_size,
+      .actual_size = actual_size,
       .flags = bo_flags,
       .is_external = (alloc_flags & ANV_BO_ALLOC_EXTERNAL),
       .has_client_visible_address =
@@ -1537,6 +1547,12 @@ anv_device_alloc_bo(struct anv_device *device,
                                                explicit_address);
    if (result != VK_SUCCESS)
       return result;
+
+   if (device->kmd_backend->gem_vm_bind(device, &new_bo)) {
+      anv_bo_vma_free(device, &new_bo);
+      anv_bo_unmap_close(device, &new_bo);
+      return vk_errorf(device, VK_ERROR_UNKNOWN, "vm bind failed");
+   }
 
    if (new_bo._ccs_size > 0) {
       assert(device->info->has_aux_map);
@@ -1653,6 +1669,7 @@ anv_device_import_bo_from_host_ptr(struct anv_device *device,
          .refcount = 1,
          .offset = -1,
          .size = size,
+         .actual_size = size,
          .map = host_ptr,
          .flags = bo_flags,
          .is_external = true,
@@ -1778,6 +1795,7 @@ anv_device_import_bo(struct anv_device *device,
          .refcount = 1,
          .offset = -1,
          .size = size,
+         .actual_size = size,
          .flags = bo_flags,
          .is_external = true,
          .has_client_visible_address =
@@ -1791,6 +1809,12 @@ anv_device_import_bo(struct anv_device *device,
       if (result != VK_SUCCESS) {
          pthread_mutex_unlock(&cache->mutex);
          return result;
+      }
+
+      if (device->kmd_backend->gem_vm_bind(device, &new_bo)) {
+         anv_bo_vma_free(device, &new_bo);
+         pthread_mutex_unlock(&cache->mutex);
+         return vk_errorf(device, VK_ERROR_UNKNOWN, "vm bind failed");
       }
 
       *bo = new_bo;

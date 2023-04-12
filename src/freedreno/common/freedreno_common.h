@@ -62,7 +62,18 @@ struct BitmaskEnum {
    FOREACH_TYPE(BOP, &)
 #undef BOP
 
-#if defined(__GNUC__) && !defined(__clang) && (__GNUC__ <= 10)
+#define BOP(OP)                                                    \
+   inline BitmaskEnum<E> operator OP(BitmaskEnum<E> rhs) const {   \
+      return static_cast<E> (                                      \
+         static_cast<underlying>(value) OP                         \
+         static_cast<underlying>(rhs.value)                        \
+      );                                                           \
+   }
+   BOP(|)
+   BOP(&)
+#undef BOP
+
+#if defined(__GNUC__) && !defined(__clang)
 /*
  * Silence:
  *
@@ -105,10 +116,20 @@ struct BitmaskEnum {
 #define BITMASK_ENUM(E) enum E
 #endif
 
+#ifdef __cplusplus
+#  define EXTERNC extern "C"
+#  define BEGINC EXTERNC {
+#  define ENDC }
+#else
+#  define EXTERNC
+#  define BEGINC
+#  define ENDC
+#endif
+
 /*
- * swap - swap value of @a and @b
+ * SWAP - swap value of @a and @b
  */
-#define swap(a, b)                                                             \
+#define SWAP(a, b)                                                             \
    do {                                                                        \
       __typeof(a) __tmp = (a);                                                 \
       (a) = (b);                                                               \

@@ -192,10 +192,11 @@ enum
    DBG_GS = MESA_SHADER_GEOMETRY,
    DBG_PS = MESA_SHADER_FRAGMENT,
    DBG_CS = MESA_SHADER_COMPUTE,
-   DBG_NO_IR,
-   DBG_NO_NIR,
-   DBG_NO_ASM,
-   DBG_PREOPT_IR,
+   DBG_INIT_NIR,
+   DBG_NIR,
+   DBG_INIT_LLVM,
+   DBG_LLVM,
+   DBG_ASM,
 
    /* Shader compiler options the shader cache should be aware of: */
    DBG_FS_CORRECT_DERIVS_AFTER_KILL,
@@ -223,6 +224,7 @@ enum
 
    /* Driver options: */
    DBG_NO_WC,
+   DBG_NO_WC_STREAM,
    DBG_CHECK_VM,
    DBG_RESERVE_VMID,
    DBG_SHADOW_REGS,
@@ -253,6 +255,8 @@ enum
    DBG_NO_DCC_MSAA,
    DBG_NO_FMASK,
    DBG_NO_DMA,
+
+   DBG_EXTRA_METADATA,
 
    DBG_TMZ,
    DBG_SQTT,
@@ -557,8 +561,8 @@ struct si_screen {
                                    enum pipe_texture_target target, enum pipe_format pipe_format,
                                    const unsigned char state_swizzle[4], unsigned first_level,
                                    unsigned last_level, unsigned first_layer, unsigned last_layer,
-                                   unsigned width, unsigned height, unsigned depth, uint32_t *state,
-                                   uint32_t *fmask_state);
+                                   unsigned width, unsigned height, unsigned depth,
+                                   bool get_bo_metadata, uint32_t *state, uint32_t *fmask_state);
 
    unsigned max_memory_usage_kb;
    unsigned pa_sc_raster_config;
@@ -694,8 +698,6 @@ struct si_screen {
     * We want to minimize the impact on multithreaded Mesa. */
    struct ac_llvm_compiler compiler_lowp[10];
 
-   unsigned ngg_subgroup_size;
-
    struct util_idalloc_mt buffer_ids;
    struct util_vertex_state_cache vertex_state_cache;
 
@@ -734,7 +736,6 @@ struct si_cs_shader_state {
    struct si_compute *emitted_program;
    unsigned offset;
    uint32_t variable_shared_size;
-   bool initialized;
 };
 
 struct si_samplers {
@@ -1444,7 +1445,7 @@ void si_retile_dcc(struct si_context *sctx, struct si_texture *tex);
 void gfx9_clear_dcc_msaa(struct si_context *sctx, struct pipe_resource *res, uint32_t clear_value,
                          unsigned flags, enum si_coherency coher);
 void si_compute_expand_fmask(struct pipe_context *ctx, struct pipe_resource *tex);
-bool si_compute_blit(struct si_context *sctx, const struct pipe_blit_info *info);
+bool si_compute_blit(struct si_context *sctx, const struct pipe_blit_info *info, bool testing);
 void si_init_compute_blit_functions(struct si_context *sctx);
 
 /* si_cp_dma.c */
@@ -1789,11 +1790,6 @@ static inline struct si_shader_ctx_state *si_get_vs(struct si_context *sctx)
 {
    return si_get_vs_inline(sctx, sctx->shader.tes.cso ? TESS_ON : TESS_OFF,
                            sctx->shader.gs.cso ? GS_ON : GS_OFF);
-}
-
-static inline bool si_can_dump_shader(struct si_screen *sscreen, gl_shader_stage stage)
-{
-   return sscreen->debug_flags & (1 << stage);
 }
 
 static inline bool si_get_strmout_en(struct si_context *sctx)

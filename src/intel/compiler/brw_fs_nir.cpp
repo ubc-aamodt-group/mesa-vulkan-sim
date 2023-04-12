@@ -610,53 +610,6 @@ fs_visitor::optimize_frontfacing_ternary(nir_alu_instr *instr,
    return true;
 }
 
-static void
-emit_find_msb_using_lzd(const fs_builder &bld,
-                        const fs_reg &result,
-                        const fs_reg &src,
-                        bool is_signed)
-{
-   fs_inst *inst;
-   fs_reg temp = src;
-
-   if (is_signed) {
-      /* LZD of an absolute value source almost always does the right
-       * thing.  There are two problem values:
-       *
-       * * 0x80000000.  Since abs(0x80000000) == 0x80000000, LZD returns
-       *   0.  However, findMSB(int(0x80000000)) == 30.
-       *
-       * * 0xffffffff.  Since abs(0xffffffff) == 1, LZD returns
-       *   31.  Section 8.8 (Integer Functions) of the GLSL 4.50 spec says:
-       *
-       *    For a value of zero or negative one, -1 will be returned.
-       *
-       * * Negative powers of two.  LZD(abs(-(1<<x))) returns x, but
-       *   findMSB(-(1<<x)) should return x-1.
-       *
-       * For all negative number cases, including 0x80000000 and
-       * 0xffffffff, the correct value is obtained from LZD if instead of
-       * negating the (already negative) value the logical-not is used.  A
-       * conditional logical-not can be achieved in two instructions.
-       */
-      temp = bld.vgrf(BRW_REGISTER_TYPE_D);
-
-      bld.ASR(temp, src, brw_imm_d(31));
-      bld.XOR(temp, temp, src);
-   }
-
-   bld.LZD(retype(result, BRW_REGISTER_TYPE_UD),
-           retype(temp, BRW_REGISTER_TYPE_UD));
-
-   /* LZD counts from the MSB side, while GLSL's findMSB() wants the count
-    * from the LSB side. Subtract the result from 31 to convert the MSB
-    * count into an LSB count.  If no bits are set, LZD will return 32.
-    * 31-32 = -1, which is exactly what findMSB() is supposed to return.
-    */
-   inst = bld.ADD(result, retype(result, BRW_REGISTER_TYPE_D), brw_imm_d(31));
-   inst->src[0].negate = true;
-}
-
 static brw_rnd_mode
 brw_rnd_mode_from_nir_op (const nir_op op) {
    switch (op) {
@@ -911,15 +864,24 @@ fs_visitor::emit_fsign(const fs_builder &bld, const nir_alu_instr *instr,
          set_predicate(BRW_PREDICATE_NORMAL,
                        bld.OR(r, r, brw_imm_ud(0x3ff00000u)));
       } else {
-         /* This could be done better in some cases.  If the scale is an
-          * immediate with the low 32-bits all 0, emitting a separate XOR and
-          * OR would allow an algebraic optimization to remove the OR.  There
-          * are currently zero instances of fsign(double(x))*IMM in shader-db
-          * or any test suite, so it is hard to care at this time.
-          */
-         fs_reg result_int64 = retype(result, BRW_REGISTER_TYPE_UQ);
-         inst = bld.XOR(result_int64, result_int64,
-                        retype(op[1], BRW_REGISTER_TYPE_UQ));
+         if (devinfo->has_64bit_int) {
+            /* This could be done better in some cases.  If the scale is an
+             * immediate with the low 32-bits all 0, emitting a separate XOR and
+             * OR would allow an algebraic optimization to remove the OR.  There
+             * are currently zero instances of fsign(double(x))*IMM in shader-db
+             * or any test suite, so it is hard to care at this time.
+             */
+            fs_reg result_int64 = retype(result, BRW_REGISTER_TYPE_UQ);
+            inst = bld.XOR(result_int64, result_int64,
+                           retype(op[1], BRW_REGISTER_TYPE_UQ));
+         } else {
+            fs_reg result_int64 = retype(result, BRW_REGISTER_TYPE_UQ);
+            bld.MOV(subscript(result_int64, BRW_REGISTER_TYPE_UD, 0),
+                    subscript(op[1], BRW_REGISTER_TYPE_UD, 0));
+            bld.XOR(subscript(result_int64, BRW_REGISTER_TYPE_UD, 1),
+                    subscript(result_int64, BRW_REGISTER_TYPE_UD, 1),
+                    subscript(op[1], BRW_REGISTER_TYPE_UD, 1));
+         }
       }
    }
 }
@@ -1068,19 +1030,10 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr,
          rnd = brw_rnd_mode_from_nir_op(instr->op);
 
       if (BRW_RND_MODE_UNSPECIFIED != rnd)
-         bld.emit(SHADER_OPCODE_RND_MODE, bld.null_reg_ud(), brw_imm_d(rnd));
+         bld.exec_all().emit(SHADER_OPCODE_RND_MODE, bld.null_reg_ud(), brw_imm_d(rnd));
 
-      /* In theory, it would be better to use BRW_OPCODE_F32TO16. Depending
-       * on the HW gen, it is a special hw opcode or just a MOV, and
-       * brw_F32TO16 (at brw_eu_emit) would do the work to chose.
-       *
-       * But if we want to use that opcode, we need to provide support on
-       * different optimizations and lowerings. As right now HF support is
-       * only for gfx8+, it will be better to use directly the MOV, and use
-       * BRW_OPCODE_F32TO16 when/if we work for HF support on gfx7.
-       */
       assert(type_sz(op[0].type) < 8); /* brw_nir_lower_conversions */
-      inst = bld.MOV(result, op[0]);
+      inst = bld.F32TO16(result, op[0]);
       break;
    }
 
@@ -1186,8 +1139,8 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr,
       if (nir_has_any_rounding_mode_enabled(execution_mode)) {
          brw_rnd_mode rnd =
             brw_rnd_mode_from_execution_mode(execution_mode);
-         bld.emit(SHADER_OPCODE_RND_MODE, bld.null_reg_ud(),
-                  brw_imm_d(rnd));
+         bld.exec_all().emit(SHADER_OPCODE_RND_MODE, bld.null_reg_ud(),
+                             brw_imm_d(rnd));
       }
 
       if (op[0].type == BRW_REGISTER_TYPE_HF)
@@ -1239,8 +1192,8 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr,
       if (nir_has_any_rounding_mode_enabled(execution_mode)) {
          brw_rnd_mode rnd =
             brw_rnd_mode_from_execution_mode(execution_mode);
-         bld.emit(SHADER_OPCODE_RND_MODE, bld.null_reg_ud(),
-                  brw_imm_d(rnd));
+         bld.exec_all().emit(SHADER_OPCODE_RND_MODE, bld.null_reg_ud(),
+                             brw_imm_d(rnd));
       }
       FALLTHROUGH;
    case nir_op_iadd:
@@ -1305,8 +1258,8 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr,
       if (nir_has_any_rounding_mode_enabled(execution_mode)) {
          brw_rnd_mode rnd =
             brw_rnd_mode_from_execution_mode(execution_mode);
-         bld.emit(SHADER_OPCODE_RND_MODE, bld.null_reg_ud(),
-                  brw_imm_d(rnd));
+         bld.exec_all().emit(SHADER_OPCODE_RND_MODE, bld.null_reg_ud(),
+                             brw_imm_d(rnd));
       }
 
       inst = bld.MUL(result, op[0], op[1]);
@@ -1612,9 +1565,7 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr,
       fs_reg zero = bld.vgrf(BRW_REGISTER_TYPE_F);
 
       /* The destination stride must be at least as big as the source stride. */
-      tmp16.type = devinfo->ver > 7
-         ? BRW_REGISTER_TYPE_HF : BRW_REGISTER_TYPE_W;
-      tmp16.stride = 2;
+      tmp16 = subscript(tmp16, BRW_REGISTER_TYPE_HF, 0);
 
       /* Check for denormal */
       fs_reg abs_src0 = op[0];
@@ -1626,8 +1577,8 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr,
               retype(op[0], BRW_REGISTER_TYPE_UD),
               brw_imm_ud(0x80000000));
       /* Do the actual F32 -> F16 -> F32 conversion */
-      bld.emit(BRW_OPCODE_F32TO16, tmp16, op[0]);
-      bld.emit(BRW_OPCODE_F16TO32, tmp32, tmp16);
+      bld.F32TO16(tmp16, op[0]);
+      bld.F16TO32(tmp32, tmp16);
       /* Select that or zero based on normal status */
       inst = bld.SEL(result, zero, tmp32);
       inst->predicate = BRW_PREDICATE_NORMAL;
@@ -1662,16 +1613,14 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr,
       assert(FLOAT_CONTROLS_DENORM_FLUSH_TO_ZERO_FP16 & execution_mode);
       FALLTHROUGH;
    case nir_op_unpack_half_2x16_split_x:
-      inst = bld.emit(BRW_OPCODE_F16TO32, result,
-                      subscript(op[0], BRW_REGISTER_TYPE_UW, 0));
+      inst = bld.F16TO32(result, subscript(op[0], BRW_REGISTER_TYPE_HF, 0));
       break;
 
    case nir_op_unpack_half_2x16_split_y_flush_to_zero:
       assert(FLOAT_CONTROLS_DENORM_FLUSH_TO_ZERO_FP16 & execution_mode);
       FALLTHROUGH;
    case nir_op_unpack_half_2x16_split_y:
-      inst = bld.emit(BRW_OPCODE_F16TO32, result,
-                      subscript(op[0], BRW_REGISTER_TYPE_UW, 1));
+      inst = bld.F16TO32(result, subscript(op[0], BRW_REGISTER_TYPE_HF, 1));
       break;
 
    case nir_op_pack_64_2x32_split:
@@ -1706,71 +1655,48 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr,
       break;
 
    case nir_op_bitfield_reverse:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
+      assert(nir_dest_bit_size(instr->dest.dest) == 32);
+      assert(nir_src_bit_size(instr->src[0].src) == 32);
       bld.BFREV(result, op[0]);
       break;
 
    case nir_op_bit_count:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
+      assert(nir_dest_bit_size(instr->dest.dest) == 32);
+      assert(nir_src_bit_size(instr->src[0].src) < 64);
       bld.CBIT(result, op[0]);
       break;
 
-   case nir_op_ufind_msb: {
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
-      emit_find_msb_using_lzd(bld, result, op[0], false);
-      break;
-   }
-
    case nir_op_uclz:
       assert(nir_dest_bit_size(instr->dest.dest) == 32);
+      assert(nir_src_bit_size(instr->src[0].src) == 32);
       bld.LZD(retype(result, BRW_REGISTER_TYPE_UD), op[0]);
       break;
 
    case nir_op_ifind_msb: {
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
+      assert(nir_dest_bit_size(instr->dest.dest) == 32);
+      assert(nir_src_bit_size(instr->src[0].src) == 32);
+      assert(devinfo->ver >= 7);
 
-      if (devinfo->ver < 7) {
-         emit_find_msb_using_lzd(bld, result, op[0], true);
-      } else {
-         bld.FBH(retype(result, BRW_REGISTER_TYPE_UD), op[0]);
+      bld.FBH(retype(result, BRW_REGISTER_TYPE_UD), op[0]);
 
-         /* FBH counts from the MSB side, while GLSL's findMSB() wants the
-          * count from the LSB side. If FBH didn't return an error
-          * (0xFFFFFFFF), then subtract the result from 31 to convert the MSB
-          * count into an LSB count.
-          */
-         bld.CMP(bld.null_reg_d(), result, brw_imm_d(-1), BRW_CONDITIONAL_NZ);
+      /* FBH counts from the MSB side, while GLSL's findMSB() wants the count
+       * from the LSB side. If FBH didn't return an error (0xFFFFFFFF), then
+       * subtract the result from 31 to convert the MSB count into an LSB
+       * count.
+       */
+      bld.CMP(bld.null_reg_d(), result, brw_imm_d(-1), BRW_CONDITIONAL_NZ);
 
-         inst = bld.ADD(result, result, brw_imm_d(31));
-         inst->predicate = BRW_PREDICATE_NORMAL;
-         inst->src[0].negate = true;
-      }
+      inst = bld.ADD(result, result, brw_imm_d(31));
+      inst->predicate = BRW_PREDICATE_NORMAL;
+      inst->src[0].negate = true;
       break;
    }
 
    case nir_op_find_lsb:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
-
-      if (devinfo->ver < 7) {
-         fs_reg temp = vgrf(glsl_type::int_type);
-
-         /* (x & -x) generates a value that consists of only the LSB of x.
-          * For all powers of 2, findMSB(y) == findLSB(y).
-          */
-         fs_reg src = retype(op[0], BRW_REGISTER_TYPE_D);
-         fs_reg negated_src = src;
-
-         /* One must be negated, and the other must be non-negated.  It
-          * doesn't matter which is which.
-          */
-         negated_src.negate = true;
-         src.negate = false;
-
-         bld.AND(temp, src, negated_src);
-         emit_find_msb_using_lzd(bld, result, temp, false);
-      } else {
-         bld.FBL(result, op[0]);
-      }
+      assert(nir_dest_bit_size(instr->dest.dest) == 32);
+      assert(nir_src_bit_size(instr->src[0].src) == 32);
+      assert(devinfo->ver >= 7);
+      bld.FBL(result, op[0]);
       break;
 
    case nir_op_ubitfield_extract:
@@ -1880,8 +1806,8 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr,
       if (nir_has_any_rounding_mode_enabled(execution_mode)) {
          brw_rnd_mode rnd =
             brw_rnd_mode_from_execution_mode(execution_mode);
-         bld.emit(SHADER_OPCODE_RND_MODE, bld.null_reg_ud(),
-                  brw_imm_d(rnd));
+         bld.exec_all().emit(SHADER_OPCODE_RND_MODE, bld.null_reg_ud(),
+                             brw_imm_d(rnd));
       }
 
       inst = bld.MAD(result, op[2], op[1], op[0]);
@@ -1891,8 +1817,8 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr,
       if (nir_has_any_rounding_mode_enabled(execution_mode)) {
          brw_rnd_mode rnd =
             brw_rnd_mode_from_execution_mode(execution_mode);
-         bld.emit(SHADER_OPCODE_RND_MODE, bld.null_reg_ud(),
-                  brw_imm_d(rnd));
+         bld.exec_all().emit(SHADER_OPCODE_RND_MODE, bld.null_reg_ud(),
+                             brw_imm_d(rnd));
       }
 
       inst = bld.LRP(result, op[0], op[1], op[2]);
@@ -4507,6 +4433,16 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
 
          if (slm_fence) {
             assert(opcode == SHADER_OPCODE_MEMORY_FENCE);
+            if (intel_needs_workaround(devinfo, 14014063774)) {
+               /* Wa_14014063774
+                *
+                * Before SLM fence compiler needs to insert SYNC.ALLWR in order
+                * to avoid the SLM data race.
+                */
+               ubld.exec_all().group(1, 0).emit(
+                  BRW_OPCODE_SYNC, ubld.null_reg_ud(),
+                  brw_imm_ud(TGL_SYNC_ALLWR));
+            }
             fence_regs[fence_regs_count++] =
                emit_fence(ubld, opcode, GFX12_SFID_SLM, desc,
                           true /* commit_enable */,
@@ -5011,6 +4947,62 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
       break;
    }
 
+   case nir_intrinsic_load_ssbo_uniform_block_intel:
+   case nir_intrinsic_load_shared_uniform_block_intel: {
+      fs_reg srcs[SURFACE_LOGICAL_NUM_SRCS];
+
+      const bool is_ssbo =
+         instr->intrinsic == nir_intrinsic_load_ssbo_uniform_block_intel;
+      srcs[SURFACE_LOGICAL_SRC_SURFACE] = is_ssbo ?
+         get_nir_ssbo_intrinsic_index(bld, instr) : fs_reg(brw_imm_ud(GFX7_BTI_SLM));
+
+      const unsigned total_dwords = ALIGN(instr->num_components, REG_SIZE / 4);
+      unsigned loaded_dwords = 0;
+
+      const fs_builder ubld1 = bld.exec_all().group(1, 0);
+      const fs_builder ubld8 = bld.exec_all().group(8, 0);
+      const fs_builder ubld16 = bld.exec_all().group(16, 0);
+
+      const fs_reg packed_consts =
+         ubld1.vgrf(BRW_REGISTER_TYPE_UD, total_dwords);
+
+      const nir_src load_offset = is_ssbo ? instr->src[1] : instr->src[0];
+      if (nir_src_is_const(load_offset)) {
+         fs_reg addr = ubld8.vgrf(BRW_REGISTER_TYPE_UD);
+         ubld8.MOV(addr, brw_imm_ud(nir_src_as_uint(load_offset)));
+         srcs[SURFACE_LOGICAL_SRC_ADDRESS] = component(addr, 0);
+      } else {
+         srcs[SURFACE_LOGICAL_SRC_ADDRESS] =
+            bld.emit_uniformize(get_nir_src(load_offset));
+      }
+
+      while (loaded_dwords < total_dwords) {
+         const unsigned block =
+            choose_oword_block_size_dwords(devinfo,
+                                           total_dwords - loaded_dwords);
+         const unsigned block_bytes = block * 4;
+
+         srcs[SURFACE_LOGICAL_SRC_IMM_ARG] = brw_imm_ud(block);
+
+         const fs_builder &ubld = block <= 8 ? ubld8 : ubld16;
+         ubld.emit(SHADER_OPCODE_UNALIGNED_OWORD_BLOCK_READ_LOGICAL,
+                   retype(byte_offset(packed_consts, loaded_dwords * 4), BRW_REGISTER_TYPE_UD),
+                   srcs, SURFACE_LOGICAL_NUM_SRCS)->size_written = align(block_bytes, REG_SIZE);
+
+         loaded_dwords += block;
+
+         ubld1.ADD(srcs[SURFACE_LOGICAL_SRC_ADDRESS],
+                   srcs[SURFACE_LOGICAL_SRC_ADDRESS],
+                   brw_imm_ud(block_bytes));
+      }
+
+      for (unsigned c = 0; c < instr->num_components; c++)
+         bld.MOV(retype(offset(dest, bld, c), BRW_REGISTER_TYPE_UD),
+                 component(packed_consts, c));
+
+      break;
+   }
+
    case nir_intrinsic_store_output: {
       assert(nir_src_bit_size(instr->src[0]) == 32);
       fs_reg src = get_nir_src(instr->src[0]);
@@ -5389,7 +5381,7 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
       bld.exec_all().group(1, 0).MOV(flag, brw_imm_ud(0u));
       bld.CMP(bld.null_reg_ud(), value, brw_imm_ud(0u), BRW_CONDITIONAL_NZ);
 
-      if (instr->dest.ssa.bit_size > 32) {
+      if (nir_dest_bit_size(instr->dest) > 32) {
          dest.type = BRW_REGISTER_TYPE_UQ;
       } else {
          dest.type = BRW_REGISTER_TYPE_UD;
@@ -5409,7 +5401,8 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
        * FS), bound the invocation to the dispatch size.
        */
       fs_reg bound_invocation;
-      if (bld.dispatch_width() < bld.shader->nir->info.subgroup_size) {
+      if (api_subgroup_size == 0 ||
+          bld.dispatch_width() < api_subgroup_size) {
          bound_invocation = bld.vgrf(BRW_REGISTER_TYPE_UD);
          bld.AND(bound_invocation, invocation, brw_imm_ud(dispatch_width - 1));
       } else {
@@ -6125,11 +6118,12 @@ fs_visitor::nir_emit_texture(const fs_builder &bld, nir_tex_instr *instr)
             break;
          }
 
-         /* Wa_14013363432:
+         /* Wa_14012688258:
           *
           * Compiler should send U,V,R parameters even if V,R are 0.
           */
-         if (instr->sampler_dim == GLSL_SAMPLER_DIM_CUBE && devinfo->verx10 == 125)
+         if (instr->sampler_dim == GLSL_SAMPLER_DIM_CUBE &&
+             intel_needs_workaround(devinfo, 14012688258))
             assert(instr->coord_components >= 3u);
          break;
       case nir_tex_src_ddx:

@@ -28,6 +28,7 @@
 #include "dev/intel_device_info.h"
 #include "dev/intel_kmd.h"
 
+struct iris_batch;
 struct iris_bo;
 struct iris_bufmgr;
 enum iris_heap;
@@ -40,6 +41,11 @@ struct iris_kmd_backend {
                           enum iris_heap heap_flags, unsigned alloc_flags);
    bool (*bo_madvise)(struct iris_bo *bo, enum iris_madvice state);
    int (*bo_set_caching)(struct iris_bo *bo, bool cached);
+   void *(*gem_mmap)(struct iris_bufmgr *bufmgr, struct iris_bo *bo);
+   enum pipe_reset_status (*batch_check_for_reset)(struct iris_batch *batch);
+   int (*batch_submit)(struct iris_batch *batch);
+   bool (*gem_vm_bind)(struct iris_bo *bo);
+   bool (*gem_vm_unbind)(struct iris_bo *bo);
 };
 
 const struct iris_kmd_backend *
@@ -47,3 +53,4 @@ iris_kmd_backend_get(enum intel_kmd_type type);
 
 /* Internal functions, should not be called */
 const struct iris_kmd_backend *i915_get_backend(void);
+const struct iris_kmd_backend *xe_get_backend(void);

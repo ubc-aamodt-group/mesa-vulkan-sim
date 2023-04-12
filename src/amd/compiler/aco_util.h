@@ -631,6 +631,11 @@ public:
       return *this;
    }
 
+   constexpr bitfield_uint& operator=(const bitfield_uint& value)
+   {
+      return *this = access_type(value);
+   }
+
    constexpr bitfield_uint& operator|=(const access_type& value)
    {
       storage |= data_type(value & mask) << offset;
@@ -940,6 +945,11 @@ public:
       return *this;
    }
 
+   constexpr bitfield_array& operator=(const bitfield_array& value)
+   {
+      return *this = access_type(value);
+   }
+
    constexpr reference operator[](unsigned index)
    {
       assert(index < size);
@@ -1018,6 +1028,8 @@ using bitfield_array32 = bitfield_array<T, offset, size, uint32_t>;
 
 template <typename T, unsigned offset, unsigned size>
 using bitfield_array64 = bitfield_array<T, offset, size, uint64_t>;
+
+using bitarray8 = bitfield_array<uint8_t, 0, 8, uint8_t>;
 
 } // namespace aco
 

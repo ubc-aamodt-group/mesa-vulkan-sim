@@ -23,17 +23,9 @@ project(
   ['c', 'cpp'],
   version : files('VERSION'),
   license : 'MIT',
-  meson_version : '>= 0.59',
+  meson_version : '>= 0.60',
   default_options : ['buildtype=debugoptimized', 'b_ndebug=if-release', 'c_std=c11', 'cpp_std=c++17', 'rust_std=2021']
 )
-
-# In recent versions, meson can inject some extra arguments to get richer
-# results from gtest based tests.  Feature was added in 0.55, but requiring
-# 0.59.2 to include an important fix.  See https://github.com/mesonbuild/meson/pull/9283.
-gtest_test_protocol = 'exitcode'
-if meson.version().version_compare('>= 0.59.2')
-  gtest_test_protocol = 'gtest'
-endif
 
 cc = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
@@ -912,6 +904,9 @@ endif
 if cc.has_function('reallocarray')
    pre_args += '-DHAVE_REALLOCARRAY'
 endif
+if cc.has_function('fmemopen')
+   pre_args += '-DHAVE_FMEMOPEN'
+endif
 
 # TODO: this is very incomplete
 if ['linux', 'cygwin', 'gnu', 'freebsd', 'gnu/kfreebsd', 'haiku', 'android'].contains(host_machine.system())
@@ -964,7 +959,7 @@ if cc.get_argument_syntax() == 'msvc'
     '/wd4056',  # overflow in floating-point constant arithmetic
     '/wd4244',  # conversion from 'type1' to 'type2', possible loss of data
     '/wd4267',  # 'var' : conversion from 'size_t' to 'type', possible loss of data
-    '/wd4305',  # trancation from 'type1' to 'type2'
+    '/wd4305',  # truncation from 'type1' to 'type2'
     '/wd4351',  # new behavior: elements of array 'array' will be default initialized
     '/wd4756',  # overflow in constant arithmetic
     '/wd4800',  # forcing value to bool 'true' or 'false' (performance warning)
@@ -1282,6 +1277,7 @@ functions_to_detect = {
   'strtok_r': '',
   'getrandom': '',
   'qsort_s': '',
+  'posix_fallocate': '',
 }
 
 foreach f, prefix: functions_to_detect
@@ -1430,6 +1426,18 @@ endif
 
 if get_option('intel-xe-kmd').enabled()
   pre_args += '-DINTEL_XE_KMD_SUPPORTED'
+endif
+
+if with_intel_hasvk and host_machine.cpu_family().startswith('x86') == false
+  error('Intel "hasvk" Vulkan driver requires x86 or x86_64 CPU family')
+endif
+
+if with_gallium_crocus and host_machine.cpu_family().startswith('x86') == false
+  error('Intel "crocus" Gallium driver requires x86 or x86_64 CPU family')
+endif
+
+if with_gallium_i915 and host_machine.cpu_family().startswith('x86') == false
+  error('Intel "i915" Gallium driver requires x86 or x86_64 CPU family')
 endif
 
 # Determine whether or not the rt library is needed for time functions

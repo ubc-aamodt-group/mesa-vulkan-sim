@@ -274,9 +274,11 @@ zink_descriptor_util_image_layout_eval(const struct zink_context *ctx, const str
       return VK_IMAGE_LAYOUT_GENERAL;
    if (!is_compute && res->fb_bind_count && res->sampler_bind_count[0]) {
       /* feedback loop */
-      if (zink_screen(ctx->base.screen)->info.have_EXT_attachment_feedback_loop_layout)
-         return VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
-      return VK_IMAGE_LAYOUT_GENERAL;
+      if (!(res->obj->vkusage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) || zink_is_zsbuf_write(ctx)) {
+         if (zink_screen(ctx->base.screen)->info.have_EXT_attachment_feedback_loop_layout)
+            return VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
+         return VK_IMAGE_LAYOUT_GENERAL;
+      }
    }
    if (res->obj->vkusage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
       return VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
@@ -311,7 +313,7 @@ init_db_template_entry(struct zink_screen *screen, struct zink_shader *shader, e
                        unsigned idx, struct zink_descriptor_template *entry, unsigned *entry_idx)
 {
     int index = shader->bindings[type][idx].index;
-    gl_shader_stage stage = shader->nir->info.stage;
+    gl_shader_stage stage = shader->info.stage;
     entry->count = shader->bindings[type][idx].size;
 
     switch (shader->bindings[type][idx].type) {
@@ -366,7 +368,7 @@ init_template_entry(struct zink_shader *shader, enum zink_descriptor_type type,
                     unsigned idx, VkDescriptorUpdateTemplateEntry *entry, unsigned *entry_idx)
 {
     int index = shader->bindings[type][idx].index;
-    gl_shader_stage stage = clamp_stage(shader->nir);
+    gl_shader_stage stage = clamp_stage(&shader->info);
     entry->dstArrayElement = 0;
     entry->dstBinding = shader->bindings[type][idx].binding;
     entry->descriptorCount = shader->bindings[type][idx].size;
@@ -483,7 +485,7 @@ zink_descriptor_program_init(struct zink_context *ctx, struct zink_program *pg)
    else
       stages = ((struct zink_gfx_program*)pg)->shaders;
 
-   if (!pg->is_compute && stages[MESA_SHADER_FRAGMENT]->nir->info.fs.uses_fbfetch_output) {
+   if (!pg->is_compute && stages[MESA_SHADER_FRAGMENT]->info.fs.uses_fbfetch_output) {
       push_count = 1;
       pg->dd.fbfetch = true;
    }
@@ -513,7 +515,7 @@ zink_descriptor_program_init(struct zink_context *ctx, struct zink_program *pg)
       if (!shader)
          continue;
 
-      gl_shader_stage stage = clamp_stage(shader->nir);
+      gl_shader_stage stage = clamp_stage(&shader->info);
       VkShaderStageFlagBits stage_flags = mesa_to_vk_shader_stage(stage);
       /* uniform ubos handled in push */
       if (shader->has_uniforms) {
@@ -578,7 +580,7 @@ zink_descriptor_program_init(struct zink_context *ctx, struct zink_program *pg)
          /* some sets can have multiple descriptor types: ensure the size arrays for these types are contiguous for creating the pool key */
          VkDescriptorPoolSize *sz = &sizes[idx];
          VkDescriptorPoolSize sz2[5];
-         if (screen->compact_descriptors || (pg->is_compute && stages[0]->nir->info.stage == MESA_SHADER_KERNEL)) {
+         if (screen->compact_descriptors || (pg->is_compute && stages[0]->info.stage == MESA_SHADER_KERNEL)) {
             unsigned found = 0;
             while (found < num_type_sizes[desc_type]) {
                if (sz->descriptorCount) {
@@ -684,7 +686,7 @@ zink_descriptor_shader_init(struct zink_screen *screen, struct zink_shader *shad
 {
    VkDescriptorSetLayoutBinding bindings[ZINK_DESCRIPTOR_BASE_TYPES * ZINK_MAX_DESCRIPTORS_PER_TYPE];
    unsigned num_bindings = 0;
-   VkShaderStageFlagBits stage_flags = mesa_to_vk_shader_stage(shader->nir->info.stage);
+   VkShaderStageFlagBits stage_flags = mesa_to_vk_shader_stage(shader->info.stage);
 
    unsigned desc_set_size = shader->has_uniforms;
    for (unsigned i = 0; i < ZINK_DESCRIPTOR_BASE_TYPES; i++)
@@ -701,7 +703,7 @@ zink_descriptor_shader_init(struct zink_screen *screen, struct zink_shader *shad
       binding->pImmutableSamplers = NULL;
       struct zink_descriptor_template *entry = &shader->precompile.db_template[num_bindings];
       entry->count = 1;
-      entry->offset = offsetof(struct zink_context, di.db.ubos[shader->nir->info.stage][0]);
+      entry->offset = offsetof(struct zink_context, di.db.ubos[shader->info.stage][0]);
       entry->stride = sizeof(VkDescriptorAddressInfoEXT);
       entry->db_size = screen->info.db_props.robustUniformBufferDescriptorSize;
       num_bindings++;
@@ -744,7 +746,7 @@ zink_descriptor_shader_init(struct zink_screen *screen, struct zink_shader *shad
    if (shader->bindless)
       num_dsl = screen->compact_descriptors ? ZINK_DESCRIPTOR_ALL_TYPES - ZINK_DESCRIPTOR_COMPACT : ZINK_DESCRIPTOR_ALL_TYPES;
    if (num_bindings || shader->bindless) {
-      dsl[shader->nir->info.stage == MESA_SHADER_FRAGMENT] = shader->precompile.dsl;
+      dsl[shader->info.stage == MESA_SHADER_FRAGMENT] = shader->precompile.dsl;
       if (shader->bindless)
          dsl[screen->desc_set_id[ZINK_DESCRIPTOR_BINDLESS]] = screen->bindless_layout;
    }
@@ -1343,7 +1345,7 @@ zink_descriptors_update(struct zink_context *ctx, bool is_compute)
             }
             if (!is_compute && ctx->dd.has_fbfetch) {
                uint64_t stage_offset = offset + ctx->dd.db_offset[MESA_SHADER_FRAGMENT + 1];
-               if (pg->dd.fbfetch) {
+               if (pg->dd.fbfetch && screen->info.db_props.inputAttachmentDescriptorSize) {
                   /* real fbfetch descriptor */
                   VkDescriptorGetInfoEXT info;
                   info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT;
@@ -1454,7 +1456,7 @@ zink_batch_descriptor_deinit(struct zink_screen *screen, struct zink_batch_state
       util_dynarray_fini(&bs->dd.pools[i]);
    }
    for (unsigned i = 0; i < 2; i++) {
-      if (bs->dd.push_pool[0].pool)
+      if (bs->dd.push_pool[i].pool)
          pool_destroy(screen, bs->dd.push_pool[i].pool);
       deinit_multi_pool_overflow(screen, &bs->dd.push_pool[i]);
    }

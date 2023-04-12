@@ -304,18 +304,16 @@ LLVMValueRef ac_build_buffer_load_byte(struct ac_llvm_context *ctx, LLVMValueRef
                                        LLVMValueRef voffset, LLVMValueRef soffset,
                                        unsigned cache_policy);
 
-LLVMValueRef ac_build_struct_tbuffer_load(struct ac_llvm_context *ctx, LLVMValueRef rsrc,
-                                          LLVMValueRef vindex, LLVMValueRef voffset,
-                                          LLVMValueRef soffset, unsigned num_channels,
-                                          unsigned dfmt, unsigned nfmt, unsigned cache_policy,
-                                          bool can_speculate);
-
-LLVMValueRef ac_build_opencoded_load_format(struct ac_llvm_context *ctx, unsigned log_size,
-                                            unsigned num_channels, unsigned format, bool reverse,
-                                            bool known_aligned, LLVMValueRef rsrc,
-                                            LLVMValueRef vindex, LLVMValueRef voffset,
-                                            LLVMValueRef soffset, unsigned cache_policy,
-                                            bool can_speculate);
+LLVMValueRef ac_build_safe_tbuffer_load(struct ac_llvm_context *ctx, LLVMValueRef rsrc,
+                                        LLVMValueRef vindex, LLVMValueRef voffset,
+                                        LLVMValueRef soffset, LLVMTypeRef channel_type,
+                                        const struct ac_vtx_format_info *vtx_info,
+                                        unsigned const_offset,
+                                        unsigned align_offset,
+                                        unsigned align_mul,
+                                        unsigned num_channels,
+                                        unsigned cache_policy,
+                                        bool can_speculate);
 
 void ac_build_buffer_store_short(struct ac_llvm_context *ctx, LLVMValueRef rsrc,
                                  LLVMValueRef vdata, LLVMValueRef voffset, LLVMValueRef soffset,
@@ -523,37 +521,6 @@ LLVMValueRef ac_build_exclusive_scan(struct ac_llvm_context *ctx, LLVMValueRef s
 LLVMValueRef ac_build_reduce(struct ac_llvm_context *ctx, LLVMValueRef src, nir_op op,
                              unsigned cluster_size);
 
-/**
- * Common arguments for a scan/reduce operation that accumulates per-wave
- * values across an entire workgroup, while respecting the order of waves.
- */
-struct ac_wg_scan {
-   gl_shader_stage stage;
-   bool enable_reduce;
-   bool enable_exclusive;
-   bool enable_inclusive;
-   nir_op op;
-   LLVMValueRef src; /* clobbered! */
-   LLVMValueRef result_reduce;
-   LLVMValueRef result_exclusive;
-   LLVMValueRef result_inclusive;
-   LLVMValueRef extra;
-   LLVMValueRef waveidx;
-   LLVMValueRef numwaves; /* only needed for "reduce" operations */
-
-   /* T addrspace(LDS) pointer to the same type as value, at least maxwaves entries */
-   LLVMValueRef scratch;
-   unsigned maxwaves;
-};
-
-void ac_build_wg_wavescan_top(struct ac_llvm_context *ctx, struct ac_wg_scan *ws);
-void ac_build_wg_wavescan_bottom(struct ac_llvm_context *ctx, struct ac_wg_scan *ws);
-void ac_build_wg_wavescan(struct ac_llvm_context *ctx, struct ac_wg_scan *ws);
-
-void ac_build_wg_scan_top(struct ac_llvm_context *ctx, struct ac_wg_scan *ws);
-void ac_build_wg_scan_bottom(struct ac_llvm_context *ctx, struct ac_wg_scan *ws);
-void ac_build_wg_scan(struct ac_llvm_context *ctx, struct ac_wg_scan *ws);
-
 LLVMValueRef ac_build_quad_swizzle(struct ac_llvm_context *ctx, LLVMValueRef src, unsigned lane0,
                                    unsigned lane1, unsigned lane2, unsigned lane3);
 
@@ -580,8 +547,6 @@ LLVMValueRef ac_build_atomic_rmw(struct ac_llvm_context *ctx, LLVMAtomicRMWBinOp
 
 LLVMValueRef ac_build_atomic_cmp_xchg(struct ac_llvm_context *ctx, LLVMValueRef ptr,
                                       LLVMValueRef cmp, LLVMValueRef val, const char *sync_scope);
-
-void ac_add_sinking_pass(LLVMPassManagerRef PM);
 
 void ac_export_mrt_z(struct ac_llvm_context *ctx, LLVMValueRef depth, LLVMValueRef stencil,
                      LLVMValueRef samplemask, LLVMValueRef mrt0_alpha, bool is_last,
@@ -637,9 +602,6 @@ struct ac_llvm_pointer ac_build_main(const struct ac_shader_args *args, struct a
                                      LLVMTypeRef ret_type, LLVMModuleRef module);
 void ac_build_s_endpgm(struct ac_llvm_context *ctx);
 
-void ac_build_triangle_strip_indices_to_triangle(struct ac_llvm_context *ctx, LLVMValueRef is_odd,
-                                                 LLVMValueRef flatshade_first,
-                                                 LLVMValueRef index[3]);
 LLVMValueRef ac_build_is_inf_or_nan(struct ac_llvm_context *ctx, LLVMValueRef a);
 
 void ac_build_dual_src_blend_swizzle(struct ac_llvm_context *ctx,

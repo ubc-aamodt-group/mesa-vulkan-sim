@@ -328,8 +328,8 @@ unop("fddy_coarse", tfloat, "0.0")
 
 # Floating point pack and unpack operations.
 
-def pack_2x16(fmt):
-   unop_horiz("pack_" + fmt + "_2x16", 1, tuint32, 2, tfloat32, """
+def pack_2x16(fmt, in_type):
+   unop_horiz("pack_" + fmt + "_2x16", 1, tuint32, 2, in_type, """
 dst.x = (uint32_t) pack_fmt_1x16(src0.x);
 dst.x |= ((uint32_t) pack_fmt_1x16(src0.y)) << 16;
 """.replace("fmt", fmt))
@@ -357,11 +357,11 @@ dst.w = unpack_fmt_1x8((uint8_t)(src0.x >> 24));
 """.replace("fmt", fmt))
 
 
-pack_2x16("snorm")
+pack_2x16("snorm", tfloat)
 pack_4x8("snorm")
-pack_2x16("unorm")
+pack_2x16("unorm", tfloat)
 pack_4x8("unorm")
-pack_2x16("half")
+pack_2x16("half", tfloat32)
 unpack_2x16("snorm")
 unpack_4x8("snorm")
 unpack_2x16("unorm")
@@ -498,7 +498,7 @@ for (int bit = bit_size - 1; bit >= 0; bit--) {
 }
 """)
 
-unop_convert("ifind_msb_rev", tint32, tint, """
+unop("ifind_msb_rev", tint32, """
 dst = -1;
 /* We are looking for the highest bit that's not the same as the sign bit. */
 uint32_t sign = src0 & 0x80000000u;

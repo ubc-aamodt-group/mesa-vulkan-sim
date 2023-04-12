@@ -37,6 +37,7 @@ struct anv_cmd_buffer;
 struct anv_device;
 struct anv_queue;
 struct anv_query_pool;
+struct anv_utrace_submit;
 
 struct anv_kmd_backend {
    /*
@@ -46,12 +47,15 @@ struct anv_kmd_backend {
    uint32_t (*gem_create)(struct anv_device *device,
                           const struct intel_memory_class_instance **regions,
                           uint16_t num_regions, uint64_t size,
-                          enum anv_bo_alloc_flags alloc_flags);
+                          enum anv_bo_alloc_flags alloc_flags,
+                          uint64_t *actual_size);
    void (*gem_close)(struct anv_device *device, uint32_t handle);
    /* Returns MAP_FAILED on error */
    void *(*gem_mmap)(struct anv_device *device, struct anv_bo *bo,
                      uint64_t offset, uint64_t size,
                      VkMemoryPropertyFlags property_flags);
+   int (*gem_vm_bind)(struct anv_device *device, struct anv_bo *bo);
+   int (*gem_vm_unbind)(struct anv_device *device, struct anv_bo *bo);
    VkResult (*execute_simple_batch)(struct anv_queue *queue,
                                     struct anv_bo *batch_bo,
                                     uint32_t batch_bo_size);
@@ -64,10 +68,13 @@ struct anv_kmd_backend {
                                  const struct vk_sync_signal *signals,
                                  struct anv_query_pool *perf_query_pool,
                                  uint32_t perf_query_pass);
+   VkResult (*queue_exec_trace)(struct anv_queue *queue,
+                                struct anv_utrace_submit *submit);
 };
 
 const struct anv_kmd_backend *anv_kmd_backend_get(enum intel_kmd_type type);
 
 /* Internal functions, should only be called by anv_kmd_backend_get() */
 const struct anv_kmd_backend *anv_i915_kmd_backend_get(void);
+const struct anv_kmd_backend *anv_xe_kmd_backend_get(void);
 const struct anv_kmd_backend *anv_stub_kmd_backend_get(void);

@@ -37,6 +37,8 @@
 
 #include "ir3_compiler.h"
 
+BEGINC;
+
 /* driver param indices: */
 enum ir3_driver_param {
    /* compute shader driver params: */
@@ -744,7 +746,7 @@ struct ir3_shader_variant {
 
          /** The number of vertices in the TCS output patch. */
          uint8_t tcs_vertices_out;
-         unsigned spacing:2; /*gl_tess_spacing*/
+         enum gl_tess_spacing spacing:2; /*gl_tess_spacing*/
 
          /** Is the vertex order counterclockwise? */
          bool ccw:1;
@@ -767,6 +769,7 @@ struct ir3_shader_variant {
          bool early_fragment_tests : 1;
          bool color_is_dual_source : 1;
          bool uses_fbfetch_output  : 1;
+         bool fbfetch_coherent     : 1;
       } fs;
       struct {
          unsigned req_input_mem;
@@ -1103,7 +1106,7 @@ ir3_link_shaders(struct ir3_shader_linkage *l,
       if (fs->inputs[j].inloc >= fs->total_in)
          continue;
 
-      k = ir3_find_output(vs, fs->inputs[j].slot);
+      k = ir3_find_output(vs, (gl_varying_slot)fs->inputs[j].slot);
 
       if (k < 0 && fs->inputs[j].slot == VARYING_SLOT_PRIMITIVE_ID) {
          l->primid_loc = fs->inputs[j].inloc;
@@ -1192,5 +1195,7 @@ ir3_shader_branchstack_hw(const struct ir3_shader_variant *v)
       return 0;
    }
 }
+
+ENDC;
 
 #endif /* IR3_SHADER_H_ */

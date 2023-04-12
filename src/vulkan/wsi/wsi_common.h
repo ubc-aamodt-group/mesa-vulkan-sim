@@ -51,6 +51,11 @@ extern const struct vk_device_entrypoint_table wsi_device_entrypoints;
 #define VK_STRUCTURE_TYPE_WSI_SURFACE_SUPPORTED_COUNTERS_MESA (VkStructureType)1000001005
 #define VK_STRUCTURE_TYPE_WSI_MEMORY_SIGNAL_SUBMIT_INFO_MESA (VkStructureType)1000001006
 
+#define VK_STRUCTURE_TYPE_WSI_IMAGE_CREATE_INFO_MESA_cast struct wsi_image_create_info
+#define VK_STRUCTURE_TYPE_WSI_MEMORY_ALLOCATE_INFO_MESA_cast struct wsi_memory_allocate_info
+#define VK_STRUCTURE_TYPE_WSI_SURFACE_SUPPORTED_COUNTERS_MESA_cast struct wsi_surface_supported_counters
+#define VK_STRUCTURE_TYPE_WSI_MEMORY_SIGNAL_SUBMIT_INFO_MESA_cast struct wsi_memory_signal_submit_info
+
 /* This is always chained to VkImageCreateInfo when a wsi image is created.
  * It indicates that the image can be transitioned to/from
  * VK_IMAGE_LAYOUT_PRESENT_SRC_KHR.
@@ -91,7 +96,7 @@ struct vk_instance;
 
 struct driOptionCache;
 
-#define VK_ICD_WSI_PLATFORM_MAX (VK_ICD_WSI_PLATFORM_DISPLAY + 1)
+#define VK_ICD_WSI_PLATFORM_MAX (VK_ICD_WSI_PLATFORM_HEADLESS + 1)
 
 struct wsi_device {
    /* Allocator for the instance */
@@ -125,6 +130,9 @@ struct wsi_device {
 
    /* List of fences to signal when hotplug event happens. */
    struct list_head hotplug_fences;
+
+   /* Create headless swapchains. */
+   bool force_headless_swapchain;
 
    struct {
       /* Override the minimum number of images on the swapchain.

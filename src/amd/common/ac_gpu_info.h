@@ -121,6 +121,7 @@ struct radeon_info {
    bool has_cs_regalloc_hang_bug;
    bool has_32bit_predication;
    bool has_3d_cube_border_color_mipmap;
+   bool has_image_opcodes;
    bool never_stop_sq_perf_counters;
    bool has_sqtt_rb_harvest_bug;
    bool has_sqtt_auto_flush_mode_bug;
@@ -210,6 +211,7 @@ struct radeon_info {
    uint32_t drm_major; /* version */
    uint32_t drm_minor;
    uint32_t drm_patchlevel;
+   uint8_t max_submitted_ibs[AMD_NUM_IP_TYPES];
    bool is_amdgpu;
    bool has_userptr;
    bool has_syncobj;

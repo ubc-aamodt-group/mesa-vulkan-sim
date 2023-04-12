@@ -876,9 +876,6 @@ typedef struct nir_register {
 
    /** set of nir_dests where this register is defined (written to) */
    struct list_head defs;
-
-   /** set of nir_ifs where this register is used as a condition */
-   struct list_head if_uses;
 } nir_register;
 
 #define nir_foreach_register(reg, reg_list) \
@@ -952,9 +949,6 @@ typedef struct nir_ssa_def {
    /** set of nir_instrs where this register is used (read from) */
    struct list_head uses;
 
-   /** set of nir_ifs where this register is used as a condition */
-   struct list_head if_uses;
-
    /** generic SSA definition index. */
    unsigned index;
 
@@ -1008,7 +1002,22 @@ typedef struct nir_src {
    };
 
    bool is_ssa;
+   bool is_if;
 } nir_src;
+
+static inline void
+nir_src_set_parent_instr(nir_src *src, nir_instr *parent_instr)
+{
+   src->is_if = false;
+   src->parent_instr = parent_instr;
+}
+
+static inline void
+nir_src_set_parent_if(nir_src *src, struct nir_if *parent_if)
+{
+   src->is_if = true;
+   src->parent_if = parent_if;
+}
 
 static inline nir_src
 nir_src_init(void)
@@ -1019,17 +1028,36 @@ nir_src_init(void)
 
 #define NIR_SRC_INIT nir_src_init()
 
-#define nir_foreach_use(src, reg_or_ssa_def) \
+#define nir_foreach_use_including_if(src, reg_or_ssa_def) \
    list_for_each_entry(nir_src, src, &(reg_or_ssa_def)->uses, use_link)
 
-#define nir_foreach_use_safe(src, reg_or_ssa_def) \
+#define nir_foreach_use_including_if_safe(src, reg_or_ssa_def) \
    list_for_each_entry_safe(nir_src, src, &(reg_or_ssa_def)->uses, use_link)
 
+#define nir_foreach_use(src, reg_or_ssa_def) \
+   nir_foreach_use_including_if(src, reg_or_ssa_def) \
+      if (!src->is_if)
+
+#define nir_foreach_use_safe(src, reg_or_ssa_def) \
+   nir_foreach_use_including_if_safe(src, reg_or_ssa_def) \
+      if (!src->is_if)
+
 #define nir_foreach_if_use(src, reg_or_ssa_def) \
-   list_for_each_entry(nir_src, src, &(reg_or_ssa_def)->if_uses, use_link)
+   nir_foreach_use_including_if(src, reg_or_ssa_def) \
+      if (src->is_if)
 
 #define nir_foreach_if_use_safe(src, reg_or_ssa_def) \
-   list_for_each_entry_safe(nir_src, src, &(reg_or_ssa_def)->if_uses, use_link)
+   nir_foreach_use_including_if_safe(src, reg_or_ssa_def) \
+      if (src->is_if)
+
+static inline bool
+nir_ssa_def_used_by_if(const nir_ssa_def *def)
+{
+   nir_foreach_if_use(_, def)
+      return true;
+
+   return false;
+}
 
 typedef struct {
    union {
@@ -3411,6 +3439,10 @@ typedef struct nir_shader_compiler_options {
    bool lower_ifind_msb;
    /** Lowers ifind_msb and ufind_msb to reverse variants */
    bool lower_find_msb_to_reverse;
+   /** Lowers ifind_msb to uclz and logic ops*/
+   bool lower_ifind_msb_to_uclz;
+   /** Lowers ufind_msb to 31-uclz */
+   bool lower_ufind_msb_to_uclz;
    /** Lowers find_lsb to ufind_msb and logic ops */
    bool lower_find_lsb;
    bool lower_uadd_carry;
@@ -4104,9 +4136,9 @@ nir_after_block_before_jump(nir_block *block)
 }
 
 static inline nir_cursor
-nir_before_src(nir_src *src, bool is_if_condition)
+nir_before_src(nir_src *src)
 {
-   if (is_if_condition) {
+   if (src->is_if) {
       nir_block *prev_block =
          nir_cf_node_as_block(nir_cf_node_prev(&src->parent_if->cf_node));
       assert(!nir_block_ends_in_jump(prev_block));
@@ -4310,29 +4342,26 @@ bool nir_srcs_equal(nir_src src1, nir_src src2);
 bool nir_instrs_equal(const nir_instr *instr1, const nir_instr *instr2);
 
 static inline void
-nir_instr_rewrite_src_ssa(ASSERTED nir_instr *instr,
-                          nir_src *src, nir_ssa_def *new_ssa)
+nir_src_rewrite_ssa(nir_src *src, nir_ssa_def *new_ssa)
 {
-   assert(src->parent_instr == instr);
    assert(src->is_ssa && src->ssa);
+   assert(src->is_if ? (src->parent_if != NULL) : (src->parent_instr != NULL));
    list_del(&src->use_link);
    src->ssa = new_ssa;
    list_addtail(&src->use_link, &new_ssa->uses);
 }
 
+static inline void
+nir_instr_rewrite_src_ssa(ASSERTED nir_instr *instr,
+                          nir_src *src, nir_ssa_def *new_ssa)
+{
+   assert(!src->is_if);
+   assert(src->parent_instr == instr);
+   nir_src_rewrite_ssa(src, new_ssa);
+}
+
 void nir_instr_rewrite_src(nir_instr *instr, nir_src *src, nir_src new_src);
 void nir_instr_move_src(nir_instr *dest_instr, nir_src *dest, nir_src *src);
-
-static inline void
-nir_if_rewrite_condition_ssa(ASSERTED nir_if *if_stmt,
-                             nir_src *src, nir_ssa_def *new_ssa)
-{
-   assert(src->parent_if == if_stmt);
-   assert(src->is_ssa && src->ssa);
-   list_del(&src->use_link);
-   src->ssa = new_ssa;
-   list_addtail(&src->use_link, &new_ssa->if_uses);
-}
 
 void nir_if_rewrite_condition(nir_if *if_stmt, nir_src new_src);
 void nir_instr_rewrite_dest(nir_instr *instr, nir_dest *dest,
@@ -4363,7 +4392,7 @@ nir_component_mask_t nir_ssa_def_components_read(const nir_ssa_def *def);
 static inline bool
 nir_ssa_def_is_unused(nir_ssa_def *ssa)
 {
-   return list_is_empty(&ssa->uses) && list_is_empty(&ssa->if_uses);
+   return list_is_empty(&ssa->uses);
 }
 
 
@@ -5087,7 +5116,10 @@ nir_shader * nir_create_passthrough_tcs(const nir_shader_compiler_options *optio
 nir_shader * nir_create_passthrough_gs(const nir_shader_compiler_options *options,
                                        const nir_shader *prev_stage,
                                        enum shader_prim primitive_type,
-                                       unsigned vertices);
+                                       int flat_interp_mask_offset,
+                                       int last_pv_vert_offset,
+                                       bool emulate_edgeflags,
+                                       bool force_line_strip_out);
 
 bool nir_lower_fragcolor(nir_shader *shader, unsigned max_cbufs);
 bool nir_lower_fragcoord_wtrans(nir_shader *shader);

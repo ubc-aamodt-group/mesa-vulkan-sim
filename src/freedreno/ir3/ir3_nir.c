@@ -349,6 +349,7 @@ ir3_finalize_nir(struct ir3_compiler *compiler, nir_shader *s)
    if (s->info.stage == MESA_SHADER_GEOMETRY)
       NIR_PASS_V(s, ir3_nir_lower_gs);
 
+   NIR_PASS_V(s, nir_lower_frexp);
    NIR_PASS_V(s, nir_lower_amul, ir3_glsl_type_size);
 
    OPT_V(s, nir_lower_regs_to_ssa);
@@ -472,6 +473,7 @@ ir3_nir_post_finalize(struct ir3_shader *shader)
       NIR_PASS_V(s, ir3_nir_lower_load_barycentric_at_offset);
       NIR_PASS_V(s, ir3_nir_move_varying_inputs);
       NIR_PASS_V(s, nir_lower_fb_read);
+      NIR_PASS_V(s, ir3_nir_lower_layer_id);
    }
 
    if (compiler->gen >= 6 && s->info.stage == MESA_SHADER_FRAGMENT &&

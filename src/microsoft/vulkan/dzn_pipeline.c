@@ -93,12 +93,13 @@ dzn_cached_blob_serialize(struct vk_pipeline_cache_object *object,
 }
 
 static void
-dzn_cached_blob_destroy(struct vk_pipeline_cache_object *object)
+dzn_cached_blob_destroy(struct vk_device *device,
+                        struct vk_pipeline_cache_object *object)
 {
    struct dzn_cached_blob *shader =
       container_of(object, struct dzn_cached_blob, base);
 
-   vk_free(&shader->base.device->alloc, shader);
+   vk_free(&device->alloc, shader);
 }
 
 static struct vk_pipeline_cache_object *
@@ -108,17 +109,15 @@ dzn_cached_blob_create(struct vk_device *device,
                        size_t data_size);
 
 static struct vk_pipeline_cache_object *
-dzn_cached_blob_deserialize(struct vk_device *device,
-                                   const void *key_data,
-                                   size_t key_size,
-                                   struct blob_reader *blob)
+dzn_cached_blob_deserialize(struct vk_pipeline_cache *cache,
+                            const void *key_data, size_t key_size,
+                            struct blob_reader *blob)
 {
    size_t data_size = blob->end - blob->current;
    assert(key_size == SHA1_DIGEST_LENGTH);
 
-   return dzn_cached_blob_create(device, key_data,
-                                 blob_read_bytes(blob, data_size),
-                                 data_size);
+   return dzn_cached_blob_create(cache->base.device, key_data,
+                                 blob_read_bytes(blob, data_size), data_size);
 }
 
 const struct vk_pipeline_cache_object_ops dzn_cached_blob_ops = {
@@ -243,7 +242,8 @@ dzn_pipeline_get_nir_shader(struct dzn_device *device,
          .y_mask = options->y_flip_mask,
          .z_mask = options->z_flip_mask,
       },
-      .read_only_images_as_srvs = true,
+      .declared_read_only_images_as_srvs = !device->bindless,
+      .inferred_read_only_images_as_srvs = !device->bindless,
       .force_sample_rate_shading = options->force_sample_rate_shading,
       .lower_view_index = options->lower_view_index,
       .lower_view_index_to_rt_layer = options->lower_view_index_to_rt_layer,
@@ -297,8 +297,33 @@ adjust_resource_index_binding(struct nir_builder *builder, nir_instr *instr,
    return true;
 }
 
+static void
+adjust_to_bindless_cb(struct dxil_spirv_binding_remapping *inout, void *context)
+{
+   const struct dzn_pipeline_layout *layout = context;
+   assert(inout->descriptor_set < layout->set_count);
+   uint32_t new_binding = layout->binding_translation[inout->descriptor_set].base_reg[inout->binding];
+   switch (layout->binding_translation[inout->descriptor_set].binding_class[inout->binding]) {
+   case DZN_PIPELINE_BINDING_DYNAMIC_BUFFER:
+      inout->descriptor_set = layout->set_count;
+      FALLTHROUGH;
+   case DZN_PIPELINE_BINDING_STATIC_SAMPLER:
+      if (inout->is_sampler) {
+         inout->descriptor_set = ~0;
+         break;
+      }
+      FALLTHROUGH;
+   case DZN_PIPELINE_BINDING_NORMAL:
+      inout->binding = new_binding;
+      break;
+   default:
+      unreachable("Invalid binding type");
+   }
+}
+
 static bool
 adjust_var_bindings(nir_shader *shader,
+                    struct dzn_device *device,
                     const struct dzn_pipeline_layout *layout,
                     uint8_t *bindings_hash)
 {
@@ -322,7 +347,8 @@ adjust_var_bindings(nir_shader *shader,
          continue;
 
       assert(b < layout->binding_translation[s].binding_count);
-      var->data.binding = layout->binding_translation[s].base_reg[b];
+      if (!device->bindless)
+         var->data.binding = layout->binding_translation[s].base_reg[b];
 
       if (bindings_hash) {
          _mesa_sha1_update(&bindings_hash_ctx, &s, sizeof(s));
@@ -334,8 +360,25 @@ adjust_var_bindings(nir_shader *shader,
    if (bindings_hash)
       _mesa_sha1_final(&bindings_hash_ctx, bindings_hash);
 
-   return nir_shader_instructions_pass(shader, adjust_resource_index_binding,
-                                       nir_metadata_all, (void *)layout);
+   if (device->bindless) {
+      struct dxil_spirv_nir_lower_bindless_options options = {
+         .dynamic_buffer_binding = layout->dynamic_buffer_count ? layout->set_count : ~0,
+         .num_descriptor_sets = layout->set_count,
+         .callback_context = (void *)layout,
+         .remap_binding = adjust_to_bindless_cb
+      };
+      bool ret = dxil_spirv_nir_lower_bindless(shader, &options);
+      /* We skipped remapping variable bindings in the hashing loop, but if there's static
+       * samplers still declared, we need to remap those now. */
+      nir_foreach_variable_with_modes(var, shader, nir_var_uniform) {
+         assert(glsl_type_is_sampler(glsl_without_array(var->type)));
+         var->data.binding = layout->binding_translation[var->data.descriptor_set].base_reg[var->data.binding];
+      }
+      return ret;
+   } else {
+      return nir_shader_instructions_pass(shader, adjust_resource_index_binding,
+                                          nir_metadata_all, (void *)layout);
+   }
 }
 
 enum dxil_shader_model
@@ -405,7 +448,7 @@ dzn_pipeline_compile_shader(struct dzn_device *device,
 
    if (!res) {
       if (err) {
-         fprintf(stderr,
+         mesa_loge(
                "== VALIDATION ERROR =============================================\n"
                "%s\n"
                "== END ==========================================================\n",
@@ -500,7 +543,7 @@ dzn_pipeline_cache_lookup_dxil_shader(struct vk_pipeline_cache *cache,
    *stage = info->stage;
 
 out:
-   vk_pipeline_cache_object_unref(cache_obj);
+   vk_pipeline_cache_object_unref(cache->base.device, cache_obj);
    return ret;
 }
 
@@ -527,7 +570,7 @@ dzn_pipeline_cache_add_dxil_shader(struct vk_pipeline_cache *cache,
    memcpy(info->data, bc->pShaderBytecode, bc->BytecodeLength);
 
    cache_obj = vk_pipeline_cache_add_object(cache, cache_obj);
-   vk_pipeline_cache_object_unref(cache_obj);
+   vk_pipeline_cache_object_unref(cache->base.device, cache_obj);
 }
 
 struct dzn_cached_gfx_pipeline_header {
@@ -603,7 +646,7 @@ dzn_pipeline_cache_lookup_gfx_pipeline(struct dzn_graphics_pipeline *pipeline,
 
    *cache_hit = true;
 
-   vk_pipeline_cache_object_unref(cache_obj);
+   vk_pipeline_cache_object_unref(cache->base.device, cache_obj);
    return VK_SUCCESS;
 }
 
@@ -658,7 +701,7 @@ dzn_pipeline_cache_add_gfx_pipeline(struct dzn_graphics_pipeline *pipeline,
    }
 
    cache_obj = vk_pipeline_cache_add_object(cache, cache_obj);
-   vk_pipeline_cache_object_unref(cache_obj);
+   vk_pipeline_cache_object_unref(cache->base.device, cache_obj);
 }
 
 static void
@@ -730,6 +773,13 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       active_stage_mask |= BITFIELD_BIT(stage);
    }
 
+   bool use_gs_for_polygon_mode_point =
+      info->pRasterizationState &&
+      info->pRasterizationState->polygonMode == VK_POLYGON_MODE_POINT &&
+      !(active_stage_mask & (1 << MESA_SHADER_GEOMETRY));
+   if (use_gs_for_polygon_mode_point)
+      last_raster_stage = MESA_SHADER_GEOMETRY;
+
    enum dxil_spirv_yz_flip_mode yz_flip_mode = DXIL_SPIRV_YZ_FLIP_NONE;
    uint16_t y_flip_mask = 0, z_flip_mask = 0;
    bool lower_view_index =
@@ -772,6 +822,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       _mesa_sha1_update(&pipeline_hash_ctx, &z_flip_mask, sizeof(z_flip_mask));
       _mesa_sha1_update(&pipeline_hash_ctx, &force_sample_rate_shading, sizeof(force_sample_rate_shading));
       _mesa_sha1_update(&pipeline_hash_ctx, &lower_view_index, sizeof(lower_view_index));
+      _mesa_sha1_update(&pipeline_hash_ctx, &use_gs_for_polygon_mode_point, sizeof(use_gs_for_polygon_mode_point));
 
       u_foreach_bit(stage, active_stage_mask) {
          vk_pipeline_hash_shader_stage(stages[stage].info, NULL, stages[stage].spirv_hash);
@@ -841,6 +892,37 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
          return ret;
    }
 
+   if (use_gs_for_polygon_mode_point) {
+      /* TODO: Cache; handle TES */
+      pipeline->templates.shaders[MESA_SHADER_GEOMETRY].nir =
+         dzn_nir_polygon_point_mode_gs(pipeline->templates.shaders[MESA_SHADER_VERTEX].nir,
+                                       info->pRasterizationState->cullMode,
+                                       info->pRasterizationState->frontFace == VK_FRONT_FACE_COUNTER_CLOCKWISE);
+
+      struct dxil_spirv_runtime_conf conf = {
+         .runtime_data_cbv = {
+            .register_space = DZN_REGISTER_SPACE_SYSVALS,
+            .base_shader_register = 0,
+         },
+         .yz_flip = {
+            .mode = yz_flip_mode,
+            .y_mask = y_flip_mask,
+            .z_mask = z_flip_mask,
+         },
+      };
+
+      bool requires_runtime_data;
+      NIR_PASS_V(pipeline->templates.shaders[MESA_SHADER_GEOMETRY].nir, dxil_spirv_nir_lower_yz_flip,
+                 &conf, &requires_runtime_data);
+
+      active_stage_mask |= (1 << MESA_SHADER_GEOMETRY);
+      memcpy(stages[MESA_SHADER_GEOMETRY].spirv_hash, stages[MESA_SHADER_VERTEX].spirv_hash, SHA1_DIGEST_LENGTH);
+
+      if ((active_stage_mask & (1 << MESA_SHADER_FRAGMENT)) &&
+          BITSET_TEST(pipeline->templates.shaders[MESA_SHADER_FRAGMENT].nir->info.system_values_read, SYSTEM_VALUE_FRONT_FACE))
+         NIR_PASS_V(pipeline->templates.shaders[MESA_SHADER_FRAGMENT].nir, dxil_nir_forward_front_face);
+   }
+
    /* Third step: link those NIR shaders. We iterate in reverse order
     * so we can eliminate outputs that are never read by the next stage.
     */
@@ -872,7 +954,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
    u_foreach_bit(stage, active_stage_mask) {
       uint8_t bindings_hash[SHA1_DIGEST_LENGTH];
 
-      NIR_PASS_V(pipeline->templates.shaders[stage].nir, adjust_var_bindings, layout,
+      NIR_PASS_V(pipeline->templates.shaders[stage].nir, adjust_var_bindings, device, layout,
                  cache ? bindings_hash : NULL);
 
       if (cache) {
@@ -889,8 +971,10 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
             _mesa_sha1_update(&dxil_hash_ctx, &z_flip_mask, sizeof(z_flip_mask));
          }
 
-         if (stage == MESA_SHADER_FRAGMENT)
+         if (stage == MESA_SHADER_FRAGMENT) {
             _mesa_sha1_update(&dxil_hash_ctx, &force_sample_rate_shading, sizeof(force_sample_rate_shading));
+            _mesa_sha1_update(&dxil_hash_ctx, &use_gs_for_polygon_mode_point, sizeof(use_gs_for_polygon_mode_point));
+         }
 
          _mesa_sha1_update(&dxil_hash_ctx, stages[stage].spirv_hash, sizeof(stages[stage].spirv_hash));
          _mesa_sha1_update(&dxil_hash_ctx, stages[stage].link_hashes[0], sizeof(stages[stage].link_hashes[0]));
@@ -1166,6 +1250,9 @@ translate_polygon_mode(VkPolygonMode in)
    switch (in) {
    case VK_POLYGON_MODE_FILL: return D3D12_FILL_MODE_SOLID;
    case VK_POLYGON_MODE_LINE: return D3D12_FILL_MODE_WIREFRAME;
+   case VK_POLYGON_MODE_POINT:
+      /* This is handled elsewhere */
+      return D3D12_FILL_MODE_SOLID;
    default: unreachable("Unsupported polygon mode");
    }
 }
@@ -1603,6 +1690,7 @@ dzn_pipeline_init(struct dzn_pipeline *pipeline,
    pipeline->root.sets_param_count = layout->root.sets_param_count;
    pipeline->root.sysval_cbv_param_idx = layout->root.sysval_cbv_param_idx;
    pipeline->root.push_constant_cbv_param_idx = layout->root.push_constant_cbv_param_idx;
+   pipeline->root.dynamic_buffer_bindless_param_idx = layout->root.dynamic_buffer_bindless_param_idx;
    STATIC_ASSERT(sizeof(pipeline->root.type) == sizeof(layout->root.type));
    memcpy(pipeline->root.type, layout->root.type, sizeof(pipeline->root.type));
    pipeline->root.sig = layout->root.sig;
@@ -1613,6 +1701,8 @@ dzn_pipeline_init(struct dzn_pipeline *pipeline,
 
    STATIC_ASSERT(sizeof(layout->sets) == sizeof(pipeline->sets));
    memcpy(pipeline->sets, layout->sets, sizeof(pipeline->sets));
+   pipeline->set_count = layout->set_count;
+   pipeline->dynamic_buffer_count = layout->dynamic_buffer_count;
    vk_object_base_init(&device->vk, &pipeline->base, VK_OBJECT_TYPE_PIPELINE);
 
    ASSERTED uint32_t max_streamsz =
@@ -1741,9 +1831,15 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
             break;
          case VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK:
             pipeline->zsa.stencil_test.dynamic_compare_mask = true;
+            ret = dzn_graphics_pipeline_prepare_for_variants(device, pipeline);
+            if (ret)
+               goto out;
             break;
          case VK_DYNAMIC_STATE_STENCIL_WRITE_MASK:
             pipeline->zsa.stencil_test.dynamic_write_mask = true;
+            ret = dzn_graphics_pipeline_prepare_for_variants(device, pipeline);
+            if (ret)
+               goto out;
             break;
          case VK_DYNAMIC_STATE_BLEND_CONSTANTS:
             pipeline->blend.dynamic_constants = true;
@@ -2237,7 +2333,7 @@ dzn_pipeline_cache_lookup_compute_pipeline(struct vk_pipeline_cache *cache,
    *cache_hit = true;
 
 out:
-   vk_pipeline_cache_object_unref(cache_obj);
+   vk_pipeline_cache_object_unref(cache->base.device, cache_obj);
    return ret;
 }
 
@@ -2257,7 +2353,7 @@ dzn_pipeline_cache_add_compute_pipeline(struct vk_pipeline_cache *cache,
    memcpy((void *)cached_blob->data, dxil_hash, SHA1_DIGEST_LENGTH);
 
    cache_obj = vk_pipeline_cache_add_object(cache, cache_obj);
-   vk_pipeline_cache_object_unref(cache_obj);
+   vk_pipeline_cache_object_unref(cache->base.device, cache_obj);
 }
 
 static VkResult
@@ -2300,7 +2396,7 @@ dzn_compute_pipeline_compile_shader(struct dzn_device *device,
 
    uint8_t bindings_hash[SHA1_DIGEST_LENGTH], dxil_hash[SHA1_DIGEST_LENGTH];
 
-   NIR_PASS_V(nir, adjust_var_bindings, layout, cache ? bindings_hash : NULL);
+   NIR_PASS_V(nir, adjust_var_bindings, device, layout, cache ? bindings_hash : NULL);
 
    if (cache) {
       struct mesa_sha1 dxil_hash_ctx;

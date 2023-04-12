@@ -147,9 +147,9 @@ vsim_compile_ray_tracing_pipeline(
          printf("LVP: Translating shader %d (type %d)\n", i, stages[i].stage);
          translate_nir_to_ptx(stages[i].nir, shaderPaths[i]);
       }
-      pipeline->pipeline_nir[i] = ralloc(NULL, struct lvp_pipeline_nir);
-      pipeline->pipeline_nir[i]->nir = stages[i].nir;
-      pipeline->pipeline_nir[i]->ref_cnt = 1;
+      pipeline->shaders[i].pipeline_nir = ralloc(NULL, struct lvp_pipeline_nir);
+      pipeline->shaders[i].pipeline_nir->nir = stages[i].nir;
+      pipeline->shaders[i].pipeline_nir->ref_cnt = 1;
    }
 
    // Vulkan-Sim additions

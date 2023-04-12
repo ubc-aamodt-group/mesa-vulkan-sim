@@ -24,15 +24,15 @@ test(
     'general_ir_test',
     ['array_refcount_test.cpp', 'builtin_variable_test.cpp',
      'general_ir_test.cpp', 'lower_int64_test.cpp',
-     'opt_add_neg_to_sub_test.cpp', ir_expression_operation_h],
+     'opt_add_neg_to_sub_test.cpp', 'test_gl_lower_mediump.cpp', ir_expression_operation_h],
     cpp_args : [cpp_msvc_compat_args],
     gnu_symbol_visibility : 'hidden',
     include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux, inc_glsl],
     link_with : [libglsl, libglsl_standalone, libglsl_util],
-    dependencies : [dep_clock, dep_thread, idep_gtest, idep_mesautil],
+    dependencies : [dep_clock, dep_thread, idep_gtest, idep_mesautil, idep_nir],
   ),
   suite : ['compiler', 'glsl'],
-  protocol : gtest_test_protocol,
+  protocol : 'gtest',
 )
 
 test(
@@ -47,7 +47,7 @@ test(
     dependencies : [dep_thread, idep_gtest, idep_mesautil],
   ),
   suite : ['compiler', 'glsl'],
-  protocol : gtest_test_protocol,
+  protocol : 'gtest',
 )
 
 test(
@@ -62,7 +62,7 @@ test(
     dependencies : [dep_thread, idep_gtest],
   ),
   suite : ['compiler', 'glsl'],
-  protocol : gtest_test_protocol,
+  protocol : 'gtest',
 )
 
 # Meson can't auto-skip these on cross builds because of the python wrapper

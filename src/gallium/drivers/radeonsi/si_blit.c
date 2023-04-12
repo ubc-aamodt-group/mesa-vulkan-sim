@@ -1058,10 +1058,6 @@ bool si_msaa_resolve_blit_via_CB(struct pipe_context *ctx, const struct pipe_bli
    struct pipe_resource *tmp, templ;
    struct pipe_blit_info blit;
 
-   /* Gfx11 doesn't have CB_RESOLVE. */
-   if (sctx->gfx_level >= GFX11)
-      return false;
-
    /* Check basic requirements for hw resolve. */
    if (!(info->src.resource->nr_samples > 1 && info->dst.resource->nr_samples <= 1 &&
          !util_format_is_pure_integer(format) && !util_format_is_depth_or_stencil(format) &&
@@ -1234,7 +1230,7 @@ static void si_blit(struct pipe_context *ctx, const struct pipe_blit_info *info)
       return;
    }
 
-   if (si_compute_blit(sctx, info))
+   if (si_compute_blit(sctx, info, false))
       return;
 
    si_gfx_blit(ctx, info);
@@ -1329,8 +1325,10 @@ void si_decompress_dcc(struct si_context *sctx, struct si_texture *tex)
 
    /* If graphics is disabled, we can't decompress DCC, but it shouldn't
     * be compressed either. The caller should simply discard it.
+    * If blitter is running, we can't decompress DCC either because it
+    * will cause a blitter recursion.
     */
-   if (!tex->surface.meta_offset || !sctx->has_graphics)
+   if (!tex->surface.meta_offset || !sctx->has_graphics || sctx->blitter_running)
       return;
 
    si_blit_decompress_color(sctx, tex, 0, tex->buffer.b.b.last_level, 0,

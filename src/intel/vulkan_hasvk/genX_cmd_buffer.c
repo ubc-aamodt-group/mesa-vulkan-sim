@@ -813,7 +813,7 @@ genX(copy_fast_clear_dwords)(struct anv_cmd_buffer *cmd_buffer,
     *
     * It is unclear exactly why this hang occurs.  Both MI commands come with
     * warnings about the 3D pipeline but that doesn't seem to fully explain
-    * it.  My (Jason's) best theory is that it has something to do with the
+    * it.  My (Faith's) best theory is that it has something to do with the
     * fact that we're using a GPU state register as our temporary and that
     * something with reading/writing it is causing problems.
     *
@@ -1726,11 +1726,6 @@ genX(emit_apply_pipe_flushes)(struct anv_batch *batch,
          pipe.DCFlushEnable |= bits & ANV_PIPE_DATA_CACHE_FLUSH_BIT;
          pipe.RenderTargetCacheFlushEnable =
             bits & ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT;
-
-         /* Wa_1409600907: "PIPE_CONTROL with Depth Stall Enable bit must
-          * be set with any PIPE_CONTROL with Depth Flush Enable bit set.
-          */
-         pipe.DepthStallEnable = bits & ANV_PIPE_DEPTH_STALL_BIT;
 
          pipe.CommandStreamerStallEnable = bits & ANV_PIPE_CS_STALL_BIT;
 #if GFX_VER == 8

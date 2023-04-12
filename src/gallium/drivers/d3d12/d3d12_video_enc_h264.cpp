@@ -60,15 +60,17 @@ d3d12_video_encoder_update_current_rate_control_h264(struct d3d12_video_encoder 
             picture->rate_ctrl[0].target_bitrate;
 
          /* For CBR mode, to guarantee bitrate of generated stream complies with
-          * target bitrate (e.g. no over +/-10%), vbv_buffer_size should be same
+          * target bitrate (e.g. no over +/-10%), vbv_buffer_size and initial capacity should be same
           * as target bitrate. Controlled by OS env var D3D12_VIDEO_ENC_CBR_FORCE_VBV_EQUAL_BITRATE
           */
          if (D3D12_VIDEO_ENC_CBR_FORCE_VBV_EQUAL_BITRATE) {
             debug_printf("[d3d12_video_encoder_h264] d3d12_video_encoder_update_current_rate_control_h264 D3D12_VIDEO_ENC_CBR_FORCE_VBV_EQUAL_BITRATE environment variable is set, "
-                       ", forcing VBV Size = Target Bitrate = %" PRIu64 " (bits)\n", pD3D12Enc->m_currentEncodeConfig.m_encoderRateControlDesc.m_Config.m_Configuration_CBR.TargetBitRate);
+                       ", forcing VBV Size = VBV Initial Capacity = Target Bitrate = %" PRIu64 " (bits)\n", pD3D12Enc->m_currentEncodeConfig.m_encoderRateControlDesc.m_Config.m_Configuration_CBR.TargetBitRate);
             pD3D12Enc->m_currentEncodeConfig.m_encoderRateControlDesc.m_Flags |=
                D3D12_VIDEO_ENCODER_RATE_CONTROL_FLAG_ENABLE_VBV_SIZES;
             pD3D12Enc->m_currentEncodeConfig.m_encoderRateControlDesc.m_Config.m_Configuration_CBR.VBVCapacity =
+               pD3D12Enc->m_currentEncodeConfig.m_encoderRateControlDesc.m_Config.m_Configuration_CBR.TargetBitRate;
+            pD3D12Enc->m_currentEncodeConfig.m_encoderRateControlDesc.m_Config.m_Configuration_CBR.InitialVBVFullness =
                pD3D12Enc->m_currentEncodeConfig.m_encoderRateControlDesc.m_Config.m_Configuration_CBR.TargetBitRate;
          }
 
@@ -629,14 +631,18 @@ d3d12_video_encoder_update_current_encoder_config_state_h264(struct d3d12_video_
    }
 
    // Set profile
-   auto lastFrameProfile = pD3D12Enc->m_currentEncodeConfig.m_encoderProfileDesc.m_H264Profile;
-   pD3D12Enc->m_currentEncodeConfig.m_encoderProfileDesc.m_H264Profile =
-      d3d12_video_encoder_convert_profile_to_d3d12_enc_profile_h264(pD3D12Enc->base.profile);
+   auto targetProfile = d3d12_video_encoder_convert_profile_to_d3d12_enc_profile_h264(pD3D12Enc->base.profile);
+   if (pD3D12Enc->m_currentEncodeConfig.m_encoderProfileDesc.m_H264Profile != targetProfile) {
+      pD3D12Enc->m_currentEncodeConfig.m_ConfigDirtyFlags |= d3d12_video_encoder_config_dirty_flag_profile;
+   }
+   pD3D12Enc->m_currentEncodeConfig.m_encoderProfileDesc.m_H264Profile = targetProfile;
 
    // Set level
-   auto lastFrameLevel = pD3D12Enc->m_currentEncodeConfig.m_encoderLevelDesc.m_H264LevelSetting;
-   pD3D12Enc->m_currentEncodeConfig.m_encoderLevelDesc.m_H264LevelSetting =
-      d3d12_video_encoder_convert_level_h264(pD3D12Enc->base.level);
+   auto targetLevel = d3d12_video_encoder_convert_level_h264(pD3D12Enc->base.level);
+   if (pD3D12Enc->m_currentEncodeConfig.m_encoderLevelDesc.m_H264LevelSetting != targetLevel) {
+      pD3D12Enc->m_currentEncodeConfig.m_ConfigDirtyFlags |= d3d12_video_encoder_config_dirty_flag_level;
+   }
+   pD3D12Enc->m_currentEncodeConfig.m_encoderLevelDesc.m_H264LevelSetting = targetLevel;
 
    // Set codec config
    bool is_supported = false;
@@ -714,13 +720,7 @@ d3d12_video_encoder_update_current_encoder_config_state_h264(struct d3d12_video_
                     "mismatches UMD suggested D3D12_VIDEO_ENCODER_PROFILE_H264: %d\n",
                     pD3D12Enc->m_currentEncodeConfig.m_encoderProfileDesc.m_H264Profile,
                     pD3D12Enc->m_currentEncodeCapabilities.m_encoderSuggestedProfileDesc.m_H264Profile);
-      if (!D3D12_VIDEO_ENC_HONOR_PROFILE_LEVEL_PIPE)
-         pD3D12Enc->m_currentEncodeConfig.m_encoderProfileDesc.m_H264Profile =
-            pD3D12Enc->m_currentEncodeCapabilities.m_encoderSuggestedProfileDesc.m_H264Profile;
    }
-
-   if (lastFrameProfile != pD3D12Enc->m_currentEncodeConfig.m_encoderProfileDesc.m_H264Profile)
-      pD3D12Enc->m_currentEncodeConfig.m_ConfigDirtyFlags |= d3d12_video_encoder_config_dirty_flag_profile;
 
    if (pD3D12Enc->m_currentEncodeConfig.m_encoderLevelDesc.m_H264LevelSetting !=
        pD3D12Enc->m_currentEncodeCapabilities.m_encoderLevelSuggestedDesc.m_H264LevelSetting) {
@@ -728,13 +728,7 @@ d3d12_video_encoder_update_current_encoder_config_state_h264(struct d3d12_video_
                     "mismatches UMD suggested D3D12_VIDEO_ENCODER_LEVELS_H264: %d\n",
                     pD3D12Enc->m_currentEncodeConfig.m_encoderLevelDesc.m_H264LevelSetting,
                     pD3D12Enc->m_currentEncodeCapabilities.m_encoderLevelSuggestedDesc.m_H264LevelSetting);
-      if (!D3D12_VIDEO_ENC_HONOR_PROFILE_LEVEL_PIPE)
-         pD3D12Enc->m_currentEncodeConfig.m_encoderLevelDesc.m_H264LevelSetting =
-            pD3D12Enc->m_currentEncodeCapabilities.m_encoderLevelSuggestedDesc.m_H264LevelSetting;
    }
-
-   if (lastFrameLevel != pD3D12Enc->m_currentEncodeConfig.m_encoderLevelDesc.m_H264LevelSetting)
-      pD3D12Enc->m_currentEncodeConfig.m_ConfigDirtyFlags |= d3d12_video_encoder_config_dirty_flag_level;
 
    if (pD3D12Enc->m_currentEncodeCapabilities.m_MaxSlicesInOutput >
        pD3D12Enc->m_currentEncodeCapabilities.m_currentResolutionSupportCaps.MaxSubregionsNumber) {
@@ -858,9 +852,20 @@ d3d12_video_encoder_build_codec_headers_h264(struct d3d12_video_encoder *pD3D12E
                                     *currentPicParams.pH264PicData,
                                     currentPicParams.pH264PicData->pic_parameter_set_id,
                                     active_seq_parameter_set_id,
-                                    pD3D12Enc->m_BitstreamHeadersBuffer,
-                                    pD3D12Enc->m_BitstreamHeadersBuffer.begin() + writtenSPSBytesCount,
+                                    pD3D12Enc->m_StagingHeadersBuffer,
+                                    pD3D12Enc->m_StagingHeadersBuffer.begin(),
                                     writtenPPSBytesCount);
+
+   std::vector<uint8_t>& active_pps = pH264BitstreamBuilder->get_active_pps();
+   if ( (writtenPPSBytesCount != active_pps.size()) ||
+         memcmp(pD3D12Enc->m_StagingHeadersBuffer.data(), active_pps.data(), writtenPPSBytesCount)) {
+      active_pps = pD3D12Enc->m_StagingHeadersBuffer;
+      pD3D12Enc->m_BitstreamHeadersBuffer.resize(writtenSPSBytesCount + writtenPPSBytesCount);
+      memcpy(&pD3D12Enc->m_BitstreamHeadersBuffer.data()[writtenSPSBytesCount], pD3D12Enc->m_StagingHeadersBuffer.data(), writtenPPSBytesCount);
+   } else {
+      writtenPPSBytesCount = 0;
+      debug_printf("Skipping PPS (same as active PPS) for fenceValue: %" PRIu64 "\n", pD3D12Enc->m_fenceValue);
+   }
 
    // Shrink buffer to fit the headers
    if (pD3D12Enc->m_BitstreamHeadersBuffer.size() > (writtenPPSBytesCount + writtenSPSBytesCount)) {

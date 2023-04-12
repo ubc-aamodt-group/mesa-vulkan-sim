@@ -162,8 +162,6 @@ visit_intrinsic(nir_shader *shader, nir_intrinsic_instr *instr)
    case nir_intrinsic_load_streamout_write_index_amd:
    case nir_intrinsic_load_streamout_offset_amd:
    case nir_intrinsic_load_task_ring_entry_amd:
-   case nir_intrinsic_load_task_ib_addr:
-   case nir_intrinsic_load_task_ib_stride:
    case nir_intrinsic_load_ring_attr_amd:
    case nir_intrinsic_load_ring_attr_offset_amd:
    case nir_intrinsic_load_sample_positions_pan:
@@ -207,6 +205,9 @@ visit_intrinsic(nir_shader *shader, nir_intrinsic_instr *instr)
    case nir_intrinsic_load_lds_ngg_gs_out_vertex_base_amd:
    case nir_intrinsic_load_btd_shader_type_intel:
    case nir_intrinsic_load_base_workgroup_id:
+   case nir_intrinsic_load_alpha_reference_amd:
+   case nir_intrinsic_load_ssbo_uniform_block_intel:
+   case nir_intrinsic_load_shared_uniform_block_intel:
       is_divergent = false;
       break;
 
@@ -407,6 +408,7 @@ visit_intrinsic(nir_shader *shader, nir_intrinsic_instr *instr)
    case nir_intrinsic_load_kernel_input:
    case nir_intrinsic_load_task_payload:
    case nir_intrinsic_load_buffer_amd:
+   case nir_intrinsic_load_typed_buffer_amd:
    case nir_intrinsic_image_samples:
    case nir_intrinsic_image_deref_samples:
    case nir_intrinsic_bindless_image_samples:
@@ -470,6 +472,7 @@ visit_intrinsic(nir_shader *shader, nir_intrinsic_instr *instr)
    case nir_intrinsic_load_point_coord:
    case nir_intrinsic_load_line_coord:
    case nir_intrinsic_load_frag_coord:
+   case nir_intrinsic_load_fully_covered:
    case nir_intrinsic_load_sample_pos:
    case nir_intrinsic_load_sample_pos_or_center:
    case nir_intrinsic_load_vertex_id_zero_base:
@@ -672,6 +675,7 @@ visit_intrinsic(nir_shader *shader, nir_intrinsic_instr *instr)
    case nir_intrinsic_load_topology_id_intel:
    case nir_intrinsic_load_scratch_base_ptr:
    case nir_intrinsic_ordered_xfb_counter_add_amd:
+   case nir_intrinsic_xfb_counter_sub_amd:
    case nir_intrinsic_load_stack:
    case nir_intrinsic_load_ray_launch_id:
    case nir_intrinsic_load_ray_instance_custom_index:

@@ -133,8 +133,16 @@ vn_instance_init_ring(struct vn_instance *instance)
 
    instance->ring.id = (uintptr_t)ring;
 
+   ring->monitor.report_period_us = 3000000;
+   mtx_init(&ring->monitor.mutex, mtx_plain);
+
+   const struct VkRingMonitorInfoMESA monitor_info = {
+      .sType = VK_STRUCTURE_TYPE_RING_MONITOR_INFO_MESA,
+      .maxReportingPeriodMicroseconds = ring->monitor.report_period_us,
+   };
    const struct VkRingCreateInfoMESA info = {
       .sType = VK_STRUCTURE_TYPE_RING_CREATE_INFO_MESA,
+      .pNext = &monitor_info,
       .resourceId = instance->ring.shmem->res_id,
       .size = layout.shmem_size,
       .idleTimeout = 50ull * 1000 * 1000,
@@ -187,7 +195,8 @@ vn_instance_init_experimental_features(struct vn_instance *instance)
 
    if (!exp_feats->memoryResourceAllocationSize ||
        !exp_feats->globalFencing || !exp_feats->largeRing ||
-       !exp_feats->syncFdFencing)
+       !exp_feats->syncFdFencing || !exp_feats->asyncRoundtrip ||
+       !exp_feats->ringMonitoring)
       return VK_ERROR_INITIALIZATION_FAILED;
 
    if (VN_DEBUG(INIT)) {
@@ -196,11 +205,15 @@ vn_instance_init_experimental_features(struct vn_instance *instance)
              "\n\tmemoryResourceAllocationSize = %u"
              "\n\tglobalFencing = %u"
              "\n\tlargeRing = %u"
-             "\n\tsyncFdFencing = %u",
+             "\n\tsyncFdFencing = %u"
+             "\n\tasyncRoundtrip = %u"
+             "\n\tringMonitoring = %u",
              instance->experimental.memoryResourceAllocationSize,
              instance->experimental.globalFencing,
              instance->experimental.largeRing,
-             instance->experimental.syncFdFencing);
+             instance->experimental.syncFdFencing,
+             instance->experimental.asyncRoundtrip,
+             instance->experimental.ringMonitoring);
    }
 
    return VK_SUCCESS;
@@ -277,46 +290,29 @@ vn_instance_init_renderer(struct vn_instance *instance)
 
 VkResult
 vn_instance_submit_roundtrip(struct vn_instance *instance,
-                             uint32_t *roundtrip_seqno)
+                             uint64_t *roundtrip_seqno)
 {
-   uint32_t write_ring_extra_data[8];
-   struct vn_cs_encoder local_enc = VN_CS_ENCODER_INITIALIZER_LOCAL(
-      write_ring_extra_data, sizeof(write_ring_extra_data));
+   uint32_t local_data[8];
+   struct vn_cs_encoder local_enc =
+      VN_CS_ENCODER_INITIALIZER_LOCAL(local_data, sizeof(local_data));
 
-   /* submit a vkWriteRingExtraMESA through the renderer */
    mtx_lock(&instance->ring.roundtrip_mutex);
-   const uint32_t seqno = instance->ring.roundtrip_next++;
-   vn_encode_vkWriteRingExtraMESA(&local_enc, 0, instance->ring.id, 0, seqno);
-   VkResult result =
-      vn_renderer_submit_simple(instance->renderer, write_ring_extra_data,
-                                vn_cs_encoder_get_len(&local_enc));
+   const uint64_t seqno = instance->ring.roundtrip_next++;
+   vn_encode_vkSubmitVirtqueueSeqno100000MESA(&local_enc, 0,
+                                              instance->ring.id, seqno);
+   VkResult result = vn_renderer_submit_simple(
+      instance->renderer, local_data, vn_cs_encoder_get_len(&local_enc));
    mtx_unlock(&instance->ring.roundtrip_mutex);
 
    *roundtrip_seqno = seqno;
    return result;
 }
 
-static bool
-roundtrip_seqno_ge(uint32_t a, uint32_t b)
-{
-   /* a >= b, but deal with wrapping as well */
-   return (a - b) <= INT32_MAX;
-}
-
 void
 vn_instance_wait_roundtrip(struct vn_instance *instance,
-                           uint32_t roundtrip_seqno)
+                           uint64_t roundtrip_seqno)
 {
-   VN_TRACE_FUNC();
-   const struct vn_ring *ring = &instance->ring.ring;
-   const volatile atomic_uint *ptr = ring->shared.extra;
-   uint32_t iter = 0;
-   do {
-      const uint32_t cur = atomic_load_explicit(ptr, memory_order_acquire);
-      if (roundtrip_seqno_ge(cur, roundtrip_seqno))
-         break;
-      vn_relax(ring, &iter, "roundtrip");
-   } while (true);
+   vn_async_vkWaitVirtqueueSeqno100000MESA(instance, roundtrip_seqno);
 }
 
 struct vn_instance_submission {
@@ -585,16 +581,20 @@ vn_instance_submit_command(struct vn_instance *instance,
          goto fail;
    }
 
-   uint32_t ring_seqno;
-   VkResult result = vn_instance_ring_submit_locked(
-      instance, &submit->command, submit->reply_shmem, &ring_seqno);
+   submit->ring_seqno_valid =
+      VK_SUCCESS == vn_instance_ring_submit_locked(instance, &submit->command,
+                                                   submit->reply_shmem,
+                                                   &submit->ring_seqno);
 
    mtx_unlock(&instance->ring.mutex);
 
-   submit->reply = VN_CS_DECODER_INITIALIZER(reply_ptr, submit->reply_size);
+   if (submit->reply_size) {
+      submit->reply =
+         VN_CS_DECODER_INITIALIZER(reply_ptr, submit->reply_size);
 
-   if (submit->reply_size && result == VK_SUCCESS)
-      vn_ring_wait(&instance->ring.ring, ring_seqno);
+      if (submit->ring_seqno_valid)
+         vn_ring_wait(&instance->ring.ring, submit->ring_seqno);
+   }
 
    return;
 

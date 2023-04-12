@@ -1127,11 +1127,29 @@ static bool visit_alu(struct ac_nir_context *ctx, const nir_alu_instr *instr)
                                 ctx->ac.i32, "");
       break;
    case nir_op_pack_snorm_2x16:
-      result = emit_pack_2x16(&ctx->ac, src[0], ac_build_cvt_pknorm_i16);
+   case nir_op_pack_unorm_2x16: {
+      unsigned bit_size = instr->src[0].src.ssa->bit_size;
+      /* Only support 16 and 32bit. */
+      assert(bit_size == 16 || bit_size == 32);
+
+      LLVMValueRef data = src[0];
+      /* Work around for pre-GFX9 GPU which don't have fp16 pknorm instruction. */
+      if (bit_size == 16 && ctx->ac.gfx_level < GFX9) {
+         data = LLVMBuildFPExt(ctx->ac.builder, data, ctx->ac.v2f32, "");
+         bit_size = 32;
+      }
+
+      LLVMValueRef (*pack)(struct ac_llvm_context *ctx, LLVMValueRef args[2]);
+      if (bit_size == 32) {
+         pack = instr->op == nir_op_pack_snorm_2x16 ?
+            ac_build_cvt_pknorm_i16 : ac_build_cvt_pknorm_u16;
+      } else {
+         pack = instr->op == nir_op_pack_snorm_2x16 ?
+            ac_build_cvt_pknorm_i16_f16 : ac_build_cvt_pknorm_u16_f16;
+      }
+      result = emit_pack_2x16(&ctx->ac, data, pack);
       break;
-   case nir_op_pack_unorm_2x16:
-      result = emit_pack_2x16(&ctx->ac, src[0], ac_build_cvt_pknorm_u16);
-      break;
+   }
    case nir_op_pack_uint_2x16: {
       LLVMValueRef comp[2];
 
@@ -2889,8 +2907,8 @@ static LLVMValueRef visit_load_local_invocation_index(struct ac_nir_context *ctx
                            ac_unpack_param(&ctx->ac, ac_get_arg(&ctx->ac, ctx->args->tcs_wave_id), 0, 3),
                            LLVMConstInt(ctx->ac.i32, ctx->ac.wave_size, 0),
                            ac_get_thread_id(&ctx->ac));
-   } else if (ctx->args->vs_rel_patch_id.used) {
-      return ac_get_arg(&ctx->ac, ctx->args->vs_rel_patch_id);
+   } else if (ctx->abi->vs_rel_patch_id) {
+      return ctx->abi->vs_rel_patch_id;
    } else if (ctx->args->merged_wave_info.used) {
       /* Thread ID in threadgroup in merged ESGS. */
       LLVMValueRef wave_id = ac_unpack_param(&ctx->ac, ac_get_arg(&ctx->ac, ctx->args->merged_wave_info), 24, 4);
@@ -3324,9 +3342,6 @@ static LLVMValueRef visit_load(struct ac_nir_context *ctx, nir_intrinsic_instr *
    /* No indirect indexing is allowed after this point. */
    assert(!indir_index);
 
-   if (ctx->stage == MESA_SHADER_VERTEX && !is_output)
-      return ctx->abi->load_inputs(ctx->abi, base, component, count, 0, component_type);
-
    /* Other non-fragment cases have outputs in temporaries. */
    if (is_output && (ctx->stage == MESA_SHADER_VERTEX || ctx->stage == MESA_SHADER_TESS_EVAL)) {
       assert(is_output);
@@ -3437,7 +3452,6 @@ static bool visit_intrinsic(struct ac_nir_context *ctx, nir_intrinsic_instr *ins
    case nir_intrinsic_load_base_vertex:
    case nir_intrinsic_load_first_vertex:
    case nir_intrinsic_load_tess_rel_patch_id_amd:
-   case nir_intrinsic_load_ring_tess_factors_amd:
    case nir_intrinsic_load_ring_tess_offchip_amd:
    case nir_intrinsic_load_ring_esgs_amd:
    case nir_intrinsic_load_ring_attr_amd:
@@ -3966,6 +3980,7 @@ static bool visit_intrinsic(struct ac_nir_context *ctx, nir_intrinsic_instr *ins
    case nir_intrinsic_set_vertex_and_primitive_count:
       /* Currently ignored. */
       break;
+   case nir_intrinsic_load_typed_buffer_amd:
    case nir_intrinsic_load_buffer_amd:
    case nir_intrinsic_store_buffer_amd: {
       unsigned src_base = instr->intrinsic == nir_intrinsic_store_buffer_amd ? 1 : 0;
@@ -4001,10 +4016,12 @@ static bool visit_intrinsic(struct ac_nir_context *ctx, nir_intrinsic_instr *ins
          result = ac_build_buffer_load_format(&ctx->ac, descriptor, vidx, voffset, num_components,
                                               cache_policy, reorder,
                                               instr->dest.ssa.bit_size == 16, false);
+         result = ac_to_integer(&ctx->ac, result);
       } else if (instr->intrinsic == nir_intrinsic_store_buffer_amd && uses_format) {
          assert(instr->src[0].ssa->bit_size == 16 || instr->src[0].ssa->bit_size == 32);
          ac_build_buffer_store_format(&ctx->ac, descriptor, store_data, vidx, voffset, cache_policy);
-      } else if (instr->intrinsic == nir_intrinsic_load_buffer_amd) {
+      } else if (instr->intrinsic == nir_intrinsic_load_buffer_amd ||
+                 instr->intrinsic == nir_intrinsic_load_typed_buffer_amd) {
          /* LLVM is unable to select instructions for larger than 32-bit channel types.
           * Workaround by using i32 and casting to the correct type later.
           */
@@ -4013,8 +4030,21 @@ static bool visit_intrinsic(struct ac_nir_context *ctx, nir_intrinsic_instr *ins
          LLVMTypeRef channel_type =
             LLVMIntTypeInContext(ctx->ac.context, MIN2(32, instr->dest.ssa.bit_size));
 
-         result = ac_build_buffer_load(&ctx->ac, descriptor, fetch_num_components, vidx, voffset,
-                                       addr_soffset, channel_type, cache_policy, reorder, false);
+         if (instr->intrinsic == nir_intrinsic_load_buffer_amd) {
+            result = ac_build_buffer_load(&ctx->ac, descriptor, fetch_num_components, vidx, voffset,
+                                          addr_soffset, channel_type, cache_policy, reorder, false);
+         } else {
+            const unsigned align_offset = nir_intrinsic_align_offset(instr);
+            const unsigned align_mul = nir_intrinsic_align_mul(instr);
+            const enum pipe_format format = nir_intrinsic_format(instr);
+            const struct ac_vtx_format_info *vtx_info =
+               ac_get_vtx_format_info(ctx->ac.gfx_level, ctx->ac.family, format);
+
+            result =
+               ac_build_safe_tbuffer_load(&ctx->ac, descriptor, vidx, addr_voffset, addr_soffset,
+                                          channel_type, vtx_info, const_offset, align_offset,
+                                          align_mul, fetch_num_components, cache_policy, reorder);
+         }
 
          /* Trim to needed vector components. */
          result = ac_trim_vector(&ctx->ac, result, fetch_num_components);
@@ -4171,6 +4201,9 @@ static bool visit_intrinsic(struct ac_nir_context *ctx, nir_intrinsic_instr *ins
    }
    case nir_intrinsic_ordered_xfb_counter_add_amd: {
       /* must be called in a single lane of a workgroup. */
+      /* TODO: Add RADV support. */
+      bool use_gds_registers = ctx->ac.gfx_level >= GFX11 &&
+                               ctx->ac.float_mode == AC_FLOAT_MODE_DEFAULT_OPENGL;
       LLVMTypeRef gdsptr = LLVMPointerType(ctx->ac.i32, AC_ADDR_SPACE_GDS);
       LLVMValueRef gdsbase = LLVMBuildIntToPtr(ctx->ac.builder, ctx->ac.i32_0, gdsptr, "");
 
@@ -4180,13 +4213,22 @@ static bool visit_intrinsic(struct ac_nir_context *ctx, nir_intrinsic_instr *ins
        *
        * This is the expected code:
        *    ds_ordered_count release=0 done=0   // lock mutex
-       *    ds_add_rtn_u32 dwords_written0
-       *    ds_add_rtn_u32 dwords_written1
-       *    ds_add_rtn_u32 dwords_written2
-       *    ds_add_rtn_u32 dwords_written3
+       *    if (gfx_level >= GFX11) {
+       *       ds_add_gs_reg_rtn GDS_STRMOUT_DWORDS_WRITTEN_0
+       *       ds_add_gs_reg_rtn GDS_STRMOUT_DWORDS_WRITTEN_1
+       *       ds_add_gs_reg_rtn GDS_STRMOUT_DWORDS_WRITTEN_2
+       *       ds_add_gs_reg_rtn GDS_STRMOUT_DWORDS_WRITTEN_3
+       *    } else {
+       *       ds_add_rtn_u32 dwords_written0
+       *       ds_add_rtn_u32 dwords_written1
+       *       ds_add_rtn_u32 dwords_written2
+       *       ds_add_rtn_u32 dwords_written3
+       *    }
        *    ds_ordered_count release=1 done=1   // unlock mutex
        *
-       * TODO: Increment GDS_STRMOUT registers instead of GDS memory.
+       * GDS_STRMOUT_DWORDS_WRITTEN_n are just general-purpose global registers. We use them
+       * because MCBP (mid-command-buffer preemption) saves and restores them, and it doesn't
+       * save and restore GDS memory.
        */
       LLVMValueRef args[8] = {
          LLVMBuildIntToPtr(ctx->ac.builder, get_src(ctx, instr->src[0]), gdsptr, ""),
@@ -4205,21 +4247,29 @@ static bool visit_intrinsic(struct ac_nir_context *ctx, nir_intrinsic_instr *ins
       ac_build_waitcnt(&ctx->ac, AC_WAIT_LGKM);
 
       LLVMValueRef global_count[4];
-      LLVMValueRef add_count = get_src(ctx, instr->src[1]);
+      LLVMValueRef count_vec = get_src(ctx, instr->src[1]);
       unsigned write_mask = nir_intrinsic_write_mask(instr);
       for (unsigned i = 0; i < instr->num_components; i++) {
+         LLVMValueRef value =
+            LLVMBuildExtractElement(ctx->ac.builder, count_vec,
+                                    LLVMConstInt(ctx->ac.i32, i, false), "");
          if (write_mask & (1 << i)) {
-            LLVMValueRef gds_ptr =
-               ac_build_gep_ptr(&ctx->ac, ctx->ac.i32, gdsbase, LLVMConstInt(ctx->ac.i32, i, 0));
-            LLVMValueRef count =
-               LLVMBuildExtractElement(ctx->ac.builder, add_count,
-                                       LLVMConstInt(ctx->ac.i32, i, false), "");
-
-            global_count[i] =
-               LLVMBuildAtomicRMW(ctx->ac.builder, LLVMAtomicRMWBinOpAdd, gds_ptr, count,
-                                  LLVMAtomicOrderingMonotonic, false);
-         } else
+            if (use_gds_registers) {
+               /* The offset is a relative offset from GDS_STRMOUT_DWORDS_WRITTEN_0. */
+               global_count[i] =
+                  ac_build_intrinsic(&ctx->ac, "llvm.amdgcn.ds.add.gs.reg.rtn.i32", ctx->ac.i32,
+                                     (LLVMValueRef[]){value, LLVMConstInt(ctx->ac.i32, i * 4, 0)},
+                                     2, 0);
+            } else {
+               LLVMValueRef gds_ptr =
+                  ac_build_gep_ptr(&ctx->ac, ctx->ac.i32, gdsbase, LLVMConstInt(ctx->ac.i32, i, 0));
+               global_count[i] =
+                  LLVMBuildAtomicRMW(ctx->ac.builder, LLVMAtomicRMWBinOpAdd, gds_ptr, value,
+                                     LLVMAtomicOrderingMonotonic, false);
+            }
+         } else {
             global_count[i] = LLVMGetUndef(ctx->ac.i32);
+         }
       }
 
       ac_build_waitcnt(&ctx->ac, AC_WAIT_LGKM);
@@ -4228,8 +4278,37 @@ static bool visit_intrinsic(struct ac_nir_context *ctx, nir_intrinsic_instr *ins
       args[6] = args[7] = ctx->ac.i1true;
       ac_build_intrinsic(&ctx->ac, "llvm.amdgcn.ds.ordered.add", ctx->ac.i32,
                          args, ARRAY_SIZE(args), 0);
-
       result = ac_build_gather_values(&ctx->ac, global_count, instr->num_components);
+      break;
+   }
+   case nir_intrinsic_xfb_counter_sub_amd: {
+      /* must be called in a single lane of a workgroup. */
+      /* TODO: Add RADV support. */
+      bool use_gds_registers = ctx->ac.gfx_level >= GFX11 &&
+                               ctx->ac.float_mode == AC_FLOAT_MODE_DEFAULT_OPENGL;
+      LLVMTypeRef gdsptr = LLVMPointerType(ctx->ac.i32, AC_ADDR_SPACE_GDS);
+      LLVMValueRef gdsbase = LLVMBuildIntToPtr(ctx->ac.builder, ctx->ac.i32_0, gdsptr, "");
+      LLVMValueRef sub_vec = get_src(ctx, instr->src[0]);
+      unsigned write_mask = nir_intrinsic_write_mask(instr);
+
+      for (unsigned i = 0; i < instr->num_components; i++) {
+         if (write_mask & (1 << i)) {
+            LLVMValueRef value =
+               LLVMBuildExtractElement(ctx->ac.builder, sub_vec,
+                                       LLVMConstInt(ctx->ac.i32, i, false), "");
+            if (use_gds_registers) {
+               /* The offset is a relative offset from GDS_STRMOUT_DWORDS_WRITTEN_0. */
+               ac_build_intrinsic(&ctx->ac, "llvm.amdgcn.ds.sub.gs.reg.rtn.i32", ctx->ac.i32,
+                                  (LLVMValueRef[]){value, LLVMConstInt(ctx->ac.i32, i * 4, 0)},
+                                  2, 0);
+            } else {
+               LLVMValueRef gds_ptr =
+                  ac_build_gep_ptr(&ctx->ac, ctx->ac.i32, gdsbase, LLVMConstInt(ctx->ac.i32, i, 0));
+               LLVMBuildAtomicRMW(ctx->ac.builder, LLVMAtomicRMWBinOpSub, gds_ptr, value,
+                                  LLVMAtomicOrderingMonotonic, false);
+            }
+         }
+      }
       break;
    }
    case nir_intrinsic_export_amd: {
@@ -5061,4 +5140,24 @@ bool ac_nir_translate(struct ac_llvm_context *ac, struct ac_shader_abi *abi,
       ralloc_free(ctx.verified_interp);
 
    return true;
+}
+
+/* Fixup the HW not emitting the TCS regs if there are no HS threads. */
+void ac_fixup_ls_hs_input_vgprs(struct ac_llvm_context *ac, struct ac_shader_abi *abi,
+                                const struct ac_shader_args *args)
+{
+   LLVMValueRef count = ac_unpack_param(ac, ac_get_arg(ac, args->merged_wave_info), 8, 8);
+   LLVMValueRef hs_empty = LLVMBuildICmp(ac->builder, LLVMIntEQ, count, ac->i32_0, "");
+
+   abi->instance_id =
+      LLVMBuildSelect(ac->builder, hs_empty, ac_get_arg(ac, args->vertex_id),
+                      abi->instance_id, "");
+
+   abi->vs_rel_patch_id =
+      LLVMBuildSelect(ac->builder, hs_empty, ac_get_arg(ac, args->tcs_rel_ids),
+                      abi->vs_rel_patch_id, "");
+
+   abi->vertex_id =
+      LLVMBuildSelect(ac->builder, hs_empty, ac_get_arg(ac, args->tcs_patch_id),
+                      abi->vertex_id, "");
 }

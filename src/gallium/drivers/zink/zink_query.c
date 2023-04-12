@@ -772,7 +772,7 @@ copy_pool_results_to_buffer(struct zink_context *ctx, struct zink_query *query, 
    res->obj->unordered_read = res->obj->unordered_write = false;
    VKCTX(CmdCopyQueryPoolResults)(batch->state->cmdbuf, pool, query_id, num_results, res->obj->buffer,
                                   offset, base_result_size, flags);
-   zink_cmd_debug_marker_end(ctx, marker);
+   zink_cmd_debug_marker_end(ctx, batch->state->cmdbuf, marker);
 }
 
 static void
@@ -1237,6 +1237,9 @@ static void
 zink_set_active_query_state(struct pipe_context *pctx, bool enable)
 {
    struct zink_context *ctx = zink_context(pctx);
+   /* unordered blits already disable queries */
+   if (ctx->unordered_blitting)
+      return;
    ctx->queries_disabled = !enable;
 
    struct zink_batch *batch = &ctx->batch;
@@ -1317,7 +1320,8 @@ zink_render_condition(struct pipe_context *pctx,
       int num_results = get_num_starts(query);
       if (num_results) {
          if (!is_emulated_primgen(query) &&
-            !is_so_overflow_query(query)) {
+            !is_so_overflow_query(query) &&
+            num_results == 1) {
             copy_results_to_buffer(ctx, query, res, 0, num_results, flags);
          } else {
             /* these need special handling */

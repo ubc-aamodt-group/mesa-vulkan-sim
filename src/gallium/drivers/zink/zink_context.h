@@ -77,9 +77,16 @@ zink_program_cache_stages(uint32_t stages_present)
 static inline bool
 zink_is_zsbuf_used(const struct zink_context *ctx)
 {
-   return !ctx->tc || ctx->blitting ||
-         !zink_screen(ctx->base.screen)->driver_workarounds.track_renderpasses ||
-         tc_renderpass_info_is_zsbuf_used(&ctx->dynamic_fb.tc_info);
+   return ctx->blitting || tc_renderpass_info_is_zsbuf_used(&ctx->dynamic_fb.tc_info);
+}
+
+static inline bool
+zink_is_zsbuf_write(const struct zink_context *ctx)
+{
+   if (!zink_is_zsbuf_used(ctx))
+      return false;
+   return ctx->dynamic_fb.tc_info.zsbuf_write_fs || ctx->dynamic_fb.tc_info.zsbuf_write_dsa ||
+          ctx->dynamic_fb.tc_info.zsbuf_clear || ctx->dynamic_fb.tc_info.zsbuf_clear_partial;
 }
 
 void
@@ -92,6 +99,8 @@ bool
 zink_check_batch_completion(struct zink_context *ctx, uint64_t batch_id);
 VkCommandBuffer
 zink_get_cmdbuf(struct zink_context *ctx, struct zink_resource *src, struct zink_resource *dst);
+unsigned
+zink_update_rendering_info(struct zink_context *ctx);
 void
 zink_flush_queue(struct zink_context *ctx);
 void
@@ -113,9 +122,15 @@ zink_resource_image_barrier(struct zink_context *ctx, struct zink_resource *res,
 void
 zink_resource_image_barrier2(struct zink_context *ctx, struct zink_resource *res, VkImageLayout new_layout, VkAccessFlags flags, VkPipelineStageFlags pipeline);
 bool
-zink_resource_needs_barrier(struct zink_resource *res, VkImageLayout layout, VkAccessFlags flags, VkPipelineStageFlags pipeline);
+zink_check_unordered_transfer_access(struct zink_resource *res, unsigned level, const struct pipe_box *box);
+bool
+zink_check_valid_buffer_src_access(struct zink_context *ctx, struct zink_resource *res, unsigned offset, unsigned size);
 void
 zink_resource_image_transfer_dst_barrier(struct zink_context *ctx, struct zink_resource *res, unsigned level, const struct pipe_box *box);
+bool
+zink_resource_buffer_transfer_dst_barrier(struct zink_context *ctx, struct zink_resource *res, unsigned offset, unsigned size);
+void
+zink_synchronization_init(struct zink_screen *screen);
 void
 zink_update_descriptor_refs(struct zink_context *ctx, bool compute);
 void
@@ -126,6 +141,8 @@ zink_batch_rp(struct zink_context *ctx);
 
 void
 zink_batch_no_rp(struct zink_context *ctx);
+void
+zink_batch_no_rp_safe(struct zink_context *ctx);
 
 VkImageView
 zink_prep_fb_attachment(struct zink_context *ctx, struct zink_surface *surf, unsigned i);
@@ -159,6 +176,8 @@ void
 zink_rebind_all_images(struct zink_context *ctx);
 
 void
+zink_parse_tc_info(struct zink_context *ctx);
+void
 zink_flush_memory_barrier(struct zink_context *ctx, bool is_compute);
 void
 zink_init_draw_functions(struct zink_context *ctx, struct zink_screen *screen);
@@ -175,8 +194,10 @@ zink_update_barriers(struct zink_context *ctx, bool is_compute,
 bool
 zink_cmd_debug_marker_begin(struct zink_context *ctx, VkCommandBuffer cmdbuf, const char *fmt, ...);
 void
-zink_cmd_debug_marker_end(struct zink_context *ctx, bool emitted);
-
+zink_cmd_debug_marker_end(struct zink_context *ctx, VkCommandBuffer cmdbuf,bool emitted);
+void
+zink_copy_buffer(struct zink_context *ctx, struct zink_resource *dst, struct zink_resource *src,
+                 unsigned dst_offset, unsigned src_offset, unsigned size);
 #ifdef __cplusplus
 }
 #endif
@@ -193,6 +214,8 @@ zink_context_query_init(struct pipe_context *ctx);
 
 void
 zink_blit_begin(struct zink_context *ctx, enum zink_blit_flags flags);
+void
+zink_blit_barriers(struct zink_context *ctx, struct zink_resource *src, struct zink_resource *dst, bool whole_dst);
 
 void
 zink_blit(struct pipe_context *pctx,
@@ -241,9 +264,6 @@ bool
 zink_use_dummy_attachments(const struct zink_context *ctx);
 void
 zink_set_color_write_enables(struct zink_context *ctx);
-void
-zink_copy_buffer(struct zink_context *ctx, struct zink_resource *dst, struct zink_resource *src,
-                 unsigned dst_offset, unsigned src_offset, unsigned size);
 
 void
 zink_copy_image_buffer(struct zink_context *ctx, struct zink_resource *dst, struct zink_resource *src,

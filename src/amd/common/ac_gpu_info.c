@@ -40,9 +40,11 @@
 
 #define AMDGPU_MI100_RANGE       0x32, 0x3C
 #define AMDGPU_MI200_RANGE       0x3C, 0xFF
+#define AMDGPU_GFX940_RANGE      0x46, 0xFF
 
 #define ASICREV_IS_MI100(r)      ASICREV_IS(r, MI100)
 #define ASICREV_IS_MI200(r)      ASICREV_IS(r, MI200)
+#define ASICREV_IS_GFX940(r)     ASICREV_IS(r, GFX940)
 
 #ifdef _WIN32
 #define DRM_CAP_ADDFB2_MODIFIERS 0x10
@@ -689,8 +691,8 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info)
          else if (device_info.family == FAMILY_NV ||
                   device_info.family == FAMILY_VGH ||
                   device_info.family == FAMILY_RMB ||
-                  device_info.family == FAMILY_GC_10_3_6 ||
-                  device_info.family == FAMILY_GC_10_3_7)
+                  device_info.family == FAMILY_RPL ||
+                  device_info.family == FAMILY_MDN)
             info->ip[AMD_IP_GFX].ver_minor = info->ip[AMD_IP_COMPUTE].ver_minor = 3;
       }
       info->ip[ip_type].num_queues = util_bitcount(ip_info.available_rings);
@@ -824,6 +826,7 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info)
       identify_chip(VEGA20);
       identify_chip(MI100);
       identify_chip(MI200);
+      identify_chip(GFX940);
       break;
    case FAMILY_RV:
       identify_chip(RAVEN);
@@ -845,11 +848,11 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info)
    case FAMILY_RMB:
       identify_chip(REMBRANDT);
       break;
-   case FAMILY_GC_10_3_6:
-      identify_chip(GFX1036);
+   case FAMILY_RPL:
+      identify_chip2(RAPHAEL, RAPHAEL_MENDOCINO);
       break;
-   case FAMILY_GC_10_3_7:
-      identify_chip2(GFX1037, GFX1036);
+   case FAMILY_MDN:
+      identify_chip2(MENDOCINO, RAPHAEL_MENDOCINO);
       break;
    case FAMILY_GFX1100:
       identify_chip(GFX1100);
@@ -931,7 +934,7 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info)
 
    /* unified ring */
    info->has_video_hw.vcn_decode
-                  = info->family >= CHIP_GFX1100
+                  = (info->family >= CHIP_GFX1100 || info->family == CHIP_GFX940)
                     ? info->ip[AMD_IP_VCN_UNIFIED].num_queues != 0
                     : info->ip[AMD_IP_VCN_DEC].num_queues != 0;
    info->has_userptr = true;
@@ -1031,7 +1034,7 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info)
       case CHIP_FIJI:
       case CHIP_POLARIS12:
       case CHIP_VEGAM:
-      case CHIP_GFX1036:
+      case CHIP_RAPHAEL_MENDOCINO:
          info->l2_cache_size = info->num_tcc_blocks * 128 * 1024;
          break;
       default:
@@ -1297,7 +1300,7 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info)
          break;
       case CHIP_VANGOGH:
       case CHIP_REMBRANDT:
-      case CHIP_GFX1036:
+      case CHIP_RAPHAEL_MENDOCINO:
          pc_lines = 256;
          break;
       default:
@@ -1337,6 +1340,8 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info)
    }
 
    info->has_3d_cube_border_color_mipmap = info->has_graphics || info->family == CHIP_MI100;
+   info->has_image_opcodes = debug_get_bool_option("AMD_IMAGE_OPCODES",
+                                                   info->has_graphics || info->family < CHIP_GFX940);
    info->never_stop_sq_perf_counters = info->gfx_level == GFX10 ||
                                        info->gfx_level == GFX10_3;
    info->never_send_perfcounter_stop = info->gfx_level == GFX11;
@@ -1427,6 +1432,24 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info)
          info->pcie_bandwidth_mbps = info->pcie_num_lanes * 15.125 * 1024;
          break;
       }
+   }
+
+   /* The number of IBs per submit isn't infinite, it depends on the IP type
+    * (ie. some initial setup needed for a submit) and the packet size.
+    * It can be calculated according to the kernel source code as:
+    * (ring->max_dw - emit_frame_size) / emit_ib_size
+    *
+    * The numbers we chose here is a rough estimate that should
+    * work well (as of kernel 6.3).
+    */
+   memset(info->max_submitted_ibs, 50, AMD_NUM_IP_TYPES);
+   info->max_submitted_ibs[AMD_IP_GFX] = info->gfx_level >= GFX7 ? 192 : 144;
+   info->max_submitted_ibs[AMD_IP_COMPUTE] = 124;
+   info->max_submitted_ibs[AMD_IP_VCN_JPEG] = 16;
+   for (unsigned i = 0; i < AMD_NUM_IP_TYPES; ++i) {
+      /* Clear out max submitted IB count for IPs that have no queues. */
+      if (!info->ip[i].num_queues)
+         info->max_submitted_ibs[i] = 0;
    }
 
    if (info->gfx_level >= GFX11) {
@@ -1567,7 +1590,8 @@ void ac_print_gpu_info(struct radeon_info *info, FILE *f)
       [AMD_IP_VCE] = "VCE",
       [AMD_IP_UVD_ENC] = "UVD_ENC",
       [AMD_IP_VCN_DEC] = "VCN_DEC",
-      [AMD_IP_VCN_ENC] = info->family >= CHIP_GFX1100 ? "VCN" : "VCN_ENC",
+      [AMD_IP_VCN_ENC] = (info->family >= CHIP_GFX1100 ||
+			  info->family == CHIP_GFX940) ? "VCN" : "VCN_ENC",
       [AMD_IP_VCN_JPEG] = "VCN_JPG",
    };
 
@@ -1609,6 +1633,7 @@ void ac_print_gpu_info(struct radeon_info *info, FILE *f)
    fprintf(f, "    has_ls_vgpr_init_bug = %i\n", info->has_ls_vgpr_init_bug);
    fprintf(f, "    has_32bit_predication = %i\n", info->has_32bit_predication);
    fprintf(f, "    has_3d_cube_border_color_mipmap = %i\n", info->has_3d_cube_border_color_mipmap);
+   fprintf(f, "    has_image_opcodes = %i\n", info->has_image_opcodes);
    fprintf(f, "    never_stop_sq_perf_counters = %i\n", info->never_stop_sq_perf_counters);
    fprintf(f, "    has_sqtt_rb_harvest_bug = %i\n", info->has_sqtt_rb_harvest_bug);
    fprintf(f, "    has_sqtt_auto_flush_mode_bug = %i\n", info->has_sqtt_auto_flush_mode_bug);
@@ -1657,7 +1682,7 @@ void ac_print_gpu_info(struct radeon_info *info, FILE *f)
    fprintf(f, "Multimedia info:\n");
    fprintf(f, "    vce_encode = %u\n", info->ip[AMD_IP_VCE].num_queues);
 
-   if (info->family >= CHIP_GFX1100)
+   if (info->family >= CHIP_GFX1100 || info->family == CHIP_GFX940)
       fprintf(f, "    vcn_unified = %u\n", info->has_video_hw.vcn_decode);
    else {
       fprintf(f, "    vcn_decode = %u\n", info->has_video_hw.vcn_decode);
@@ -1684,6 +1709,12 @@ void ac_print_gpu_info(struct radeon_info *info, FILE *f)
    fprintf(f, "    mid_command_buffer_preemption_enabled = %u\n",
            info->mid_command_buffer_preemption_enabled);
    fprintf(f, "    has_tmz_support = %u\n", info->has_tmz_support);
+   for (unsigned i = 0; i < AMD_NUM_IP_TYPES; i++) {
+      if (info->max_submitted_ibs[i]) {
+         fprintf(f, "    IP %-7s max_submitted_ibs = %u\n", ip_string[i],
+                 info->max_submitted_ibs[i]);
+      }
+   }
 
    fprintf(f, "Shader core info:\n");
    for (unsigned i = 0; i < info->max_se; i++) {

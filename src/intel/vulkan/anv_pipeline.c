@@ -252,8 +252,6 @@ anv_shader_stage_to_nir(struct anv_device *device,
    };
    NIR_PASS(_, nir, nir_opt_access, &opt_access_options);
 
-   NIR_PASS(_, nir, nir_lower_frexp);
-
    /* Vulkan uses the separate-shader linking model */
    nir->info.separate_shader = true;
 
@@ -1631,6 +1629,8 @@ anv_graphics_pipeline_load_nir(struct anv_graphics_pipeline *pipeline,
          return vk_error(pipeline, VK_ERROR_UNKNOWN);
       }
 
+      nir_shader_gather_info(stages[s].nir, nir_shader_get_entrypoint(stages[s].nir));
+
       stages[s].feedback.duration += os_time_get_nano() - stage_start;
    }
 
@@ -1731,6 +1731,13 @@ anv_graphics_pipeline_compile(struct anv_graphics_pipeline *pipeline,
                                            pipeline_ctx);
    if (result != VK_SUCCESS)
       goto fail;
+
+   if (stages[MESA_SHADER_MESH].info && stages[MESA_SHADER_FRAGMENT].info) {
+      anv_apply_per_prim_attr_wa(stages[MESA_SHADER_MESH].nir,
+                                 stages[MESA_SHADER_FRAGMENT].nir,
+                                 device,
+                                 info);
+   }
 
    /* Walk backwards to link */
    struct anv_pipeline_stage *next_stage = NULL;
@@ -3391,6 +3398,22 @@ VkResult anv_GetPipelineExecutableStatisticsKHR(
                 "pressure.");
       stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
       stat->value.u64 = prog_data->total_scratch;
+   }
+
+   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
+      WRITE_STR(stat->name, "Max dispatch width");
+      WRITE_STR(stat->description,
+                "Largest SIMD dispatch width.");
+      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
+      stat->value.u64 = exe->stats.max_dispatch_width;
+   }
+
+   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
+      WRITE_STR(stat->name, "Max live registers");
+      WRITE_STR(stat->description,
+                "Maximum number of registers used across the entire shader.");
+      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
+      stat->value.u64 = exe->stats.max_live_registers;
    }
 
    if (gl_shader_stage_uses_workgroup(exe->stage)) {

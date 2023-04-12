@@ -255,10 +255,6 @@ radv_use_dcc_for_image_early(struct radv_device *device, struct radv_image *imag
         radv_formats_is_atomic_allowed(device, pCreateInfo->pNext, format, pCreateInfo->flags)))
       return false;
 
-   /* Do not enable DCC for fragment shading rate attachments. */
-   if (pCreateInfo->usage & VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR)
-      return false;
-
    if (pCreateInfo->tiling == VK_IMAGE_TILING_LINEAR)
       return false;
 
@@ -385,6 +381,11 @@ radv_use_tc_compat_cmask_for_image(struct radv_device *device, struct radv_image
 {
    /* TC-compat CMASK is only available for GFX8+. */
    if (device->physical_device->rad_info.gfx_level < GFX8)
+      return false;
+
+   /* GFX9 has issues when sample count is greater than 2 */
+   if (device->physical_device->rad_info.gfx_level == GFX9 &&
+       image->info.samples > 2)
       return false;
 
    if (device->instance->debug_flags & RADV_DEBUG_NO_TC_COMPAT_CMASK)
@@ -628,8 +629,23 @@ radv_get_surface_flags(struct radv_device *device, struct radv_image *image, uns
    if (is_depth) {
       flags |= RADEON_SURF_ZBUFFER;
 
+      if (is_depth && is_stencil && device->physical_device->rad_info.gfx_level <= GFX8) {
+         if (!(pCreateInfo->usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT))
+            flags |= RADEON_SURF_NO_RENDER_TARGET;
+
+         /* RADV doesn't support stencil pitch adjustment. As a result there are some spec gaps that
+          * are not covered by CTS.
+          *
+          * For D+S images with pitch constraints due to rendertarget usage it can happen that
+          * sampling from mipmaps beyond the base level of the descriptor is broken as the pitch
+          * adjustment can't be applied to anything beyond the first level.
+          */
+         flags |= RADEON_SURF_NO_STENCIL_ADJUST;
+      }
+
       if (radv_use_htile_for_image(device, image) &&
-          !(device->instance->debug_flags & RADV_DEBUG_NO_HIZ)) {
+          !(device->instance->debug_flags & RADV_DEBUG_NO_HIZ) &&
+          !(flags & RADEON_SURF_NO_RENDER_TARGET)) {
          if (radv_use_tc_compat_htile_for_image(device, pCreateInfo, image_format))
             flags |= RADEON_SURF_TC_COMPATIBLE_HTILE;
       } else {
@@ -656,6 +672,12 @@ radv_get_surface_flags(struct radv_device *device, struct radv_image *image, uns
       flags |=
          RADEON_SURF_PRT | RADEON_SURF_NO_FMASK | RADEON_SURF_NO_HTILE | RADEON_SURF_DISABLE_DCC;
    }
+
+   /* Disable DCC for VRS rate images because the hw can't handle compression. */
+   if (pCreateInfo->usage & VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR)
+      flags |= RADEON_SURF_VRS_RATE | RADEON_SURF_DISABLE_DCC;
+   if (!(pCreateInfo->usage & (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT)))
+      flags |= RADEON_SURF_NO_TEXTURE;
 
    return flags;
 }
@@ -1424,8 +1446,9 @@ radv_query_opaque_metadata(struct radv_device *device, struct radv_image *image,
                                   0, image->planes[0].surface.blk_w, false, false, false, false,
                                   desc, NULL);
 
-   ac_surface_get_umd_metadata(&device->physical_device->rad_info, &image->planes[0].surface,
-                               image->info.levels, desc, &md->size_metadata, md->metadata);
+   ac_surface_compute_umd_metadata(&device->physical_device->rad_info, &image->planes[0].surface,
+                                   image->info.levels, desc, &md->size_metadata, md->metadata,
+                                   device->instance->debug_flags & RADV_DEBUG_EXTRA_MD);
 }
 
 void
@@ -1487,7 +1510,7 @@ radv_image_alloc_single_sample_cmask(const struct radv_device *device,
 
    assert(image->info.storage_samples == 1);
 
-   surf->cmask_offset = align64(surf->total_size, 1 << surf->cmask_alignment_log2);
+   surf->cmask_offset = align64(surf->total_size, 1ull << surf->cmask_alignment_log2);
    surf->total_size = surf->cmask_offset + surf->cmask_size;
    surf->alignment_log2 = MAX2(surf->alignment_log2, surf->cmask_alignment_log2);
 }
@@ -1734,10 +1757,10 @@ radv_image_create_layout(struct radv_device *device, struct radv_image_create_in
       }
 
       if (create_info.bo_metadata && !mod_info &&
-          !ac_surface_set_umd_metadata(&device->physical_device->rad_info,
-                                       &image->planes[plane].surface, image_info.storage_samples,
-                                       image_info.levels, create_info.bo_metadata->size_metadata,
-                                       create_info.bo_metadata->metadata))
+          !ac_surface_apply_umd_metadata(&device->physical_device->rad_info,
+                                         &image->planes[plane].surface, image_info.storage_samples,
+                                         image_info.levels, create_info.bo_metadata->size_metadata,
+                                         create_info.bo_metadata->metadata))
          return VK_ERROR_INVALID_EXTERNAL_HANDLE;
 
       if (!create_info.no_metadata_planes && !create_info.bo_metadata && plane_count == 1 &&
@@ -1753,7 +1776,7 @@ radv_image_create_layout(struct radv_device *device, struct radv_image_create_in
          stride = mod_info->pPlaneLayouts[plane].rowPitch / image->planes[plane].surface.bpe;
       } else {
          offset = image->disjoint ? 0 :
-            align64(image->size, 1 << image->planes[plane].surface.alignment_log2);
+            align64(image->size, 1ull << image->planes[plane].surface.alignment_log2);
          stride = 0; /* 0 means no override */
       }
 
@@ -1956,11 +1979,13 @@ radv_image_create(VkDevice _device, const struct radv_image_create_info *create_
       image->planes[plane].surface.modifier = modifier;
    }
 
-   bool delay_layout =
-      external_info && (external_info->handleTypes &
-                        VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID);
+   if (image->vk.external_handle_types &
+       VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID) {
+#ifdef ANDROID
+      image->vk.ahardware_buffer_format =
+         radv_ahb_format_for_vk_format(image->vk.format);
+#endif
 
-   if (delay_layout) {
       *pImage = radv_image_to_handle(image);
       assert(!(image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT));
       return VK_SUCCESS;
@@ -2429,23 +2454,31 @@ radv_layout_dcc_compressed(const struct radv_device *device, const struct radv_i
    return device->physical_device->rad_info.gfx_level >= GFX10 || layout != VK_IMAGE_LAYOUT_GENERAL;
 }
 
-bool
-radv_layout_fmask_compressed(const struct radv_device *device, const struct radv_image *image,
-                             VkImageLayout layout, unsigned queue_mask)
+enum radv_fmask_compression
+radv_layout_fmask_compression(const struct radv_device *device, const struct radv_image *image,
+                               VkImageLayout layout, unsigned queue_mask)
 {
    if (!radv_image_has_fmask(image))
-      return false;
+      return RADV_FMASK_COMPRESSION_NONE;
+
+   if (layout == VK_IMAGE_LAYOUT_GENERAL)
+      return RADV_FMASK_COMPRESSION_NONE;
 
    /* Don't compress compute transfer dst because image stores ignore FMASK and it needs to be
     * expanded before.
     */
-   if ((layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL || layout == VK_IMAGE_LAYOUT_GENERAL) &&
-       (queue_mask & (1u << RADV_QUEUE_COMPUTE)))
-      return false;
+   if (layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && (queue_mask & (1u << RADV_QUEUE_COMPUTE)))
+      return RADV_FMASK_COMPRESSION_NONE;
+
+   if (layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ||
+       layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
+      return radv_image_is_tc_compat_cmask(image) ? RADV_FMASK_COMPRESSION_FULL :
+         RADV_FMASK_COMPRESSION_PARTIAL;
+   }
 
    /* Only compress concurrent images if TC-compat CMASK is enabled (no FMASK decompression). */
-   return layout != VK_IMAGE_LAYOUT_GENERAL &&
-          (queue_mask == (1u << RADV_QUEUE_GENERAL) || radv_image_is_tc_compat_cmask(image));
+   return (queue_mask == (1u << RADV_QUEUE_GENERAL) || radv_image_is_tc_compat_cmask(image)) ?
+      RADV_FMASK_COMPRESSION_FULL : RADV_FMASK_COMPRESSION_NONE;
 }
 
 unsigned

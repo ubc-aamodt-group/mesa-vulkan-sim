@@ -84,7 +84,10 @@ _mesa_alloc_dispatch_table(bool glthread);
 extern void
 _mesa_init_dispatch(struct gl_context *ctx);
 
-extern void
+extern bool
+_mesa_alloc_dispatch_tables(gl_api api, struct gl_dispatch *d, bool glthread);
+
+extern bool
 _mesa_initialize_dispatch_tables(struct gl_context *ctx);
 
 extern struct _glapi_table *
@@ -300,11 +303,7 @@ _mesa_is_gles1(const struct gl_context *ctx)
 static inline bool
 _mesa_is_gles2(const struct gl_context *ctx)
 {
-#if HAVE_OPENGL_ES_2
-   return ctx->API == API_OPENGLES2;
-#else
-   return false;
-#endif
+   return _mesa_is_api_gles2(ctx->API);
 }
 
 /**

@@ -122,6 +122,8 @@ private:
 
    void adjust_sparse_variable(nir_deref_instr *var_deref, const glsl_type *type,
                                nir_ssa_def *dest);
+
+   const struct gl_constants *consts;
 };
 
 /*
@@ -228,15 +230,19 @@ glsl_to_nir(const struct gl_constants *consts,
    sh->ir = NULL;
 
    nir_validate_shader(shader, "after glsl to nir, before function inline");
+   if (should_print_nir(shader)) {
+      printf("glsl_to_nir\n");
+      nir_print_shader(shader, stdout);
+   }
 
    /* We have to lower away local constant initializers right before we
     * inline functions.  That way they get properly initialized at the top
     * of the function and not at the top of its caller.
     */
-   nir_lower_variable_initializers(shader, nir_var_all);
-   nir_lower_returns(shader);
-   nir_inline_functions(shader);
-   nir_opt_deref(shader);
+   NIR_PASS_V(shader, nir_lower_variable_initializers, nir_var_all);
+   NIR_PASS_V(shader, nir_lower_returns);
+   NIR_PASS_V(shader, nir_inline_functions);
+   NIR_PASS_V(shader, nir_opt_deref);
 
    nir_validate_shader(shader, "after function inlining and return lowering");
 
@@ -279,6 +285,7 @@ glsl_to_nir(const struct gl_constants *consts,
 
 nir_visitor::nir_visitor(const struct gl_constants *consts, nir_shader *shader)
 {
+   this->consts = consts;
    this->supports_std430 = consts->UseSTD430AsDefaultPacking;
    this->shader = shader;
    this->is_global = true;
@@ -703,7 +710,13 @@ nir_visitor::visit(ir_variable *ir)
       var->state_slots = NULL;
    }
 
-   var->constant_initializer = constant_copy(ir->constant_initializer, var);
+   /* Values declared const will have ir->constant_value instead of
+    * ir->constant_initializer.
+    */
+   if (ir->constant_initializer)
+      var->constant_initializer = constant_copy(ir->constant_initializer, var);
+   else
+      var->constant_initializer = constant_copy(ir->constant_value, var);
 
    if (var->data.mode == nir_var_function_temp)
       nir_function_impl_add_variable(impl, var);
@@ -2024,8 +2037,19 @@ nir_visitor::visit(ir_expression *ir)
                                        : nir_isign(&b, srcs[0]);
       break;
    case ir_unop_rcp:  result = nir_frcp(&b, srcs[0]);  break;
-   case ir_unop_rsq:  result = nir_frsq(&b, srcs[0]);  break;
-   case ir_unop_sqrt: result = nir_fsqrt(&b, srcs[0]); break;
+
+   case ir_unop_rsq:
+      if (consts->ForceGLSLAbsSqrt)
+         srcs[0] = nir_fabs(&b, srcs[0]);
+      result = nir_frsq(&b, srcs[0]);
+      break;
+
+   case ir_unop_sqrt:
+      if (consts->ForceGLSLAbsSqrt)
+         srcs[0] = nir_fabs(&b, srcs[0]);
+      result = nir_fsqrt(&b, srcs[0]);
+      break;
+
    case ir_unop_exp:  result = nir_fexp2(&b, nir_fmul_imm(&b, srcs[0], M_LOG2E)); break;
    case ir_unop_log:  result = nir_fmul_imm(&b, nir_flog2(&b, srcs[0]), 1.0 / M_LOG2E); break;
    case ir_unop_exp2: result = nir_fexp2(&b, srcs[0]); break;
@@ -2828,6 +2852,7 @@ glsl_float64_funcs_to_nir(struct gl_context *ctx,
     * with compile times.
     */
    NIR_PASS_V(nir, nir_lower_vars_to_ssa);
+   NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_function_temp, NULL);
    NIR_PASS_V(nir, nir_copy_prop);
    NIR_PASS_V(nir, nir_opt_dce);
    NIR_PASS_V(nir, nir_opt_cse);

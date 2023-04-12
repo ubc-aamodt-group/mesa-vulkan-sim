@@ -208,7 +208,7 @@ pandecode_run_idvs(FILE *fp, struct queue_ctx *ctx, struct MALI_CEU_RUN_IDVS *I)
    if (tiler_flags.index_type)
       pandecode_log("Index offset: %u\n", cs_get_u32(ctx, 35));
 
-   pandecode_log("Vertex offset: %u\n", cs_get_u32(ctx, 36));
+   pandecode_log("Vertex offset: %d\n", cs_get_u32(ctx, 36));
    pandecode_log("Instance offset: %u\n", cs_get_u32(ctx, 37));
    pandecode_log("Tiler DCD flags2: %X\n", cs_get_u32(ctx, 38));
 
@@ -740,10 +740,10 @@ GENX(pandecode_cs)(mali_ptr queue, uint32_t size, unsigned gpu_id,
 
    uint64_t *cs = pandecode_fetch_gpu_mem(queue, size);
 
+   /* Mali-G610 has 96 registers. Other devices not yet supported, we can make
+    * this configurable later when we encounter new Malis.
+    */
    struct queue_ctx ctx = {
-      /* Mali-G610 has 96 registers. Other devices not yet supported, we can
-       * make this configurable later when we encounter new Malis.
-       */
       .nr_regs = 96,
       .regs = regs,
       .ip = cs,

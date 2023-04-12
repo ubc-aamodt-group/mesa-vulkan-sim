@@ -304,8 +304,8 @@ convert_to_SDWA(amd_gfx_level gfx_level, aco_ptr<Instruction>& instr)
 
    if (tmp->isVOP3()) {
       VALU_instruction& vop3 = tmp->valu();
-      std::copy(std::cbegin(vop3.neg), std::cend(vop3.neg), std::begin(sdwa.neg));
-      std::copy(std::cbegin(vop3.abs), std::cend(vop3.abs), std::begin(sdwa.abs));
+      sdwa.neg = vop3.neg;
+      sdwa.abs = vop3.abs;
       sdwa.omod = vop3.omod;
       sdwa.clamp = vop3.clamp;
    }
@@ -403,13 +403,11 @@ convert_to_DPP(aco_ptr<Instruction>& instr, bool dpp8)
       dpp->dpp_ctrl = dpp_quad_perm(0, 1, 2, 3);
       dpp->row_mask = 0xf;
       dpp->bank_mask = 0xf;
-
-      if (tmp->isVOP3()) {
-         const VALU_instruction* vop3 = &tmp->valu();
-         std::copy(std::cbegin(vop3->neg), std::cend(vop3->neg), std::begin(dpp->neg));
-         std::copy(std::cbegin(vop3->abs), std::cend(vop3->abs), std::begin(dpp->abs));
-      }
    }
+
+   instr->valu().neg = tmp->valu().neg;
+   instr->valu().abs = tmp->valu().abs;
+   instr->valu().opsel = tmp->valu().opsel;
 
    if (instr->isVOPC() || instr->definitions.size() > 1)
       instr->definitions.back().setFixed(vcc);
@@ -473,7 +471,8 @@ can_use_opsel(amd_gfx_level gfx_level, aco_opcode op, int idx)
    case aco_opcode::v_interp_p10_rtz_f16_f32_inreg: return idx == 0 || idx == 2;
    case aco_opcode::v_interp_p2_f16_f32_inreg:
    case aco_opcode::v_interp_p2_rtz_f16_f32_inreg: return idx == -1 || idx == 0;
-   default: return false;
+   default:
+      return gfx_level >= GFX11 && (get_gfx11_true16_mask(op) & BITFIELD_BIT(idx == -1 ? 3 : idx));
    }
 }
 
@@ -539,7 +538,6 @@ instr_is_16bit(amd_gfx_level gfx_level, aco_opcode op)
 /* On GFX11, for some instructions, bit 7 of the destination/operand vgpr is opsel and the field
  * only supports v0-v127.
  */
-// TODO: take advantage of this functionality in the RA and assembler
 uint8_t
 get_gfx11_true16_mask(aco_opcode op)
 {
@@ -1050,14 +1048,6 @@ wait_imm::empty() const
 bool
 should_form_clause(const Instruction* a, const Instruction* b)
 {
-   /* Vertex attribute loads from the same binding likely load from similar addresses */
-   unsigned a_vtx_binding =
-      a->isMUBUF() ? a->mubuf().vtx_binding : (a->isMTBUF() ? a->mtbuf().vtx_binding : 0);
-   unsigned b_vtx_binding =
-      b->isMUBUF() ? b->mubuf().vtx_binding : (b->isMTBUF() ? b->mtbuf().vtx_binding : 0);
-   if (a_vtx_binding && a_vtx_binding == b_vtx_binding)
-      return true;
-
    if (a->format != b->format)
       return false;
 

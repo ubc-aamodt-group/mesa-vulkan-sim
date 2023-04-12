@@ -21,6 +21,7 @@
 #define VK_STRUCTURE_TYPE_MEMORY_RESOURCE_ALLOCATION_SIZE_PROPERTIES_100000_MESA ((VkStructureType)1000384003)
 #define VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_RESOURCE_INFO_100000_MESA ((VkStructureType)1000384004)
 #define VK_STRUCTURE_TYPE_DEVICE_QUEUE_TIMELINE_INFO_MESA ((VkStructureType)1000384005)
+#define VK_STRUCTURE_TYPE_RING_MONITOR_INFO_MESA ((VkStructureType)1000384006)
 
 typedef enum VkCommandTypeEXT {
     VK_COMMAND_TYPE_vkCreateInstance_EXT = 0,
@@ -352,6 +353,9 @@ typedef enum VkCommandTypeEXT {
     VK_COMMAND_TYPE_vkResetFenceResource100000MESA_EXT = 244,
     VK_COMMAND_TYPE_vkWaitSemaphoreResource100000MESA_EXT = 245,
     VK_COMMAND_TYPE_vkImportSemaphoreResource100000MESA_EXT = 246,
+    VK_COMMAND_TYPE_vkSubmitVirtqueueSeqno100000MESA_EXT = 251,
+    VK_COMMAND_TYPE_vkWaitVirtqueueSeqno100000MESA_EXT = 252,
+    VK_COMMAND_TYPE_vkWaitRingSeqno100000MESA_EXT = 253,
     VK_COMMAND_TYPE_vkGetVenusExperimentalFeatureData100000MESA_EXT = 195,
 } VkCommandTypeEXT;
 
@@ -363,6 +367,7 @@ typedef enum VkRingStatusFlagBitsMESA {
     VK_RING_STATUS_NONE_MESA = 0,
     VK_RING_STATUS_IDLE_BIT_MESA = 0x00000001,
     VK_RING_STATUS_FATAL_BIT_MESA = 0x00000002,
+    VK_RING_STATUS_ALIVE_BIT_MESA = 0x00000004,
 } VkRingStatusFlagBitsMESA;
 
 typedef VkFlags VkCommandFlagsEXT;
@@ -403,6 +408,12 @@ typedef struct VkRingCreateInfoMESA {
     size_t extraSize;
 } VkRingCreateInfoMESA;
 
+typedef struct VkRingMonitorInfoMESA {
+    VkStructureType sType;
+    const void* pNext;
+    uint32_t maxReportingPeriodMicroseconds;
+} VkRingMonitorInfoMESA;
+
 typedef struct VkMemoryResourcePropertiesMESA {
     VkStructureType sType;
     void* pNext;
@@ -420,6 +431,8 @@ typedef struct VkVenusExperimentalFeatures100000MESA {
     VkBool32 globalFencing;
     VkBool32 largeRing;
     VkBool32 syncFdFencing;
+    VkBool32 asyncRoundtrip;
+    VkBool32 ringMonitoring;
 } VkVenusExperimentalFeatures100000MESA;
 
 typedef struct VkMemoryResourceAllocationSizeProperties100000MESA {

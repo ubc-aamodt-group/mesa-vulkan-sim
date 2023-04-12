@@ -68,7 +68,7 @@ def get_symbols_nm(nm, lib):
         if len(fields) == 2 or fields[1] == 'U':
             continue
         symbol_name = fields[0]
-        if platform_name == 'Linux':
+        if platform_name == 'Linux' or platform_name == 'GNU' or platform_name.startswith('GNU/'):
             if symbol_name in PLATFORM_SYMBOLS:
                 continue
         elif platform_name == 'Darwin':
@@ -189,7 +189,7 @@ def main():
             continue
         if symbol[:2] == '_Z':
             # As ajax found out, the compiler intentionally exports symbols
-            # that we explicitely asked it not to export, and we can't do
+            # that we explicitly asked it not to export, and we can't do
             # anything about it:
             # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=36022#c4
             continue

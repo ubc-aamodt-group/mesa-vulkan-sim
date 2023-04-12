@@ -182,6 +182,7 @@ index("enum glsl_sampler_dim", "image_dim")
 index("bool", "image_array")
 
 # Image format for image intrinsics
+# Vertex buffer format for load_typed_buffer_amd
 index("enum pipe_format", "format")
 
 # Access qualifiers for image and memory access intrinsics. ACCESS_RESTRICT is
@@ -865,6 +866,8 @@ system_value("shared_base_ptr", 0, bit_sizes=[32,64])
 system_value("global_base_ptr", 0, bit_sizes=[32,64])
 # Address of a transform feedback buffer, indexed by BASE
 system_value("xfb_address", 1, bit_sizes=[32,64], indices=[BASE])
+system_value("frag_size", 2)
+system_value("frag_invocation_count", 1)
 
 # System values for ray tracing.
 system_value("ray_launch_id", 3)
@@ -1108,6 +1111,9 @@ intrinsic("store_stack", [0],
 intrinsic("load_frag_shading_rate", dest_comp=1, bit_sizes=[32],
           flags=[CAN_ELIMINATE, CAN_REORDER])
 
+# Whether the rasterized fragment is fully covered by the generating primitive.
+system_value("fully_covered", dest_comp=1, bit_sizes=[1])
+
 # OpenCL printf instruction
 # First source is a deref to the format string
 # Second source is a deref to a struct containing the args
@@ -1294,8 +1300,23 @@ load("raw_output_pan", [1], [IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
 # src[] = { sampler_index }
 load("sampler_lod_parameters_pan", [1], flags=[CAN_ELIMINATE, CAN_REORDER])
 
+# Like load_output but using a specified render target conversion descriptor
+load("converted_output_pan", [1], indices=[DEST_TYPE, IO_SEMANTICS], flags=[CAN_ELIMINATE])
+
+# Load the render target conversion descriptor for a given render target given
+# in the BASE index. Converts to a type with size given by the source type.
+# Valid in fragment and blend stages.
+system_value("rt_conversion_pan", 1, indices=[BASE, SRC_TYPE], bit_sizes=[32])
+
 # Loads the sample position array on Bifrost, in a packed Arm-specific format
 system_value("sample_positions_pan", 1, bit_sizes=[64])
+
+# In a fragment shader, is the framebuffer single-sampled? 0/~0 bool
+system_value("multisampled_pan", 1, bit_sizes=[32])
+
+# In a fragment shader, the current coverage mask. Affected by writes.
+intrinsic("load_coverage_mask_pan", [], 1, [], flags=[CAN_ELIMINATE],
+          sysval=True, bit_sizes=[32])
 
 # R600 specific instrincs
 #
@@ -1331,6 +1352,18 @@ intrinsic("load_buffer_amd", src_comp=[4, 1, 1, 1], dest_comp=0, indices=[BASE, 
 # src[] = { store value, descriptor, vector byte offset, scalar byte offset, index offset }
 intrinsic("store_buffer_amd", src_comp=[0, 4, 1, 1, 1], indices=[BASE, WRITE_MASK, MEMORY_MODES, ACCESS])
 
+# Typed buffer load of arbitrary length, using a specified format.
+# src[] = { descriptor, vector byte offset, scalar byte offset, index offset }
+#
+# The compiler backend is responsible for emitting correct HW instructions according to alignment, range etc.
+# Users of this intrinsic must ensure that the first component being loaded is really the first component
+# of the specified format, because range analysis assumes this.
+# The size of the specified format also determines the memory range that this instruction is allowed to access.
+#
+# The index offset is multiplied by the stride in the descriptor, if any.
+# The vector/scalar offsets are in bytes, BASE is a constant byte offset.
+intrinsic("load_typed_buffer_amd", src_comp=[4, 1, 1, 1], dest_comp=0, indices=[BASE, MEMORY_MODES, ACCESS, FORMAT, ALIGN_MUL, ALIGN_OFFSET], flags=[CAN_ELIMINATE])
+
 # src[] = { address, unsigned 32-bit offset }.
 load("global_amd", [1, 1], indices=[BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET], flags=[CAN_ELIMINATE])
 # src[] = { value, address, unsigned 32-bit offset }.
@@ -1363,9 +1396,6 @@ system_value("ring_mesh_scratch_amd", 4)
 system_value("ring_mesh_scratch_offset_amd", 1)
 # Pointer into the draw and payload rings
 system_value("task_ring_entry_amd", 1)
-# Pointer into the draw and payload rings
-system_value("task_ib_addr", 2)
-system_value("task_ib_stride", 1)
 # Descriptor where NGG attributes are stored on GFX11.
 system_value("ring_attr_amd", 4)
 system_value("ring_attr_offset_amd", 1)
@@ -1529,10 +1559,15 @@ intrinsic("load_streamout_buffer_amd", dest_comp=4, indices=[BASE], bit_sizes=[3
 # An ID for each workgroup ordered by primitve sequence
 system_value("ordered_id_amd", 1)
 
-# Add to global streamout buffer counter in specified order
+# Add src1 to global streamout buffer offsets in the specified order
 # src[] = { ordered_id, counter }
 # WRITE_MASK = mask for counter channel to update
 intrinsic("ordered_xfb_counter_add_amd", dest_comp=0, src_comp=[1, 0], indices=[WRITE_MASK], bit_sizes=[32])
+# Subtract from global streamout buffer offsets. Used to fix up the offsets
+# when we overflow streamout buffers.
+# src[] = { offsets }
+# WRITE_MASK = mask of offsets to subtract
+intrinsic("xfb_counter_sub_amd", src_comp=[0], indices=[WRITE_MASK], bit_sizes=[32])
 
 # Provoking vertex index in a primitive
 system_value("provoking_vtx_in_prim_amd", 1)
@@ -1561,6 +1596,9 @@ system_value("lds_ngg_gs_out_vertex_base_amd", 1)
 # BASE = export target
 # FLAGS = AC_EXP_FLAG_*
 intrinsic("export_amd", [0], indices=[BASE, WRITE_MASK, FLAGS])
+
+# Alpha test reference value
+system_value("alpha_reference_amd", 1)
 
 # V3D-specific instrinc for tile buffer color reads.
 #
@@ -1715,6 +1753,15 @@ store("ssbo_block_intel", [-1, 1], [WRITE_MASK, ACCESS, ALIGN_MUL, ALIGN_OFFSET]
 
 # src[] = { value, offset }.
 store("shared_block_intel", [1], [BASE, WRITE_MASK, ALIGN_MUL, ALIGN_OFFSET])
+
+# Similar to load_global_const_block_intel but for SSBOs
+# offset should be uniform
+# src[] = { buffer_index, offset }.
+load("ssbo_uniform_block_intel", [-1, 1], [ACCESS, ALIGN_MUL, ALIGN_OFFSET], [CAN_ELIMINATE])
+
+# Similar to load_global_const_block_intel but for shared memory
+# src[] = { offset }.
+load("shared_uniform_block_intel", [1], [BASE, ALIGN_MUL, ALIGN_OFFSET], [CAN_ELIMINATE])
 
 # Intrinsics for Intel mesh shading
 system_value("mesh_inline_data_intel", 1, [ALIGN_OFFSET], bit_sizes=[32, 64])

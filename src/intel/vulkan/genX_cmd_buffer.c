@@ -35,6 +35,7 @@
 #include "genxml/genX_rt_pack.h"
 #include "common/intel_guardband.h"
 #include "compiler/brw_prim.h"
+#include "common/intel_genX_state.h"
 
 #include "ds/intel_tracepoints.h"
 
@@ -82,24 +83,10 @@ convert_pc_to_bits(struct GENX(PIPE_CONTROL) *pc) {
 
 #define anv_debug_dump_pc(pc) \
    if (INTEL_DEBUG(DEBUG_PIPE_CONTROL)) { \
-      fputs("pc: emit PC=( ", stderr); \
-      anv_dump_pipe_bits(convert_pc_to_bits(&(pc))); \
-      fprintf(stderr, ") reason: %s\n", __func__); \
+      fputs("pc: emit PC=( ", stdout); \
+      anv_dump_pipe_bits(convert_pc_to_bits(&(pc)), stdout);   \
+      fprintf(stdout, ") reason: %s\n", __func__); \
    }
-
-static bool
-is_render_queue_cmd_buffer(const struct anv_cmd_buffer *cmd_buffer)
-{
-   struct anv_queue_family *queue_family = cmd_buffer->queue_family;
-   return (queue_family->queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0;
-}
-
-static bool
-is_video_queue_cmd_buffer(const struct anv_cmd_buffer *cmd_buffer)
-{
-   struct anv_queue_family *queue_family = cmd_buffer->queue_family;
-   return (queue_family->queueFlags & VK_QUEUE_VIDEO_DECODE_BIT_KHR) != 0;
-}
 
 ALWAYS_INLINE static void
 genX(emit_dummy_post_sync_op)(struct anv_cmd_buffer *cmd_buffer,
@@ -291,7 +278,7 @@ genX(cmd_buffer_emit_state_base_address)(struct anv_cmd_buffer *cmd_buffer)
 
 static void
 add_surface_reloc(struct anv_cmd_buffer *cmd_buffer,
-                  struct anv_state state, struct anv_address addr)
+                  struct anv_address addr)
 {
    VkResult result = anv_reloc_list_add_bo(&cmd_buffer->surface_relocs,
                                            &cmd_buffer->vk.pool->alloc,
@@ -306,7 +293,7 @@ add_surface_state_relocs(struct anv_cmd_buffer *cmd_buffer,
                          struct anv_surface_state state)
 {
    assert(!anv_address_is_null(state.address));
-   add_surface_reloc(cmd_buffer, state.state, state.address);
+   add_surface_reloc(cmd_buffer, state.address);
 
    if (!anv_address_is_null(state.aux_address)) {
       VkResult result =
@@ -1597,9 +1584,27 @@ genX(emit_apply_pipe_flushes)(struct anv_batch *batch,
     *    "Driver must ensure that the engine is IDLE but ensure it doesn't
     *    add extra flushes in the case it knows that the engine is already
     *    IDLE."
+    *
+    * HSD 22012751911: SW Programming sequence when issuing aux invalidation:
+    *
+    *    "Render target Cache Flush + L3 Fabric Flush + State Invalidation + CS Stall"
+    *
+    * Notice we don't set the L3 Fabric Flush here, because we have
+    * ANV_PIPE_END_OF_PIPE_SYNC_BIT which inserts a CS stall. The
+    * PIPE_CONTROL::L3 Fabric Flush documentation says :
+    *
+    *    "L3 Fabric Flush will ensure all the pending transactions in the L3
+    *     Fabric are flushed to global observation point. HW does implicit L3
+    *     Fabric Flush on all stalling flushes (both explicit and implicit)
+    *     and on PIPECONTROL having Post Sync Operation enabled."
+    *
+    * Therefore setting L3 Fabric Flush here would be redundant.
     */
-   if (GFX_VER == 12 && (bits & ANV_PIPE_AUX_TABLE_INVALIDATE_BIT))
-      bits |= ANV_PIPE_NEEDS_END_OF_PIPE_SYNC_BIT;
+   if (GFX_VER == 12 && (bits & ANV_PIPE_AUX_TABLE_INVALIDATE_BIT)) {
+      bits |= (ANV_PIPE_NEEDS_END_OF_PIPE_SYNC_BIT |
+               ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT |
+               ANV_PIPE_STATE_CACHE_INVALIDATE_BIT);
+   }
 
    /* If we're going to do an invalidate and we have a pending end-of-pipe
     * sync that has yet to be resolved, we do the end-of-pipe sync now.
@@ -1668,10 +1673,10 @@ genX(emit_apply_pipe_flushes)(struct anv_batch *batch,
          pipe.RenderTargetCacheFlushEnable =
             bits & ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT;
 
+#if INTEL_NEEDS_WA_1409600907
          /* Wa_1409600907: "PIPE_CONTROL with Depth Stall Enable bit must
           * be set with any PIPE_CONTROL with Depth Flush Enable bit set.
           */
-#if GFX_VER >= 12
          pipe.DepthStallEnable =
             pipe.DepthCacheFlushEnable || (bits & ANV_PIPE_DEPTH_STALL_BIT);
 #else
@@ -1747,7 +1752,16 @@ genX(emit_apply_pipe_flushes)(struct anv_batch *batch,
        * saying that render target writes are ongoing.
        */
       if (bits & ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT)
-         bits &= ~(ANV_PIPE_RENDER_TARGET_BUFFER_WRITES);
+         bits &= ~ANV_PIPE_RENDER_TARGET_BUFFER_WRITES;
+
+      /* If the conditions for flushing the query clears are met, we can
+       * toggle the bit off.
+       */
+      if ((bits & ANV_PIPE_QUERY_FLUSH_BITS) == ANV_PIPE_QUERY_FLUSH_BITS &&
+          (bits & (ANV_PIPE_END_OF_PIPE_SYNC_BIT |
+                   ANV_PIPE_CS_STALL_BIT))) {
+         bits &= ~ANV_PIPE_QUERY_CLEARS_BIT;
+      }
 
       bits &= ~(ANV_PIPE_FLUSH_BITS | ANV_PIPE_STALL_BITS |
                 ANV_PIPE_END_OF_PIPE_SYNC_BIT);
@@ -1817,6 +1831,19 @@ genX(emit_apply_pipe_flushes)(struct anv_batch *batch,
          anv_batch_emit(batch, GENX(MI_LOAD_REGISTER_IMM), lri) {
             lri.RegisterOffset = GENX(GFX_CCS_AUX_INV_num);
             lri.DataDWord = 1;
+         }
+         /* HSD 22012751911: SW Programming sequence when issuing aux invalidation:
+          *
+          *    "Poll Aux Invalidation bit once the invalidation is set
+          *     (Register 4208 bit 0)"
+          */
+         anv_batch_emit(batch, GENX(MI_SEMAPHORE_WAIT), sem) {
+            sem.CompareOperation = COMPARE_SAD_EQUAL_SDD;
+            sem.WaitMode = PollingMode;
+            sem.RegisterPollMode = true;
+            sem.SemaphoreDataDword = 0x0;
+            sem.SemaphoreAddress =
+               anv_address_from_u64(GENX(GFX_CCS_AUX_INV_num));
          }
       }
 #endif
@@ -2075,8 +2102,7 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
          assert(set->desc_mem.alloc_size);
          assert(set->desc_surface_state.alloc_size);
          bt_map[s] = set->desc_surface_state.offset + state_offset;
-         add_surface_reloc(cmd_buffer, set->desc_surface_state,
-                           anv_descriptor_set_address(set));
+         add_surface_reloc(cmd_buffer, anv_descriptor_set_address(set));
          break;
       }
 
@@ -3396,9 +3422,9 @@ genX(cmd_buffer_flush_gfx_state)(struct anv_cmd_buffer *cmd_buffer)
       cmd_buffer->state.push_descriptors_dirty &= ~push_descriptor_dirty;
    }
 
-   /* Wa_1306463417, Wa_16011107343 - Send HS state for every primitive. */
+   /* Wa_1409433168, Wa_16011107343 - Send HS state for every primitive. */
    if (cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_PIPELINE ||
-       (GFX_VER == 11 || GFX_VERx10 == 120)) {
+       (INTEL_NEEDS_WA_1409433168 || INTEL_NEEDS_WA_16011107343)) {
       genX(emit_hs)(cmd_buffer);
    }
 
@@ -3557,15 +3583,14 @@ anv_use_generated_draws(const struct anv_cmd_buffer *cmd_buffer, uint32_t count)
 {
    const struct anv_device *device = cmd_buffer->device;
 
-#if GFX_VER == 11 || GFX_VERx10 == 120
    /* Limit generated draws to pipelines without HS stage. This makes things
-    * simpler for implementing Wa_1306463417, Wa_16011107343.
+    * simpler for implementing Wa_1409433168, Wa_16011107343.
     */
-   if (anv_pipeline_has_stage(cmd_buffer->state.gfx.pipeline,
-                             MESA_SHADER_TESS_CTRL)) {
+   if ((INTEL_NEEDS_WA_1409433168 || INTEL_NEEDS_WA_16011107343) &&
+       anv_pipeline_has_stage(cmd_buffer->state.gfx.pipeline,
+                              MESA_SHADER_TESS_CTRL)) {
       return false;
    }
-#endif
 
    return device->physical->generated_indirect_draws &&
           count >= device->physical->instance->generated_indirect_threshold;
@@ -3610,10 +3635,10 @@ genX(BeginCommandBuffer)(
    if (cmd_buffer->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY)
       cmd_buffer->usage_flags &= ~VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
 
-   if (is_video_queue_cmd_buffer(cmd_buffer))
-      return VK_SUCCESS;
-
    trace_intel_begin_cmd_buffer(&cmd_buffer->trace);
+
+   if (anv_cmd_buffer_is_video_queue(cmd_buffer))
+      return VK_SUCCESS;
 
    genX(cmd_buffer_emit_state_base_address)(cmd_buffer);
 
@@ -3779,12 +3804,23 @@ genX(EndCommandBuffer)(
    if (anv_batch_has_error(&cmd_buffer->batch))
       return cmd_buffer->batch.status;
 
-   if (is_video_queue_cmd_buffer(cmd_buffer)) {
+   anv_measure_endcommandbuffer(cmd_buffer);
+
+   if (anv_cmd_buffer_is_video_queue(cmd_buffer)) {
+      trace_intel_end_cmd_buffer(&cmd_buffer->trace, cmd_buffer->vk.level);
       anv_cmd_buffer_end_batch_buffer(cmd_buffer);
       return VK_SUCCESS;
    }
 
-   anv_measure_endcommandbuffer(cmd_buffer);
+   /* Flush query clears using blorp so that secondary query writes do not
+    * race with the clear.
+    */
+   if (cmd_buffer->state.pending_pipe_bits & ANV_PIPE_QUERY_CLEARS_BIT) {
+      anv_add_pending_pipe_bits(cmd_buffer,
+                                ANV_PIPE_QUERY_FLUSH_BITS |
+                                ANV_PIPE_NEEDS_END_OF_PIPE_SYNC_BIT,
+                                "query clear flush prior command buffer end");
+   }
 
    genX(cmd_buffer_flush_generated_draws)(cmd_buffer);
 
@@ -3860,6 +3896,16 @@ genX(CmdExecuteCommands)(
     * Apply task URB workaround before secondary cmd buffers.
     */
    genX(apply_task_urb_workaround)(primary);
+
+   /* Flush query clears using blorp so that secondary query writes do not
+    * race with the clear.
+    */
+   if (primary->state.pending_pipe_bits & ANV_PIPE_QUERY_CLEARS_BIT) {
+      anv_add_pending_pipe_bits(primary,
+                                ANV_PIPE_QUERY_FLUSH_BITS |
+                                ANV_PIPE_NEEDS_END_OF_PIPE_SYNC_BIT,
+                                "query clear flush prior to secondary buffer");
+   }
 
    /* The secondary command buffer doesn't know which textures etc. have been
     * flushed prior to their execution.  Apply those flushes now.
@@ -3938,6 +3984,7 @@ genX(CmdExecuteCommands)(
    primary->state.current_l3_config = NULL;
    primary->state.current_hash_scale = 0;
    primary->state.gfx.push_constant_stages = 0;
+   primary->state.compute.cfe_state_valid = false;
    vk_dynamic_graphics_state_dirty_all(&primary->vk.dynamic_graphics_state);
 
    /* Each of the secondary command buffers will use its own state base
@@ -3986,7 +4033,7 @@ cmd_buffer_barrier(struct anv_cmd_buffer *cmd_buffer,
    VkAccessFlags2 src_flags = 0;
    VkAccessFlags2 dst_flags = 0;
 
-   if (is_video_queue_cmd_buffer(cmd_buffer))
+   if (anv_cmd_buffer_is_video_queue(cmd_buffer))
       return;
 
    for (uint32_t i = 0; i < dep_info->memoryBarrierCount; i++) {
@@ -4196,10 +4243,10 @@ void genX(CmdDrawMultiEXT)(
 #else
    vk_foreach_multi_draw(draw, i, pVertexInfo, drawCount, stride) {
 
-      /* Wa_1306463417, Wa_16011107343 - Send HS state for every primitive,
+      /* Wa_1409433168, Wa_16011107343 - Send HS state for every primitive,
        * first one was handled by cmd_buffer_flush_gfx_state.
        */
-      if (i && (GFX_VER == 11 || GFX_VERx10 == 120))
+      if (i && (INTEL_NEEDS_WA_1409433168 || INTEL_NEEDS_WA_16011107343))
          genX(emit_hs)(cmd_buffer);
 
       anv_batch_emit(&cmd_buffer->batch, GENX(3DPRIMITIVE_EXTENDED), prim) {
@@ -4406,10 +4453,10 @@ void genX(CmdDrawMultiIndexedEXT)(
 #else
    vk_foreach_multi_draw_indexed(draw, i, pIndexInfo, drawCount, stride) {
 
-      /* Wa_1306463417, Wa_16011107343 - Send HS state for every primitive,
+      /* Wa_1409433168, Wa_16011107343 - Send HS state for every primitive,
        * first one was handled by cmd_buffer_flush_gfx_state.
        */
-      if (i && (GFX_VER == 11 || GFX_VERx10 == 120))
+      if (i && (INTEL_NEEDS_WA_1409433168 || INTEL_NEEDS_WA_16011107343))
          genX(emit_hs)(cmd_buffer);
 
       anv_batch_emit(&cmd_buffer->batch, GENX(3DPRIMITIVE_EXTENDED), prim) {
@@ -4659,10 +4706,10 @@ emit_indirect_draws(struct anv_cmd_buffer *cmd_buffer,
 
       load_indirect_parameters(cmd_buffer, draw, indexed, i);
 
-      /* Wa_1306463417, Wa_16011107343 - Send HS state for every primitive,
+      /* Wa_1409433168, Wa_16011107343 - Send HS state for every primitive,
        * first one was handled by cmd_buffer_flush_gfx_state.
        */
-      if (i && (GFX_VER == 11 || GFX_VERx10 == 120))
+      if (i && (INTEL_NEEDS_WA_1409433168 || INTEL_NEEDS_WA_16011107343))
          genX(emit_hs)(cmd_buffer);
 
       anv_batch_emit(&cmd_buffer->batch,
@@ -4884,10 +4931,10 @@ emit_indirect_count_draws(struct anv_cmd_buffer *cmd_buffer,
 
       load_indirect_parameters(cmd_buffer, draw, indexed, i);
 
-      /* Wa_1306463417, Wa_16011107343 - Send HS state for every primitive,
+      /* Wa_1409433168, Wa_16011107343 - Send HS state for every primitive,
        * first one was handled by cmd_buffer_flush_gfx_state.
        */
-      if (i && (GFX_VER == 11 || GFX_VERx10 == 120))
+      if (i && (INTEL_NEEDS_WA_1409433168 || INTEL_NEEDS_WA_16011107343))
          genX(emit_hs)(cmd_buffer);
 
       anv_batch_emit(&cmd_buffer->batch,
@@ -5475,11 +5522,58 @@ genX(CmdDrawMeshTasksIndirectCountEXT)(
 
 #endif /* GFX_VERx10 >= 125 */
 
+void
+genX(cmd_buffer_ensure_cfe_state)(struct anv_cmd_buffer *cmd_buffer,
+                                  uint32_t total_scratch)
+{
+#if GFX_VERx10 >= 125
+   assert(cmd_buffer->state.current_pipeline == GPGPU);
+
+   struct anv_cmd_compute_state *comp_state = &cmd_buffer->state.compute;
+
+   if (comp_state->cfe_state_valid &&
+       total_scratch <= comp_state->scratch_size)
+      return;
+
+   const struct intel_device_info *devinfo = cmd_buffer->device->info;
+   anv_batch_emit(&cmd_buffer->batch, GENX(CFE_STATE), cfe) {
+      const uint32_t subslices = MAX2(devinfo->subslice_total, 1);
+      cfe.MaximumNumberofThreads =
+         devinfo->max_cs_threads * subslices - 1;
+
+      uint32_t scratch_surf = 0xffffffff;
+      if (total_scratch > 0) {
+         struct anv_bo *scratch_bo =
+               anv_scratch_pool_alloc(cmd_buffer->device,
+                                      &cmd_buffer->device->scratch_pool,
+                                      MESA_SHADER_COMPUTE,
+                                      total_scratch);
+         anv_reloc_list_add_bo(cmd_buffer->batch.relocs,
+                               cmd_buffer->batch.alloc,
+                               scratch_bo);
+         scratch_surf =
+            anv_scratch_pool_get_surf(cmd_buffer->device,
+                                      &cmd_buffer->device->scratch_pool,
+                                      total_scratch);
+         cfe.ScratchSpaceBuffer = scratch_surf >> 4;
+      }
+
+      cfe.OverDispatchControl = 2; /* 50% overdispatch */
+   }
+
+   comp_state->scratch_size = total_scratch;
+   comp_state->cfe_state_valid = true;
+#else
+   unreachable("Invalid call");
+#endif
+}
+
 static void
 genX(cmd_buffer_flush_compute_state)(struct anv_cmd_buffer *cmd_buffer)
 {
    struct anv_cmd_compute_state *comp_state = &cmd_buffer->state.compute;
    struct anv_compute_pipeline *pipeline = comp_state->pipeline;
+   const UNUSED struct intel_device_info *devinfo = cmd_buffer->device->info;
 
    assert(pipeline->cs);
 
@@ -5494,6 +5588,7 @@ genX(cmd_buffer_flush_compute_state)(struct anv_cmd_buffer *cmd_buffer)
    genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
 
    if (cmd_buffer->state.compute.pipeline_dirty) {
+#if GFX_VERx10 < 125
       /* From the Sky Lake PRM Vol 2a, MEDIA_VFE_STATE:
        *
        *    "A stalling PIPE_CONTROL is required before MEDIA_VFE_STATE unless
@@ -5506,8 +5601,14 @@ genX(cmd_buffer_flush_compute_state)(struct anv_cmd_buffer *cmd_buffer)
                               ANV_PIPE_CS_STALL_BIT,
                               "flush compute state");
       genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
+#endif
 
       anv_batch_emit_batch(&cmd_buffer->batch, &pipeline->base.batch);
+
+#if GFX_VERx10 >= 125
+      const struct brw_cs_prog_data *prog_data = get_cs_prog_data(pipeline);
+      genX(cmd_buffer_ensure_cfe_state)(cmd_buffer, prog_data->base.total_scratch);
+#endif
 
       /* The workgroup size of the pipeline affects our push constant layout
        * so flag push constants as dirty if we change the pipeline.
@@ -5646,6 +5747,7 @@ emit_compute_walker(struct anv_cmd_buffer *cmd_buffer,
          .NumberofThreadsinGPGPUThreadGroup = dispatch.threads,
          .SharedLocalMemorySize = encode_slm_size(GFX_VER,
                                                   prog_data->base.total_shared),
+         .PreferredSLMAllocationSize = preferred_slm_allocation_size(devinfo),
          .NumberOfBarriers = prog_data->uses_barrier,
       };
    }
@@ -5863,7 +5965,7 @@ genX(cmd_buffer_dispatch_kernel)(struct anv_cmd_buffer *cmd_buffer,
 
    genX(cmd_buffer_config_l3)(cmd_buffer, kernel->l3_config);
 
-   if (is_render_queue_cmd_buffer(cmd_buffer))
+   if (anv_cmd_buffer_is_render_queue(cmd_buffer))
       genX(flush_pipeline_select_gpgpu)(cmd_buffer);
 
    /* Apply any pending pipeline flushes we may have.  We want to apply them
@@ -5919,28 +6021,6 @@ genX(cmd_buffer_dispatch_kernel)(struct anv_cmd_buffer *cmd_buffer,
 
    struct brw_cs_dispatch_info dispatch =
       brw_cs_get_dispatch_info(devinfo, cs_prog_data, NULL);
-
-   anv_batch_emit(&cmd_buffer->batch, GENX(CFE_STATE), cfe) {
-      const uint32_t subslices = MAX2(devinfo->subslice_total, 1);
-      cfe.MaximumNumberofThreads =
-         devinfo->max_cs_threads * subslices - 1;
-
-      if (cs_prog_data->base.total_scratch > 0) {
-         struct anv_bo *scratch_bo =
-            anv_scratch_pool_alloc(cmd_buffer->device,
-                                   &cmd_buffer->device->scratch_pool,
-                                   MESA_SHADER_COMPUTE,
-                                   cs_prog_data->base.total_scratch);
-         anv_reloc_list_add_bo(cmd_buffer->batch.relocs,
-                               cmd_buffer->batch.alloc,
-                               scratch_bo);
-         uint32_t scratch_surf =
-            anv_scratch_pool_get_surf(cmd_buffer->device,
-                                      &cmd_buffer->device->scratch_pool,
-                                      cs_prog_data->base.total_scratch);
-         cfe.ScratchSpaceBuffer = scratch_surf >> 4;
-      }
-   }
 
    anv_batch_emit(&cmd_buffer->batch, GENX(COMPUTE_WALKER), cw) {
       cw.PredicateEnable                = false;
@@ -6470,6 +6550,35 @@ genX(flush_pipeline_select)(struct anv_cmd_buffer *cmd_buffer,
       anv_batch_emit(&cmd_buffer->batch, GENX(3DSTATE_CC_STATE_POINTERS), t);
 #endif
 
+#if GFX_VERx10 == 120
+   /* Undocumented workaround to force the re-emission of
+    * MEDIA_INTERFACE_DESCRIPTOR_LOAD when switching from 3D to Compute
+    * pipeline without rebinding a pipeline :
+    *    vkCmdBindPipeline(COMPUTE, cs_pipeline);
+    *    vkCmdDispatch(...);
+    *    vkCmdBindPipeline(GRAPHICS, gfx_pipeline);
+    *    vkCmdDraw(...);
+    *    vkCmdDispatch(...);
+    */
+   if (pipeline == _3D)
+      cmd_buffer->state.compute.pipeline_dirty = true;
+#endif
+
+
+#if GFX_VERx10 < 125
+   /* We apparently cannot flush the tile cache (color/depth) from the GPGPU
+    * pipeline. That means query clears will not be visible to query
+    * copy/write. So we need to flush it before going to GPGPU mode.
+    */
+   if (cmd_buffer->state.current_pipeline == _3D &&
+       (cmd_buffer->state.pending_pipe_bits & ANV_PIPE_QUERY_CLEARS_BIT)) {
+      anv_add_pending_pipe_bits(cmd_buffer,
+                                ANV_PIPE_QUERY_FLUSH_BITS |
+                                ANV_PIPE_END_OF_PIPE_SYNC_BIT,
+                                "query clear flush prior to GPGPU");
+   }
+#endif
+
 #if GFX_VER >= 12
    /* From Tigerlake PRM, Volume 2a, PIPELINE_SELECT:
     *
@@ -6992,7 +7101,7 @@ void genX(CmdBeginRendering)(
    struct anv_cmd_graphics_state *gfx = &cmd_buffer->state.gfx;
    VkResult result;
 
-   if (!is_render_queue_cmd_buffer(cmd_buffer)) {
+   if (!anv_cmd_buffer_is_render_queue(cmd_buffer)) {
       assert(!"Trying to start a render pass on non-render queue!");
       anv_batch_set_error(&cmd_buffer->batch, VK_ERROR_UNKNOWN);
       return;
@@ -7464,8 +7573,10 @@ void genX(CmdBeginRendering)(
 #if GFX_VER >= 11
    bool has_color_att = false;
    for (uint32_t i = 0; i < gfx->color_att_count; i++) {
-      if (pRenderingInfo->pColorAttachments[i].imageView != VK_NULL_HANDLE)
+      if (pRenderingInfo->pColorAttachments[i].imageView != VK_NULL_HANDLE) {
          has_color_att = true;
+         break;
+      }
    }
    if (has_color_att) {
       /* The PIPE_CONTROL command description says:
@@ -7798,7 +7909,7 @@ void genX(CmdSetEvent2)(
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    ANV_FROM_HANDLE(anv_event, event, _event);
 
-   if (is_video_queue_cmd_buffer(cmd_buffer)) {
+   if (anv_cmd_buffer_is_video_queue(cmd_buffer)) {
       anv_batch_emit(&cmd_buffer->batch, GENX(MI_FLUSH_DW), flush) {
          flush.PostSyncOperation = WriteImmediateData;
          flush.Address = anv_state_pool_state_address(
@@ -7845,7 +7956,7 @@ void genX(CmdResetEvent2)(
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    ANV_FROM_HANDLE(anv_event, event, _event);
 
-   if (is_video_queue_cmd_buffer(cmd_buffer)) {
+   if (anv_cmd_buffer_is_video_queue(cmd_buffer)) {
       anv_batch_emit(&cmd_buffer->batch, GENX(MI_FLUSH_DW), flush) {
          flush.PostSyncOperation = WriteImmediateData;
          flush.Address = anv_state_pool_state_address(

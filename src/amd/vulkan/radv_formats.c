@@ -38,6 +38,10 @@
 #include "vulkan/util/vk_format.h"
 #include "vulkan/util/vk_enum_defines.h"
 
+#ifdef ANDROID
+#include "vk_android.h"
+#endif
+
 uint32_t
 radv_translate_buffer_dataformat(const struct util_format_description *desc, int first_non_void)
 {
@@ -1218,12 +1222,6 @@ radv_get_modifier_flags(struct radv_physical_device *dev, VkFormat format, uint6
    return features;
 }
 
-static VkFormatFeatureFlags
-features2_to_features(VkFormatFeatureFlags2 features2)
-{
-   return features2 & VK_ALL_FORMAT_FEATURE_FLAG_BITS;
-}
-
 static void
 radv_list_drm_format_modifiers(struct radv_physical_device *dev, VkFormat format,
                                const VkFormatProperties3 *format_props,
@@ -1273,7 +1271,8 @@ radv_list_drm_format_modifiers(struct radv_physical_device *dev, VkFormat format
          *out_props = (VkDrmFormatModifierPropertiesEXT) {
             .drmFormatModifier = mods[i],
             .drmFormatModifierPlaneCount = planes,
-            .drmFormatModifierTilingFeatures = features2_to_features(features),
+            .drmFormatModifierTilingFeatures =
+               vk_format_features2_to_features(features),
          };
       };
    }
@@ -1429,11 +1428,11 @@ radv_GetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice, VkForma
    radv_physical_device_get_format_properties(physical_device, format, &format_props);
 
    pFormatProperties->formatProperties.linearTilingFeatures =
-      features2_to_features(format_props.linearTilingFeatures);
+      vk_format_features2_to_features(format_props.linearTilingFeatures);
    pFormatProperties->formatProperties.optimalTilingFeatures =
-      features2_to_features(format_props.optimalTilingFeatures);
+      vk_format_features2_to_features(format_props.optimalTilingFeatures);
    pFormatProperties->formatProperties.bufferFeatures =
-      features2_to_features(format_props.bufferFeatures);
+      vk_format_features2_to_features(format_props.bufferFeatures);
 
    VkFormatProperties3 *format_props_extended =
       vk_find_struct(pFormatProperties, FORMAT_PROPERTIES_3);
@@ -1803,7 +1802,7 @@ radv_GetPhysicalDeviceImageFormatProperties2(VkPhysicalDevice physicalDevice,
    if (android_usage && ahb_supported) {
 #if RADV_SUPPORT_ANDROID_HARDWARE_BUFFER
       android_usage->androidHardwareBufferUsage =
-         radv_ahb_usage_from_vk_usage(base_info->flags, base_info->usage);
+         vk_image_usage_to_ahb_usage(base_info->flags, base_info->usage);
 #endif
    }
 
@@ -2100,10 +2099,6 @@ radv_dcc_formats_compatible(enum amd_gfx_level gfx_level, VkFormat format1, VkFo
    unsigned size1, size2;
    int i;
 
-   /* All formats are compatible on GFX11. */
-   if (gfx_level >= GFX11)
-      return true;
-
    if (format1 == format2)
       return true;
 
@@ -2126,8 +2121,16 @@ radv_dcc_formats_compatible(enum amd_gfx_level gfx_level, VkFormat format1, VkFo
        (type1 == dcc_channel_float) != (type2 == dcc_channel_float) || size1 != size2)
       return false;
 
-   if (type1 != type2)
+   if (type1 != type2) {
+      /* FIXME: All formats should be compatible on GFX11 but for some reasons DCC with signedness
+       * reinterpretation doesn't work as expected, like R8_UINT<->R8_SINT. Note that disabling
+       * fast-clears doesn't help.
+       */
+      if (gfx_level >= GFX11)
+         return false;
+
       *sign_reinterpret = true;
+   }
 
    return true;
 }
