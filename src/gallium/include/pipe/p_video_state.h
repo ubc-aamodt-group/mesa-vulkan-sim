@@ -143,7 +143,8 @@ enum pipe_h2645_enc_rate_control_method
    PIPE_H2645_ENC_RATE_CONTROL_METHOD_CONSTANT_SKIP = 0x01,
    PIPE_H2645_ENC_RATE_CONTROL_METHOD_VARIABLE_SKIP = 0x02,
    PIPE_H2645_ENC_RATE_CONTROL_METHOD_CONSTANT = 0x03,
-   PIPE_H2645_ENC_RATE_CONTROL_METHOD_VARIABLE = 0x04
+   PIPE_H2645_ENC_RATE_CONTROL_METHOD_VARIABLE = 0x04,
+   PIPE_H2645_ENC_RATE_CONTROL_METHOD_QUALITY_VARIABLE = 0x05
 };
 
 enum pipe_slice_buffer_placement_type
@@ -389,6 +390,15 @@ struct pipe_h264_picture_desc
 
    /* using private as a parameter name conflicts with C++ keywords */
    void    *priv;
+
+   struct
+   {
+      bool slice_info_present;
+      uint32_t slice_count;
+      uint32_t slice_data_size[128];
+      uint32_t slice_data_offset[128];
+      enum pipe_slice_buffer_placement_type slice_data_flag[128];
+   } slice_parameter;
 };
 
 struct pipe_enc_quality_modes
@@ -408,6 +418,8 @@ struct pipe_h264_enc_rate_control
    unsigned frame_rate_den;
    unsigned vbv_buffer_size;
    unsigned vbv_buf_lv;
+   unsigned vbv_buf_initial_size;
+   bool app_requested_hrd_buffer;
    unsigned target_bits_picture;
    unsigned peak_bits_picture_integer;
    unsigned peak_bits_picture_fraction;
@@ -417,6 +429,10 @@ struct pipe_h264_enc_rate_control
    unsigned max_au_size;
    unsigned max_qp;
    unsigned min_qp;
+   bool app_requested_qp_range;
+
+   /* Used with PIPE_H2645_ENC_RATE_CONTROL_METHOD_QUALITY_VARIABLE */
+   unsigned vbr_quality_factor;
 };
 
 struct pipe_h264_enc_motion_estimation
@@ -608,6 +624,8 @@ struct pipe_h265_enc_rate_control
    unsigned quant_b_frames;
    unsigned vbv_buffer_size;
    unsigned vbv_buf_lv;
+   unsigned vbv_buf_initial_size;
+   bool app_requested_hrd_buffer;
    unsigned target_bits_picture;
    unsigned peak_bits_picture_integer;
    unsigned peak_bits_picture_fraction;
@@ -617,6 +635,10 @@ struct pipe_h265_enc_rate_control
    unsigned max_au_size;
    unsigned max_qp;
    unsigned min_qp;
+   bool app_requested_qp_range;
+
+   /* Used with PIPE_H2645_ENC_RATE_CONTROL_METHOD_QUALITY_VARIABLE */
+   unsigned vbr_quality_factor;
 };
 
 struct pipe_h265_enc_picture_desc

@@ -1384,8 +1384,7 @@ struct SMEM_instruction : public Instruction {
    bool dlc : 1; /* NAVI: device level coherent */
    bool nv : 1;  /* VEGA only: Non-volatile */
    bool disable_wqm : 1;
-   bool prevent_overflow : 1; /* avoid overflow when combining additions */
-   uint8_t padding : 3;
+   uint8_t padding : 4;
 };
 static_assert(sizeof(SMEM_instruction) == sizeof(Instruction) + 4, "Unexpected padding");
 
@@ -2037,11 +2036,11 @@ static constexpr Stage vertex_geometry_gs(HWStage::GS, SWStage::VS_GS);
 static constexpr Stage vertex_tess_control_hs(HWStage::HS, SWStage::VS_TCS);
 static constexpr Stage tess_eval_geometry_gs(HWStage::GS, SWStage::TES_GS);
 /* pre-GFX9 */
-static constexpr Stage vertex_ls(HWStage::LS, SWStage::VS); /* vertex before tesselation control */
+static constexpr Stage vertex_ls(HWStage::LS, SWStage::VS); /* vertex before tessellation control */
 static constexpr Stage vertex_es(HWStage::ES, SWStage::VS); /* vertex before geometry */
 static constexpr Stage tess_control_hs(HWStage::HS, SWStage::TCS);
 static constexpr Stage tess_eval_es(HWStage::ES,
-                                    SWStage::TES); /* tesselation evaluation before geometry */
+                                    SWStage::TES); /* tessellation evaluation before geometry */
 static constexpr Stage geometry_gs(HWStage::GS, SWStage::GS);
 /* Raytracing */
 static constexpr Stage raytracing_cs(HWStage::CS, SWStage::RT);

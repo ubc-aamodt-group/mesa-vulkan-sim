@@ -1029,9 +1029,15 @@ bool Converter::assignSlots() {
 
    uint8_t i;
    BITSET_FOREACH_SET(i, nir->info.system_values_read, SYSTEM_VALUE_MAX) {
-      info_out->sv[info_out->numSysVals].sn = tgsi_get_sysval_semantic(i);
-      info_out->sv[info_out->numSysVals].si = 0;
-      info_out->sv[info_out->numSysVals].input = 0;
+      switch (i) {
+      case SYSTEM_VALUE_BASE_GLOBAL_INVOCATION_ID:
+         continue;
+      default:
+         info_out->sv[info_out->numSysVals].sn = tgsi_get_sysval_semantic(i);
+         info_out->sv[info_out->numSysVals].si = 0;
+         info_out->sv[info_out->numSysVals].input = 0;
+         break;
+      }
 
       switch (i) {
       case SYSTEM_VALUE_VERTEX_ID:
@@ -2533,7 +2539,7 @@ Converter::visit(nir_load_const_instr *insn)
 }
 
 #define DEFAULT_CHECKS \
-      if (insn->dest.dest.ssa.num_components > 1) { \
+      if (nir_dest_num_components(insn->dest.dest) > 1) { \
          ERROR("nir_alu_instr only supported with 1 component!\n"); \
          return false; \
       } \

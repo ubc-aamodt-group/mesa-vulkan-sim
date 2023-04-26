@@ -1,6 +1,7 @@
 use crate::api::icd::*;
 use crate::api::util::*;
 use crate::core::format::*;
+use crate::core::platform::*;
 use crate::core::util::*;
 use crate::core::version::*;
 use crate::impl_cl_type_trait;
@@ -524,6 +525,10 @@ impl Device {
             }
         }
 
+        if self.svm_supported() {
+            add_ext(1, 0, 0, "cl_arm_shared_virtual_memory", "");
+        }
+
         self.extensions = exts;
         self.clc_features = feats;
         self.extension_string = exts_str.join(" ");
@@ -578,19 +583,22 @@ impl Device {
     }
 
     pub fn doubles_supported(&self) -> bool {
-        false
-        /*
-        if self.screen.param(pipe_cap::PIPE_CAP_DOUBLES) == 0 {
+        if !Platform::features().fp64 {
             return false;
         }
+
+        self.screen.param(pipe_cap::PIPE_CAP_DOUBLES) == 1
+    }
+
+    pub fn doubles_is_softfp(&self) -> bool {
         let nir_options = self
             .screen
             .nir_shader_compiler_options(pipe_shader_type::PIPE_SHADER_COMPUTE);
-        !bit_check(
+
+        bit_check(
             unsafe { *nir_options }.lower_doubles_options as u32,
             nir_lower_doubles_options::nir_lower_fp64_full_software as u32,
         )
-        */
     }
 
     pub fn long_supported(&self) -> bool {
@@ -746,6 +754,10 @@ impl Device {
             self.screen.as_ref(),
             pipe_compute_cap::PIPE_COMPUTE_CAP_SUBGROUP_SIZE,
         )
+    }
+
+    pub fn svm_supported(&self) -> bool {
+        self.screen.param(pipe_cap::PIPE_CAP_SYSTEM_SVM) == 1
     }
 
     pub fn unified_memory(&self) -> bool {

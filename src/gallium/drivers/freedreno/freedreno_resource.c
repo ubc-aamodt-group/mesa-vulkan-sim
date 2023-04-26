@@ -30,6 +30,7 @@
 #include "util/set.h"
 #include "util/u_drm.h"
 #include "util/u_inlines.h"
+#include "util/u_sample_positions.h"
 #include "util/u_string.h"
 #include "util/u_surface.h"
 #include "util/u_transfer.h"
@@ -81,7 +82,7 @@ rebind_resource_in_ctx(struct fd_context *ctx,
       for (unsigned i = 0; i < vb->count && !(ctx->dirty & FD_DIRTY_VTXBUF);
            i++) {
          if (vb->vb[i].buffer.resource == prsc)
-            fd_context_dirty(ctx, FD_DIRTY_VTXBUF);
+            fd_dirty_resource(ctx, prsc, FD_DIRTY_VTXBUF, false);
       }
    }
 
@@ -93,7 +94,7 @@ rebind_resource_in_ctx(struct fd_context *ctx,
             i < so->num_targets && !(ctx->dirty & FD_DIRTY_STREAMOUT);
             i++) {
          if (so->targets[i]->buffer == prsc)
-            fd_context_dirty(ctx, FD_DIRTY_STREAMOUT);
+            fd_dirty_resource(ctx, prsc, FD_DIRTY_STREAMOUT, true);
       }
    }
 
@@ -114,7 +115,8 @@ rebind_resource_in_ctx(struct fd_context *ctx,
          const unsigned num_ubos = util_last_bit(cb->enabled_mask);
          for (unsigned i = 1; i < num_ubos; i++) {
             if (cb->cb[i].buffer == prsc) {
-               fd_context_dirty_shader(ctx, stage, FD_DIRTY_SHADER_CONST);
+               fd_dirty_shader_resource(ctx, prsc, stage,
+                                        FD_DIRTY_SHADER_CONST, false);
                break;
             }
          }
@@ -126,7 +128,8 @@ rebind_resource_in_ctx(struct fd_context *ctx,
          struct fd_texture_stateobj *tex = &ctx->tex[stage];
          for (unsigned i = 0; i < tex->num_textures; i++) {
             if (tex->textures[i] && (tex->textures[i]->texture == prsc)) {
-               fd_context_dirty_shader(ctx, stage, FD_DIRTY_SHADER_TEX);
+               fd_dirty_shader_resource(ctx, prsc, stage,
+                                        FD_DIRTY_SHADER_TEX, false);
                break;
             }
          }
@@ -139,7 +142,9 @@ rebind_resource_in_ctx(struct fd_context *ctx,
          const unsigned num_images = util_last_bit(si->enabled_mask);
          for (unsigned i = 0; i < num_images; i++) {
             if (si->si[i].resource == prsc) {
-               fd_context_dirty_shader(ctx, stage, FD_DIRTY_SHADER_IMAGE);
+               bool write = si->si[i].access & PIPE_IMAGE_ACCESS_WRITE;
+               fd_dirty_shader_resource(ctx, prsc, stage,
+                                        FD_DIRTY_SHADER_IMAGE, write);
                break;
             }
          }
@@ -152,7 +157,9 @@ rebind_resource_in_ctx(struct fd_context *ctx,
          const unsigned num_ssbos = util_last_bit(sb->enabled_mask);
          for (unsigned i = 0; i < num_ssbos; i++) {
             if (sb->sb[i].buffer == prsc) {
-               fd_context_dirty_shader(ctx, stage, FD_DIRTY_SHADER_SSBO);
+               bool write = sb->writable_mask & BIT(i);
+               fd_dirty_shader_resource(ctx, prsc, stage,
+                                        FD_DIRTY_SHADER_SSBO, write);
                break;
             }
          }
@@ -1559,13 +1566,13 @@ fd_invalidate_resource(struct pipe_context *pctx,
 
       if (pfb->zsbuf && pfb->zsbuf->texture == prsc) {
          batch->resolve &= ~(FD_BUFFER_DEPTH | FD_BUFFER_STENCIL);
-         fd_context_dirty(ctx, FD_DIRTY_ZSA);
+         fd_dirty_resource(ctx, prsc, FD_DIRTY_ZSA, true);
       }
 
       for (unsigned i = 0; i < pfb->nr_cbufs; i++) {
          if (pfb->cbufs[i] && pfb->cbufs[i]->texture == prsc) {
             batch->resolve &= ~(PIPE_CLEAR_COLOR0 << i);
-            fd_context_dirty(ctx, FD_DIRTY_FRAMEBUFFER);
+            fd_dirty_resource(ctx, prsc, FD_DIRTY_FRAMEBUFFER, true);
          }
       }
    }
@@ -1735,47 +1742,6 @@ fd_resource_screen_init(struct pipe_screen *pscreen)
 }
 
 static void
-fd_get_sample_position(struct pipe_context *context, unsigned sample_count,
-                       unsigned sample_index, float *pos_out)
-{
-   /* The following is copied from nouveau/nv50 except for position
-    * values, which are taken from blob driver */
-   static const uint8_t pos1[1][2] = {{0x8, 0x8}};
-   static const uint8_t pos2[2][2] = {{0xc, 0xc}, {0x4, 0x4}};
-   static const uint8_t pos4[4][2] = {{0x6, 0x2},
-                                      {0xe, 0x6},
-                                      {0x2, 0xa},
-                                      {0xa, 0xe}};
-   /* TODO needs to be verified on supported hw */
-   static const uint8_t pos8[8][2] = {{0x9, 0x5}, {0x7, 0xb}, {0xd, 0x9},
-                                      {0x5, 0x3}, {0x3, 0xd}, {0x1, 0x7},
-                                      {0xb, 0xf}, {0xf, 0x1}};
-
-   const uint8_t(*ptr)[2];
-
-   switch (sample_count) {
-   case 1:
-      ptr = pos1;
-      break;
-   case 2:
-      ptr = pos2;
-      break;
-   case 4:
-      ptr = pos4;
-      break;
-   case 8:
-      ptr = pos8;
-      break;
-   default:
-      assert(0);
-      return;
-   }
-
-   pos_out[0] = ptr[sample_index][0] / 16.0f;
-   pos_out[1] = ptr[sample_index][1] / 16.0f;
-}
-
-static void
 fd_blit_pipe(struct pipe_context *pctx,
              const struct pipe_blit_info *blit_info) in_dt
 {
@@ -1799,5 +1765,5 @@ fd_resource_context_init(struct pipe_context *pctx)
    pctx->blit = fd_blit_pipe;
    pctx->flush_resource = fd_flush_resource;
    pctx->invalidate_resource = fd_invalidate_resource;
-   pctx->get_sample_position = fd_get_sample_position;
+   pctx->get_sample_position = u_default_get_sample_position;
 }

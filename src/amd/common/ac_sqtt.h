@@ -31,6 +31,7 @@
 
 #include <assert.h>
 #include "ac_rgp.h"
+#include "amd_family.h"
 
 struct radeon_cmdbuf;
 struct radeon_info;
@@ -44,6 +45,8 @@ struct ac_thread_trace_data {
    uint32_t buffer_size;
    int start_frame;
    char *trigger_file;
+
+   uint32_t cmdbuf_ids_per_queue[AMD_NUM_IP_TYPES];
 
    struct rgp_code_object rgp_code_object;
    struct rgp_loader_events rgp_loader_events;
@@ -126,6 +129,26 @@ enum rgp_sqtt_marker_identifier
    RGP_SQTT_MARKER_IDENTIFIER_RESERVED4 = 0xD,
    RGP_SQTT_MARKER_IDENTIFIER_RESERVED5 = 0xE,
    RGP_SQTT_MARKER_IDENTIFIER_RESERVED6 = 0xF
+};
+
+/**
+ * Command buffer IDs used in RGP SQ thread-tracing markers (only 20 bits).
+ */
+union rgp_sqtt_marker_cb_id {
+   struct {
+      uint32_t per_frame : 1; /* Must be 1, frame-based command buffer ID. */
+      uint32_t frame_index : 7;
+      uint32_t cb_index : 12; /* Command buffer index within the frame. */
+      uint32_t reserved : 12;
+   } per_frame_cb_id;
+
+   struct {
+      uint32_t per_frame : 1; /* Must be 0, global command buffer ID. */
+      uint32_t cb_index : 19; /* Global command buffer index. */
+      uint32_t reserved : 12;
+   } global_cb_id;
+
+   uint32_t all;
 };
 
 /**
@@ -510,5 +533,8 @@ bool ac_sqtt_add_code_object_loader_event(struct ac_thread_trace_data *thread_tr
                                           uint64_t base_address);
 
 bool ac_check_profile_state(const struct radeon_info *info);
+
+union rgp_sqtt_marker_cb_id ac_sqtt_get_next_cmdbuf_id(struct ac_thread_trace_data *data,
+                                                       enum amd_ip_type ip_type);
 
 #endif

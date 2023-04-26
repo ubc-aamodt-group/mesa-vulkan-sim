@@ -167,10 +167,8 @@ dzn_physical_device_destroy(struct vk_physical_device *physical)
    if (pdev->dev11)
       ID3D12Device1_Release(pdev->dev11);
 
-#if D3D12_SDK_VERSION >= 610
    if (pdev->dev12)
       ID3D12Device1_Release(pdev->dev12);
-#endif
 
    if (pdev->adapter)
       IUnknown_Release(pdev->adapter);
@@ -435,9 +433,7 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
    }
 
    D3D_ROOT_SIGNATURE_VERSION root_sig_versions[] = {
-#if D3D12_SDK_VERSION >= 609
       D3D_ROOT_SIGNATURE_VERSION_1_2,
-#endif
       D3D_ROOT_SIGNATURE_VERSION_1_1
    };
    for (UINT i = 0; i < ARRAY_SIZE(root_sig_versions); ++i) {
@@ -458,16 +454,13 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
    ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS13, &pdev->options13, sizeof(pdev->options13));
    ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS14, &pdev->options14, sizeof(pdev->options14));
    ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS15, &pdev->options15, sizeof(pdev->options15));
-#if D3D12_SDK_VERSION >= 609
+   ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS16, &pdev->options16, sizeof(pdev->options16));
    ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS17, &pdev->options17, sizeof(pdev->options17));
-#endif
-#if D3D12_SDK_VERSION >= 610
    if (FAILED(ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS19, &pdev->options19, sizeof(pdev->options19)))) {
       pdev->options19.MaxSamplerDescriptorHeapSize = D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE;
       pdev->options19.MaxSamplerDescriptorHeapSizeWithStaticSamplers = pdev->options19.MaxSamplerDescriptorHeapSize;
       pdev->options19.MaxViewDescriptorHeapSize = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_1;
    }
-#endif
 
    pdev->queue_families[pdev->queue_family_count++] = (struct dzn_queue_family) {
       .props = {
@@ -662,10 +655,8 @@ dzn_physical_device_get_d3d12_dev(struct dzn_physical_device *pdev)
          pdev->dev10 = NULL;
       if (FAILED(ID3D12Device1_QueryInterface(pdev->dev, &IID_ID3D12Device11, (void **)&pdev->dev11)))
          pdev->dev11 = NULL;
-#if D3D12_SDK_VERSION >= 610
       if (FAILED(ID3D12Device1_QueryInterface(pdev->dev, &IID_ID3D12Device12, (void **)&pdev->dev12)))
          pdev->dev12 = NULL;
-#endif
       dzn_physical_device_cache_caps(pdev);
       dzn_physical_device_init_memory(pdev);
       dzn_physical_device_init_uuids(pdev);
@@ -682,7 +673,7 @@ dzn_get_most_capable_format_for_casting(VkFormat format, VkImageCreateFlags crea
    bool block_compressed = util_format_is_compressed(pfmt);
    if (block_compressed &&
        !(create_flags & VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT))
-      return dzn_image_get_dxgi_format(format, 0, 0);
+      return dzn_image_get_dxgi_format(NULL, format, 0, 0);
    unsigned blksz = util_format_get_blocksize(pfmt);
    switch (blksz) {
    case 1: return DXGI_FORMAT_R8_UNORM;
@@ -711,7 +702,7 @@ dzn_physical_device_get_format_support(struct dzn_physical_device *pdev,
       aspects = VK_IMAGE_ASPECT_STENCIL_BIT;
 
    D3D12_FEATURE_DATA_FORMAT_SUPPORT dfmt_info = {
-     .Format = dzn_image_get_dxgi_format(format, usage, aspects),
+     .Format = dzn_image_get_dxgi_format(pdev, format, usage, aspects),
    };
 
    /* KHR_maintenance2: If an image is created with the extended usage flag
@@ -739,7 +730,7 @@ dzn_physical_device_get_format_support(struct dzn_physical_device *pdev,
     */
    dzn_foreach_aspect(aspect, aspects) {
       D3D12_FEATURE_DATA_FORMAT_SUPPORT dfmt_info2 = {
-        .Format = dzn_image_get_dxgi_format(format, 0, aspect),
+        .Format = dzn_image_get_dxgi_format(pdev, format, 0, aspect),
       };
 
       hres = ID3D12Device1_CheckFeatureSupport(dev, D3D12_FEATURE_FORMAT_SUPPORT,
@@ -1159,9 +1150,6 @@ static const driOptionDescription dzn_dri_options[] = {
    DRI_CONF_SECTION_DEBUG
       DRI_CONF_DZN_CLAIM_WIDE_LINES(false)
       DRI_CONF_DZN_ENABLE_8BIT_LOADS_STORES(false)
-      /* Default-disabled because the CTS doesn't check subgroupQuadOperationsInAllStages
-       * and tries to do quad ops in VS/GS which is unsupported. */
-      DRI_CONF_DZN_ENABLE_SUBGROUP_OPS_IN_VTX_PIPELINE(false)
    DRI_CONF_SECTION_END
 };
 
@@ -1612,7 +1600,6 @@ dzn_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
                                  VkPhysicalDeviceProperties2 *pProperties)
 {
    VK_FROM_HANDLE(dzn_physical_device, pdevice, physicalDevice);
-   struct dzn_instance *instance = container_of(pdevice->vk.instance, struct dzn_instance, vk);
 
    (void)dzn_physical_device_get_d3d12_dev(pdevice);
 
@@ -1805,9 +1792,8 @@ dzn_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
                                      VK_SUBGROUP_FEATURE_QUAD_BIT |
                                      VK_SUBGROUP_FEATURE_ARITHMETIC_BIT,
       .subgroupSupportedStages = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT |
-                                 (driQueryOptionb(&instance->dri_options, "dzn_enable_subgroup_ops_in_vtx_pipeline") ?
-                                    (VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_VERTEX_BIT) : 0),
-      .subgroupQuadOperationsInAllStages = false,
+                                 VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_VERTEX_BIT,
+      .subgroupQuadOperationsInAllStages = true,
       .subgroupSize = pdevice->options1.WaveOps ? pdevice->options1.WaveLaneCountMin : 1,
    };
    memcpy(core_1_1.driverUUID, pdevice->driver_uuid, VK_UUID_SIZE);
@@ -2230,10 +2216,8 @@ dzn_device_destroy(struct dzn_device *device, const VkAllocationCallbacks *pAllo
    if (device->dev11)
       ID3D12Device1_Release(device->dev11);
 
-#if D3D12_SDK_VERSION >= 610
    if (device->dev12)
       ID3D12Device1_Release(device->dev12);
-#endif
 
    vk_device_finish(&device->vk);
    vk_free2(&instance->vk.alloc, pAllocator, device);
@@ -2335,12 +2319,10 @@ dzn_device_create(struct dzn_physical_device *pdev,
       ID3D12Device1_AddRef(device->dev11);
    }
 
-#if D3D12_SDK_VERSION >= 610
    if (pdev->dev12) {
       device->dev12 = pdev->dev12;
       ID3D12Device1_AddRef(device->dev12);
    }
-#endif
 
    ID3D12InfoQueue *info_queue;
    if (SUCCEEDED(ID3D12Device1_QueryInterface(device->dev,
@@ -2425,13 +2407,8 @@ dzn_device_create(struct dzn_physical_device *pdev,
       device->vk.enabled_extensions.EXT_descriptor_indexing;
 
    if (device->bindless) {
-#if D3D12_SDK_VERSION >= 610
       uint32_t sampler_count = MIN2(pdev->options19.MaxSamplerDescriptorHeapSize, 4000);
       device->support_static_samplers = pdev->options19.MaxSamplerDescriptorHeapSizeWithStaticSamplers >= sampler_count;
-#else
-      uint32_t sampler_count = D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE;
-      device->support_static_samplers = true;
-#endif
       dzn_foreach_pool_type(type) {
          uint32_t descriptor_count = type == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER ?
             sampler_count : D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_1;
@@ -2635,6 +2612,7 @@ dzn_device_memory_create(struct dzn_device *device,
          D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
    }
 
+   heap_desc.SizeInBytes = ALIGN_POT(heap_desc.SizeInBytes, heap_desc.Alignment);
    heap_desc.Flags =
       dzn_physical_device_get_heap_flags_for_mem_type(pdevice,
                                                       pAllocateInfo->memoryTypeIndex);
@@ -2798,6 +2776,13 @@ dzn_buffer_destroy(struct dzn_buffer *buf, const VkAllocationCallbacks *pAllocat
 
    dzn_device_descriptor_heap_free_slot(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, buf->cbv_bindless_slot);
    dzn_device_descriptor_heap_free_slot(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, buf->uav_bindless_slot);
+   if (buf->custom_views) {
+      hash_table_foreach(buf->custom_views, entry) {
+         free((void *)entry->key);
+         dzn_device_descriptor_heap_free_slot(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, (int)(intptr_t)entry->data);
+      }
+      _mesa_hash_table_destroy(buf->custom_views, NULL);
+   }
 
    vk_object_base_finish(&buf->base);
    vk_free2(&device->vk.alloc, pAllocator, buf);
@@ -2874,6 +2859,9 @@ dzn_buffer_create(struct dzn_device *device,
       }
    }
 
+   if (device->bindless)
+      mtx_init(&buf->bindless_view_lock, mtx_plain);
+
    *out = dzn_buffer_to_handle(buf);
    return VK_SUCCESS;
 }
@@ -2893,6 +2881,8 @@ dzn_buffer_get_copy_loc(const struct dzn_buffer *buf,
                         VkImageAspectFlagBits aspect,
                         uint32_t layer)
 {
+   struct dzn_physical_device *pdev =
+      container_of(buf->base.device->physical, struct dzn_physical_device, vk);
    const uint32_t buffer_row_length =
       region->bufferRowLength ? region->bufferRowLength : region->imageExtent.width;
 
@@ -2909,7 +2899,7 @@ dzn_buffer_get_copy_loc(const struct dzn_buffer *buf,
      .PlacedFootprint = {
         .Footprint = {
            .Format =
-              dzn_image_get_placed_footprint_format(format, aspect),
+              dzn_image_get_placed_footprint_format(pdev, format, aspect),
            .Width = region->imageExtent.width,
            .Height = region->imageExtent.height,
            .Depth = region->imageExtent.depth,
@@ -2974,8 +2964,11 @@ dzn_buffer_get_line_copy_loc(const struct dzn_buffer *buf, VkFormat format,
 }
 
 bool
-dzn_buffer_supports_region_copy(const D3D12_TEXTURE_COPY_LOCATION *loc)
+dzn_buffer_supports_region_copy(struct dzn_physical_device *pdev,
+                                const D3D12_TEXTURE_COPY_LOCATION *loc)
 {
+   if (pdev->options13.UnrestrictedBufferTextureCopyPitchSupported)
+      return true;
    return !(loc->PlacedFootprint.Offset & (D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT - 1)) &&
           !(loc->PlacedFootprint.Footprint.RowPitch & (D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1));
 }
@@ -3251,9 +3244,7 @@ dzn_sampler_create(struct dzn_device *device,
                    const VkAllocationCallbacks *pAllocator,
                    VkSampler *out)
 {
-#if D3D12_SDK_VERSION >= 609
    struct dzn_physical_device *pdev = container_of(device->vk.physical, struct dzn_physical_device, vk);
-#endif
    struct dzn_sampler *sampler =
       vk_zalloc2(&device->vk.alloc, pAllocator, sizeof(*sampler), 8,
                  VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
@@ -3268,7 +3259,7 @@ dzn_sampler_create(struct dzn_device *device,
    /* TODO: have a sampler pool to allocate shader-invisible descs which we
     * can copy to the desc_set when UpdateDescriptorSets() is called.
     */
-   sampler->desc.Filter = dzn_translate_sampler_filter(pCreateInfo);
+   sampler->desc.Filter = dzn_translate_sampler_filter(pdev, pCreateInfo);
    sampler->desc.AddressU = dzn_sampler_translate_addr_mode(pCreateInfo->addressModeU);
    sampler->desc.AddressV = dzn_sampler_translate_addr_mode(pCreateInfo->addressModeV);
    sampler->desc.AddressW = dzn_sampler_translate_addr_mode(pCreateInfo->addressModeW);
@@ -3339,10 +3330,8 @@ dzn_sampler_create(struct dzn_device *device,
       }
    }
 
-#if D3D12_SDK_VERSION >= 609
    if (pCreateInfo->unnormalizedCoordinates && pdev->options17.NonNormalizedCoordinateSamplersSupported)
       sampler->desc.Flags |= D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES;
-#endif
 
    sampler->bindless_slot = -1;
    if (device->bindless) {

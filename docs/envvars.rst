@@ -320,6 +320,11 @@ Core Mesa environment variables
    ``VkSwapchainCreateInfoKHR::presentMode``. Values can be ``fifo``,
    ``relaxed``, ``mailbox`` or ``immediate``.
 
+.. envvar:: MESA_VK_WSI_HEADLESS_SWAPCHAIN
+
+   Forces all swapchains to be headless (no rendering will be display
+   in the swapchain's window).
+
 .. envvar:: MESA_VK_ABORT_ON_DEVICE_LOSS
 
    causes the Vulkan driver to call abort() immediately after detecting a
@@ -416,6 +421,11 @@ on Windows.
 
 Intel driver environment variables
 ----------------------------------------------------
+
+.. envvar:: ANV_GPL
+
+   If set to 1, true, or yes, then VK_EXT_graphics_pipeline_library
+   will be exposed, which may be incompatible with mesh shaders.
 
 .. envvar:: INTEL_BLACKHOLE_DEFAULT
 
@@ -629,6 +639,13 @@ Intel driver environment variables
    start and end event will be submitted to the GPU to minimize
    stalling.  Combined events will not span batches, except in
    the case of ``INTEL_MEASURE=frame``.
+
+   Collect CPU timestamps instead of GPU timestamps.  Prints results
+   immediately instead of waiting for GPU execution.  Useful when used
+   with interactive debug to know which frame, or where in frame, you
+   are currently in.
+
+   ``INTEL_MEASURE=cpu {workload}``
 
 .. envvar:: INTEL_NO_HW
 
@@ -892,6 +909,19 @@ Rusticl environment variables
    -  ``RUSTICL_ENABLE=iris`` (enables all iris devices)
    -  ``RUSTICL_ENABLE=iris:1,radeonsi:0,2`` (enables second iris and first
       and third radeonsi device)
+
+.. envvar:: RUSTICL_FEATURES
+
+   a comma-separated list of features to enable. Those are disabled by default
+   as they might not be stable enough or break OpenCL conformance.
+
+   - ``fp64`` enables OpenCL double support
+
+.. envvar:: RUSTICL_DEBUG
+
+   a comma-separated list of debug channels to enable.
+
+   - ``program`` dumps compilation logs to stderr
 
 Nine frontend environment variables
 -----------------------------------
@@ -1250,11 +1280,13 @@ RADV driver environment variables
       abort on some suboptimal code generation
    ``force-waitcnt``
       force emitting waitcnt states if there is something to wait for
+   ``force-waitdeps``
+     force emitting waitcnt dependencies for debugging hazards on GFX10+
    ``novn``
       disable value numbering
    ``noopt``
       disable various optimizations
-   ``noscheduling``
+   ``nosched``
       disable instructions scheduling
    ``perfinfo``
       print information used to calculate some pipeline statistics

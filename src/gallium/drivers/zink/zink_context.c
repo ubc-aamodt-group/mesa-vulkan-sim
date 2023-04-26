@@ -45,6 +45,7 @@
 #include "util/format/u_format.h"
 #include "util/u_helpers.h"
 #include "util/u_inlines.h"
+#include "util/u_sample_positions.h"
 #include "util/u_string.h"
 #include "util/u_thread.h"
 #include "util/perf/u_trace.h"
@@ -271,16 +272,29 @@ zink_set_context_param(struct pipe_context *pctx, enum pipe_context_param param,
                        unsigned value)
 {
    struct zink_context *ctx = zink_context(pctx);
+   struct zink_screen *screen = zink_screen(ctx->base.screen);
 
    switch (param) {
    case PIPE_CONTEXT_PARAM_PIN_THREADS_TO_L3_CACHE:
-      util_set_thread_affinity(zink_screen(ctx->base.screen)->flush_queue.threads[0],
-                               util_get_cpu_caps()->L3_affinity_mask[value],
-                               NULL, util_get_cpu_caps()->num_cpu_mask_bits);
+      if (screen->threaded_submit)
+         util_set_thread_affinity(screen->flush_queue.threads[0],
+                                 util_get_cpu_caps()->L3_affinity_mask[value],
+                                 NULL, util_get_cpu_caps()->num_cpu_mask_bits);
       break;
    default:
       break;
    }
+}
+
+static void
+zink_set_debug_callback(struct pipe_context *pctx, const struct util_debug_callback *cb)
+{
+   struct zink_context *ctx = zink_context(pctx);
+
+   if (cb)
+      ctx->dbg = *cb;
+   else
+      memset(&ctx->dbg, 0, sizeof(ctx->dbg));
 }
 
 static VkSamplerMipmapMode
@@ -1013,6 +1027,11 @@ zink_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *pres,
    struct zink_sampler_view *sampler_view = CALLOC_STRUCT_CL(zink_sampler_view);
    bool err;
 
+   if (!sampler_view) {
+      mesa_loge("ZINK: failed to allocate sampler_view!");
+      return NULL;
+   }
+      
    sampler_view->base = *state;
    sampler_view->base.texture = NULL;
    pipe_resource_reference(&sampler_view->base.texture, pres);
@@ -1190,68 +1209,7 @@ zink_get_sample_position(struct pipe_context *ctx,
 {
    /* TODO: handle this I guess */
    assert(zink_screen(ctx->screen)->info.props.limits.standardSampleLocations);
-   /* from 26.4. Multisampling */
-   switch (sample_count) {
-   case 0:
-   case 1: {
-      float pos[][2] = { {0.5,0.5}, };
-      out_value[0] = pos[sample_index][0];
-      out_value[1] = pos[sample_index][1];
-      break;
-   }
-   case 2: {
-      float pos[][2] = { {0.75,0.75},
-                        {0.25,0.25}, };
-      out_value[0] = pos[sample_index][0];
-      out_value[1] = pos[sample_index][1];
-      break;
-   }
-   case 4: {
-      float pos[][2] = { {0.375, 0.125},
-                        {0.875, 0.375},
-                        {0.125, 0.625},
-                        {0.625, 0.875}, };
-      out_value[0] = pos[sample_index][0];
-      out_value[1] = pos[sample_index][1];
-      break;
-   }
-   case 8: {
-      float pos[][2] = { {0.5625, 0.3125},
-                        {0.4375, 0.6875},
-                        {0.8125, 0.5625},
-                        {0.3125, 0.1875},
-                        {0.1875, 0.8125},
-                        {0.0625, 0.4375},
-                        {0.6875, 0.9375},
-                        {0.9375, 0.0625}, };
-      out_value[0] = pos[sample_index][0];
-      out_value[1] = pos[sample_index][1];
-      break;
-   }
-   case 16: {
-      float pos[][2] = { {0.5625, 0.5625},
-                        {0.4375, 0.3125},
-                        {0.3125, 0.625},
-                        {0.75, 0.4375},
-                        {0.1875, 0.375},
-                        {0.625, 0.8125},
-                        {0.8125, 0.6875},
-                        {0.6875, 0.1875},
-                        {0.375, 0.875},
-                        {0.5, 0.0625},
-                        {0.25, 0.125},
-                        {0.125, 0.75},
-                        {0.0, 0.5},
-                        {0.9375, 0.25},
-                        {0.875, 0.9375},
-                        {0.0625, 0.0}, };
-      out_value[0] = pos[sample_index][0];
-      out_value[1] = pos[sample_index][1];
-      break;
-   }
-   default:
-      unreachable("unhandled sample count!");
-   }
+   u_default_get_sample_position(ctx, sample_count, sample_index, out_value);
 }
 
 static void
@@ -4993,14 +4951,26 @@ zink_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
          util_idalloc_alloc(&ctx->di.bindless[i].img_slots);
          if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_DB) {
             ctx->di.bindless[i].db.buffer_infos = malloc(sizeof(VkDescriptorAddressInfoEXT) * ZINK_MAX_BINDLESS_HANDLES);
+            if (!ctx->di.bindless[i].db.buffer_infos) {
+               mesa_loge("ZINK: failed to allocate ctx->di.bindless[%d].db.buffer_infos!",i);
+               goto fail;
+            }
             for (unsigned j = 0; j < ZINK_MAX_BINDLESS_HANDLES; j++) {
                ctx->di.bindless[i].db.buffer_infos[j].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT;
                ctx->di.bindless[i].db.buffer_infos[j].pNext = NULL;
             }
          } else {
             ctx->di.bindless[i].t.buffer_infos = malloc(sizeof(VkBufferView) * ZINK_MAX_BINDLESS_HANDLES);
+            if (!ctx->di.bindless[i].t.buffer_infos) {
+               mesa_loge("ZINK: failed to allocate ctx->di.bindless[%d].t.buffer_infos!",i);
+               goto fail;
+            }
          }
          ctx->di.bindless[i].img_infos = malloc(sizeof(VkDescriptorImageInfo) * ZINK_MAX_BINDLESS_HANDLES);
+         if (!ctx->di.bindless[i].img_infos) {
+            mesa_loge("ZINK: failed to allocate ctx->di.bindless[%d].img_infos!",i);
+            goto fail;
+         }
          util_dynarray_init(&ctx->di.bindless[i].updates, NULL);
          util_dynarray_init(&ctx->di.bindless[i].resident, NULL);
       }

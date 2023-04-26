@@ -114,7 +114,7 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
 
    VkPipelineMultisampleStateCreateInfo ms_state = {0};
    ms_state.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-   ms_state.rasterizationSamples = state->rast_samples + 1;
+   ms_state.rasterizationSamples = state->multisample ? state->rast_samples + 1 : 1;
    if (state->blend_state) {
       ms_state.alphaToCoverageEnable = state->blend_state->alpha_to_coverage;
       if (state->blend_state->alpha_to_one && !screen->info.feats.features.alphaToOne) {
@@ -245,9 +245,11 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
       dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_PROVOKING_VERTEX_MODE_EXT;
       dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE_EXT;
       dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_LINE_RASTERIZATION_MODE_EXT;
-      if (screen->info.dynamic_state3_feats.extendedDynamicState3LineStippleEnable)
-         dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_LINE_STIPPLE_ENABLE_EXT;
-      dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_LINE_STIPPLE_EXT;
+      if (!screen->driver_workarounds.no_linestipple) {
+         if (screen->info.dynamic_state3_feats.extendedDynamicState3LineStippleEnable)
+            dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_LINE_STIPPLE_ENABLE_EXT;
+         dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_LINE_STIPPLE_EXT;
+      }
       if (screen->have_full_ds3) {
          dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_SAMPLE_MASK_EXT;
          dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_RASTERIZATION_SAMPLES_EXT;
@@ -305,9 +307,9 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
             /* non-strictLine default lines are either parallelogram or bresenham which while not in GL spec,
              * in practice end up being within the two-pixel exception in the GL spec.
              */
-            else if (mode_idx || screen->info.props.limits.strictLines)
+            else if ((mode_idx != 1) || screen->info.props.limits.strictLines)
                warn_missing_feature(warned[mode_idx], features[hw_rast_state->line_mode][0]);
-         } else if (mode_idx || screen->info.props.limits.strictLines)
+         } else if ((mode_idx != 1) || screen->info.props.limits.strictLines)
             warn_missing_feature(warned[mode_idx], features[hw_rast_state->line_mode][hw_rast_state->line_stipple_enable]);
       }
 
@@ -508,7 +510,7 @@ zink_create_gfx_pipeline_output(struct zink_screen *screen, struct zink_gfx_pipe
          }
          ms_state.alphaToOneEnable = state->blend_state->alpha_to_one;
       }
-      ms_state.rasterizationSamples = state->rast_samples + 1;
+      ms_state.rasterizationSamples = state->multisample ? state->rast_samples + 1 : 1;
       /* "If pSampleMask is NULL, it is treated as if the mask has all bits set to 1."
        * - Chapter 27. Rasterization
        * 

@@ -565,6 +565,9 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
    if (double_buffer) {
       surface_type &= ~EGL_PIXMAP_BIT;
    }
+   else {
+      surface_type &= ~EGL_WINDOW_BIT;
+   }
 
    if (!surface_type)
       return NULL;
@@ -1756,15 +1759,6 @@ dri2_surface_get_dri_drawable(_EGLSurface *surf)
    struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surf);
 
    return dri2_surf->dri_drawable;
-}
-
-/*
- * Called from eglGetProcAddress() via drv->GetProcAddress().
- */
-static _EGLProc
-dri2_get_proc_address(const char *procname)
-{
-   return _glapi_get_proc_address(procname);
 }
 
 static _EGLSurface*
@@ -3673,7 +3667,6 @@ const _EGLDriver _eglDriver = {
    .CreatePixmapSurface = dri2_create_pixmap_surface,
    .CreatePbufferSurface = dri2_create_pbuffer_surface,
    .DestroySurface = dri2_destroy_surface,
-   .GetProcAddress = dri2_get_proc_address,
    .WaitClient = dri2_wait_client,
    .WaitNative = dri2_wait_native,
    .BindTexImage = dri2_bind_tex_image,

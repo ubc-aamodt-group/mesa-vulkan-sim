@@ -596,6 +596,7 @@ struct zink_batch_state {
    struct util_dynarray dead_framebuffers;
 
    struct set active_queries; /* zink_query objects which were active at some point in this batch */
+   struct util_dynarray dead_querypools;
 
    struct zink_batch_descriptor_data dd;
 
@@ -731,6 +732,13 @@ enum zink_rast_prim {
    ZINK_PRIM_MAX,
 };
 
+struct zink_shader_object {
+   union {
+      VkShaderEXT obj;
+      VkShaderModule mod;
+   };
+};
+
 struct zink_shader {
    struct util_live_shader base;
    uint32_t hash;
@@ -759,7 +767,7 @@ struct zink_shader {
 
    struct {
       struct util_queue_fence fence;
-      VkShaderModule mod;
+      struct zink_shader_object obj;
       VkDescriptorSetLayout dsl;
       VkPipelineLayout layout;
       VkPipeline gpl;
@@ -811,7 +819,8 @@ struct zink_gfx_pipeline_state {
    /* order matches zink_gfx_output_key */
    unsigned force_persample_interp:1;
    uint32_t rast_samples:6;
-   uint32_t min_samples:6;
+   uint32_t multisample: 1;
+   uint32_t min_samples:5;
    uint32_t feedback_loop : 1;
    uint32_t feedback_loop_zs : 1;
    uint32_t rast_attachment_order : 1;
@@ -985,7 +994,8 @@ struct zink_gfx_output_key {
       struct {
          unsigned force_persample_interp:1;
          uint32_t rast_samples:6;
-         uint32_t min_samples:6;
+         uint32_t multisample: 1;
+         uint32_t min_samples:5;
          uint32_t feedback_loop : 1;
          uint32_t feedback_loop_zs : 1;
          uint32_t rast_attachment_order : 1;
@@ -1037,7 +1047,10 @@ struct zink_gfx_program {
    struct zink_shader *last_vertex_stage;
 
    /* full */
-   VkShaderModule modules[ZINK_GFX_SHADER_COUNT]; // compute stage doesn't belong here
+   union {
+      VkShaderModule modules[ZINK_GFX_SHADER_COUNT]; // compute stage doesn't belong here
+      VkShaderEXT objects[ZINK_GFX_SHADER_COUNT];
+   };
    uint32_t module_hash[ZINK_GFX_SHADER_COUNT];
    struct blob blobs[ZINK_GFX_SHADER_COUNT];
    struct util_dynarray shader_cache[ZINK_GFX_SHADER_COUNT][2][2]; //normal, nonseamless cubes, inline uniforms
@@ -1272,6 +1285,7 @@ struct zink_resource {
       };
    };
 
+   bool copies_warned;
    bool swapchain;
    bool dmabuf;
    unsigned dt_stride;
@@ -1428,6 +1442,7 @@ struct zink_screen {
       bool glsl_correct_derivatives_after_discard;
       bool inline_uniforms;
       bool emulate_point_smooth;
+      bool zink_shader_object_enable;
    } driconf;
 
    VkFormatProperties format_props[PIPE_FORMAT_COUNT];
@@ -1443,6 +1458,7 @@ struct zink_screen {
        */
       bool broken_cache_semantics;
       bool implicit_sync;
+      bool disable_optimized_compile;
       bool always_feedback_loop;
       bool always_feedback_loop_zs;
       bool needs_sanitised_layer;
@@ -1664,6 +1680,7 @@ struct zink_context {
    struct slab_child_pool transfer_pool;
    struct slab_child_pool transfer_pool_unsync;
    struct blitter_context *blitter;
+   struct util_debug_callback dbg;
 
    unsigned flags;
 
@@ -1880,6 +1897,7 @@ struct zink_context {
 
    bool gfx_dirty;
 
+   bool shobj_draw : 1; //using shader objects for draw
    bool is_device_lost;
    bool primitive_restart;
    bool blitting : 1;

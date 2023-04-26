@@ -196,6 +196,14 @@ struct drm_amdgpu_info_device {
 	uint64_t mall_size;            /* AKA infinity cache */
 	/* high 32 bits of the rb pipes mask */
 	uint32_t enabled_rb_pipes_mask_hi;
+	/* shadow area size for gfx11 */
+	uint32_t shadow_size;
+	/* shadow area base virtual alignment for gfx11 */
+	uint32_t shadow_alignment;
+	/* context save area size for gfx11 */
+	uint32_t csa_size;
+	/* context save area base virtual alignment for gfx11 */
+	uint32_t csa_alignment;
 };
 struct drm_amdgpu_info_hw_ip {
    uint32_t hw_ip_version_major;
@@ -1058,12 +1066,17 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info)
    }
    info->r600_has_virtual_memory = true;
 
-   /* LDS is 64KB per CU (4 SIMDs), which is 16KB per SIMD (usage above
+   /* LDS is 64KB per CU (4 SIMDs on GFX6-9), which is 16KB per SIMD (usage above
     * 16KB makes some SIMDs unoccupied).
     *
-    * LDS is 128KB in WGP mode and 64KB in CU mode. Assume the WGP mode is used.
+    * GFX10+: LDS is 128KB in WGP mode and 64KB in CU mode. Assume the WGP mode is used.
+    * GFX7+: Workgroups can use up to 64KB.
+    * GFX6: There is 64KB LDS per CU, but a workgroup can only use up to 32KB.
     */
-   info->lds_size_per_workgroup = info->gfx_level >= GFX10 ? 128 * 1024 : 64 * 1024;
+   info->lds_size_per_workgroup = info->gfx_level >= GFX10  ? 128 * 1024
+                                  : info->gfx_level >= GFX7 ? 64 * 1024
+                                                            : 32 * 1024;
+
    /* lds_encode_granularity is the block size used for encoding registers.
     * lds_alloc_granularity is what the hardware will align the LDS size to.
     */
@@ -1481,6 +1494,14 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info)
       info->attribute_ring_size_per_se = 64 * 1024;
    }
 
+   if (info->gfx_level >= GFX11 && device_info.shadow_size > 0) {
+      info->has_fw_based_shadowing = true;
+      info->fw_based_mcbp.shadow_size = device_info.shadow_size;
+      info->fw_based_mcbp.shadow_alignment = device_info.shadow_alignment;
+      info->fw_based_mcbp.csa_size = device_info.csa_size;
+      info->fw_based_mcbp.csa_alignment = device_info.csa_alignment;
+   }
+
    set_custom_cu_en_mask(info);
 
    const char *ib_filename = debug_get_option("AMD_PARSE_IB", NULL);
@@ -1708,6 +1729,16 @@ void ac_print_gpu_info(struct radeon_info *info, FILE *f)
    fprintf(f, "    has_gang_submit = %u\n", info->has_gang_submit);
    fprintf(f, "    mid_command_buffer_preemption_enabled = %u\n",
            info->mid_command_buffer_preemption_enabled);
+   fprintf(f, "    has_fw_based_shadowing = %u\n", info->has_fw_based_shadowing);
+   if (info->has_fw_based_shadowing) {
+      fprintf(f, "        * shadow size: %u (alignment: %u)\n",
+         info->fw_based_mcbp.shadow_size,
+         info->fw_based_mcbp.shadow_alignment);
+      fprintf(f, "        * csa size: %u (alignment: %u)\n",
+         info->fw_based_mcbp.csa_size,
+         info->fw_based_mcbp.csa_alignment);
+   }
+
    fprintf(f, "    has_tmz_support = %u\n", info->has_tmz_support);
    for (unsigned i = 0; i < AMD_NUM_IP_TYPES; i++) {
       if (info->max_submitted_ibs[i]) {

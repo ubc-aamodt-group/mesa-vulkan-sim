@@ -272,18 +272,38 @@ update_gfx_pipeline(struct zink_context *ctx, struct zink_batch_state *bs, enum 
 {
    VkPipeline prev_pipeline = ctx->gfx_pipeline_state.pipeline;
    const struct zink_screen *screen = zink_screen(ctx->base.screen);
+   bool shaders_changed = ctx->gfx_dirty;
    if (screen->optimal_keys && !ctx->is_generated_gs_bound)
       zink_gfx_program_update_optimal(ctx);
    else
       zink_gfx_program_update(ctx);
-   VkPipeline pipeline;
-   if (screen->info.have_EXT_graphics_pipeline_library)
-      pipeline = zink_get_gfx_pipeline<DYNAMIC_STATE, true>(ctx, ctx->curr_program, &ctx->gfx_pipeline_state, mode);
-   else
-      pipeline = zink_get_gfx_pipeline<DYNAMIC_STATE, false>(ctx, ctx->curr_program, &ctx->gfx_pipeline_state, mode);
-   bool pipeline_changed = prev_pipeline != pipeline;
-   if (BATCH_CHANGED || pipeline_changed)
-      VKCTX(CmdBindPipeline)(bs->cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+   bool pipeline_changed = false;
+   if (ctx->curr_program->is_separable && screen->info.have_EXT_shader_object) {
+      if (BATCH_CHANGED || shaders_changed || !ctx->shobj_draw) {
+         VkShaderStageFlagBits stages[] = {
+            VK_SHADER_STAGE_VERTEX_BIT,
+            VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT,
+            VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
+            VK_SHADER_STAGE_GEOMETRY_BIT,
+            VK_SHADER_STAGE_FRAGMENT_BIT,
+         };
+         /* always rebind all stages */
+         VKCTX(CmdBindShadersEXT)(bs->cmdbuf, ZINK_GFX_SHADER_COUNT, stages, ctx->curr_program->objects);
+         VKCTX(CmdSetDepthBiasEnable)(bs->cmdbuf, VK_TRUE);
+         pipeline_changed = false;
+      }
+      ctx->shobj_draw = true;
+   } else {
+      VkPipeline pipeline;
+      if (screen->info.have_EXT_graphics_pipeline_library)
+         pipeline = zink_get_gfx_pipeline<DYNAMIC_STATE, true>(ctx, ctx->curr_program, &ctx->gfx_pipeline_state, mode);
+      else
+         pipeline = zink_get_gfx_pipeline<DYNAMIC_STATE, false>(ctx, ctx->curr_program, &ctx->gfx_pipeline_state, mode);
+      pipeline_changed = prev_pipeline != pipeline;
+      if (BATCH_CHANGED || pipeline_changed || ctx->shobj_draw)
+         VKCTX(CmdBindPipeline)(bs->cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+      ctx->shobj_draw = false;
+   }
    return pipeline_changed;
 }
 
@@ -492,6 +512,8 @@ zink_draw(struct pipe_context *pctx,
       zink_set_primitive_emulation_keys(ctx);
    }
 
+   zink_update_fs_key_single_sample(ctx);
+
    if (index_size) {
       const VkIndexType index_type[3] = {
          VK_INDEX_TYPE_UINT8_EXT,
@@ -619,7 +641,7 @@ zink_draw(struct pipe_context *pctx,
       VKCTX(CmdSetCullModeEXT)(batch->state->cmdbuf, ctx->gfx_pipeline_state.dyn_state1.cull_mode);
    }
    if ((BATCH_CHANGED || rast_state_changed) &&
-       (DYNAMIC_STATE >= ZINK_DYNAMIC_STATE3 || (!screen->driver_workarounds.no_linestipple && rast_state->base.line_stipple_enable)))
+       !screen->driver_workarounds.no_linestipple && (DYNAMIC_STATE >= ZINK_DYNAMIC_STATE3 || rast_state->base.line_stipple_enable))
       VKCTX(CmdSetLineStippleEXT)(batch->state->cmdbuf, rast_state->base.line_stipple_factor, rast_state->base.line_stipple_pattern);
 
    if ((BATCH_CHANGED || rast_state_changed) && DYNAMIC_STATE >= ZINK_DYNAMIC_STATE3) {
@@ -635,8 +657,9 @@ zink_draw(struct pipe_context *pctx,
          VKCTX(CmdSetLineStippleEnableEXT)(batch->state->cmdbuf, rast_state->hw_state.line_stipple_enable);
    }
    if ((BATCH_CHANGED || ctx->sample_mask_changed) && screen->have_full_ds3) {
-      VKCTX(CmdSetRasterizationSamplesEXT)(batch->state->cmdbuf, (VkSampleCountFlagBits)(ctx->gfx_pipeline_state.rast_samples + 1));
-      VKCTX(CmdSetSampleMaskEXT)(batch->state->cmdbuf, (VkSampleCountFlagBits)(ctx->gfx_pipeline_state.rast_samples + 1), &ctx->gfx_pipeline_state.sample_mask);
+      uint8_t samples = ctx->gfx_pipeline_state.multisample ? ctx->gfx_pipeline_state.rast_samples + 1 : 1;
+      VKCTX(CmdSetRasterizationSamplesEXT)(batch->state->cmdbuf, (VkSampleCountFlagBits)(samples));
+      VKCTX(CmdSetSampleMaskEXT)(batch->state->cmdbuf, (VkSampleCountFlagBits)(samples), &ctx->gfx_pipeline_state.sample_mask);
       ctx->sample_mask_changed = false;
    }
    if ((BATCH_CHANGED || ctx->blend_state_changed) && screen->have_full_ds3) {
@@ -1044,7 +1067,6 @@ zink_launch_grid(struct pipe_context *pctx, const struct pipe_grid_info *info)
 
    if (BATCH_CHANGED) {
       zink_update_descriptor_refs(ctx, true);
-      zink_batch_reference_program(&ctx->batch, &ctx->curr_compute->base);
    }
    if (ctx->compute_dirty) {
       /* update inlinable constants */
