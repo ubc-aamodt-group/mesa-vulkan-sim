@@ -1960,6 +1960,34 @@ emit_metadata(struct ntd_context *ctx)
                                        &dx_resources, 1);
    }
 
+   if (ctx->mod.minor_version >= 2 &&
+       dxil_nir_analyze_io_dependencies(&ctx->mod, ctx->shader)) {
+      const struct dxil_type *i32_type = dxil_module_get_int_type(&ctx->mod, 32);
+      if (!i32_type)
+         return false;
+
+      const struct dxil_type *array_type = dxil_module_get_array_type(&ctx->mod, i32_type, ctx->mod.serialized_dependency_table_size);
+      if (!array_type)
+         return false;
+
+      const struct dxil_value **array_entries = malloc(sizeof(const struct value *) * ctx->mod.serialized_dependency_table_size);
+      if (!array_entries)
+         return false;
+
+      for (uint32_t i = 0; i < ctx->mod.serialized_dependency_table_size; ++i)
+         array_entries[i] = dxil_module_get_int32_const(&ctx->mod, ctx->mod.serialized_dependency_table[i]);
+      const struct dxil_value *array_val = dxil_module_get_array_const(&ctx->mod, array_type, array_entries);
+      free((void *)array_entries);
+
+      const struct dxil_mdnode *view_id_state_val = dxil_get_metadata_value(&ctx->mod, array_type, array_val);
+      if (!view_id_state_val)
+         return false;
+
+      const struct dxil_mdnode *view_id_state_node = dxil_get_metadata_node(&ctx->mod, &view_id_state_val, 1);
+
+      dxil_add_metadata_named_node(&ctx->mod, "dx.viewIdState", &view_id_state_node, 1);
+   }
+
    const struct dxil_mdnode *dx_type_annotations[] = { main_type_annotation };
    return dxil_add_metadata_named_node(&ctx->mod, "dx.typeAnnotations",
                                        dx_type_annotations,
@@ -2718,11 +2746,20 @@ emit_alu(struct ntd_context *ctx, nir_alu_instr *alu)
    case nir_op_fdiv:
       if (alu->dest.dest.ssa.bit_size == 64)
          ctx->mod.feats.dx11_1_double_extensions = 1;
-      FALLTHROUGH;
-   case nir_op_idiv:
       return emit_binop(ctx, alu, DXIL_BINOP_SDIV, src[0], src[1]);
 
-   case nir_op_udiv: return emit_binop(ctx, alu, DXIL_BINOP_UDIV, src[0], src[1]);
+   case nir_op_idiv:
+   case nir_op_udiv:
+      if (nir_src_is_const(alu->src[1].src)) {
+         /* It's illegal to emit a literal divide by 0 in DXIL */
+         nir_ssa_scalar divisor = nir_ssa_scalar_chase_alu_src(nir_get_ssa_scalar(&alu->dest.dest.ssa, 0), 1);
+         if (nir_ssa_scalar_as_int(divisor) == 0) {
+            store_alu_dest(ctx, alu, 0, dxil_module_get_int_const(&ctx->mod, 0, nir_dest_bit_size(alu->dest.dest)));
+            return true;
+         }
+      }
+      return emit_binop(ctx, alu, alu->op == nir_op_idiv ? DXIL_BINOP_SDIV : DXIL_BINOP_UDIV, src[0], src[1]);
+
    case nir_op_irem: return emit_binop(ctx, alu, DXIL_BINOP_SREM, src[0], src[1]);
    case nir_op_imod: return emit_binop(ctx, alu, DXIL_BINOP_UREM, src[0], src[1]);
    case nir_op_umod: return emit_binop(ctx, alu, DXIL_BINOP_UREM, src[0], src[1]);
@@ -6408,6 +6445,7 @@ optimize_nir(struct nir_shader *s, const struct nir_to_dxil_options *opts)
       NIR_PASS(progress, s, nir_opt_deref);
       NIR_PASS(progress, s, dxil_nir_lower_upcast_phis, opts->lower_int16 ? 32 : 16);
       NIR_PASS(progress, s, nir_lower_64bit_phis);
+      NIR_PASS(progress, s, nir_opt_loop_unroll);
       NIR_PASS_V(s, nir_lower_system_values);
    } while (progress);
 

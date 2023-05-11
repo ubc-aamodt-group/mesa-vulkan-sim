@@ -701,7 +701,8 @@ radv_physical_device_get_format_properties(struct radv_physical_device *physical
    if (multiplanar || desc->layout == UTIL_FORMAT_LAYOUT_SUBSAMPLED) {
       uint64_t tiling = VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT |
                         VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT |
-                        VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT;
+                        VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT |
+                        VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
 
       if (vk_format_get_ycbcr_info(format)) {
          tiling |= VK_FORMAT_FEATURE_2_COSITED_CHROMA_SAMPLES_BIT |
@@ -1977,7 +1978,7 @@ radv_GetImageSparseMemoryRequirements2(VkDevice _device,
                                           &req->memoryRequirements.formatProperties);
       req->memoryRequirements.imageMipTailFirstLod = image->planes[0].surface.first_mip_tail_level;
 
-      if (req->memoryRequirements.imageMipTailFirstLod < image->info.levels) {
+      if (req->memoryRequirements.imageMipTailFirstLod < image->vk.mip_levels) {
          if (device->physical_device->rad_info.gfx_level >= GFX9) {
             /* The tail is always a single tile per layer. */
             req->memoryRequirements.imageMipTailSize = 65536;

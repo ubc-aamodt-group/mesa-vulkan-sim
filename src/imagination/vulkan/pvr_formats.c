@@ -200,8 +200,6 @@ static const struct pvr_format pvr_format_table[] = {
    FORMAT_DEPTH_STENCIL(D16_UNORM, U16, U16, INVALID),
    /* VK_FORMAT_D32_SFLOAT = 126. */
    FORMAT_DEPTH_STENCIL(D32_SFLOAT, F32, F32, INVALID),
-   /* VK_FORMAT_S8_UINT = 127. */
-   FORMAT_DEPTH_STENCIL(S8_UINT, U8, INVALID, U8),
    /* VK_FORMAT_D24_UNORM_S8_UINT = 129. */
    FORMAT_DEPTH_STENCIL(D24_UNORM_S8_UINT, ST8U24, X8U24, U8X24),
    /* VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK = 147. */
@@ -491,7 +489,8 @@ pvr_get_image_format_features2(const struct pvr_format *pvr_format,
 
          if (!vk_format_is_int(vk_format) &&
              !vk_format_is_depth_or_stencil(vk_format) &&
-             first_component_size < 32) {
+             (first_component_size < 32 ||
+              vk_format_is_block_compressed(vk_format))) {
             flags |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
          }
       } else if (!vk_format_is_block_compressed(vk_format)) {
@@ -500,7 +499,7 @@ pvr_get_image_format_features2(const struct pvr_format *pvr_format,
       }
    }
 
-   if (pvr_get_pbe_accum_format(vk_format) != ROGUE_PBESTATE_PACKMODE_INVALID) {
+   if (pvr_get_pbe_accum_format(vk_format) != PVR_PBE_ACCUM_FORMAT_INVALID) {
       if (vk_format_is_color(vk_format)) {
          flags |= VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT |
                   VK_FORMAT_FEATURE_2_BLIT_DST_BIT;
@@ -508,16 +507,16 @@ pvr_get_image_format_features2(const struct pvr_format *pvr_format,
          if (!vk_format_is_int(vk_format)) {
             flags |= VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BLEND_BIT;
          }
-      } else if (vk_format_is_depth_or_stencil(vk_format)) {
-         flags |= VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT |
-                  VK_FORMAT_FEATURE_2_BLIT_DST_BIT;
       }
+   } else if (vk_format_is_depth_or_stencil(vk_format)) {
+      flags |= VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT |
+               VK_FORMAT_FEATURE_2_BLIT_DST_BIT;
    }
 
    if (vk_tiling == VK_IMAGE_TILING_OPTIMAL) {
       if (vk_format_is_color(vk_format) &&
           vk_format_get_nr_components(vk_format) == 1 &&
-          vk_format_get_blocksize(vk_format) == 32 &&
+          vk_format_get_blocksizebits(vk_format) == 32 &&
           vk_format_is_int(vk_format)) {
          flags |= VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT |
                   VK_FORMAT_FEATURE_2_STORAGE_IMAGE_ATOMIC_BIT;
@@ -616,7 +615,7 @@ pvr_get_buffer_format_features2(const struct pvr_format *pvr_format)
 
    if (vk_format_is_color(vk_format) &&
        vk_format_get_nr_components(vk_format) == 1 &&
-       vk_format_get_blocksize(vk_format) == 32 &&
+       vk_format_get_blocksizebits(vk_format) == 32 &&
        vk_format_is_int(vk_format)) {
       flags |= VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT |
                VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_ATOMIC_BIT;
@@ -643,6 +642,11 @@ pvr_get_buffer_format_features2(const struct pvr_format *pvr_format)
    case VK_FORMAT_R32G32B32A32_SFLOAT:
       flags |= VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT;
       break;
+
+   case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+      flags |= VK_FORMAT_FEATURE_2_UNIFORM_TEXEL_BUFFER_BIT;
+      break;
+
    default:
       break;
    }
@@ -918,7 +922,7 @@ void pvr_GetPhysicalDeviceSparseImageFormatProperties(
    VkPhysicalDevice physicalDevice,
    VkFormat format,
    VkImageType type,
-   uint32_t samples,
+   VkSampleCountFlagBits samples,
    VkImageUsageFlags usage,
    VkImageTiling tiling,
    uint32_t *pNumProperties,

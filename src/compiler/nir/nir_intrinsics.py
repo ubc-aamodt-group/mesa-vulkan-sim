@@ -893,6 +893,7 @@ system_value("ray_geometry_index", 1)
 system_value("ray_instance_custom_index", 1)
 system_value("shader_record_ptr", 1, bit_sizes=[64])
 system_value("cull_mask", 1)
+system_value("ray_triangle_vertex_positions", 3, indices=[COLUMN])
 
 # Driver-specific viewport scale/offset parameters.
 #
@@ -1192,6 +1193,10 @@ system_value("rel_patch_id_ir3", 1)
 # System values for freedreno compute shaders.
 system_value("subgroup_id_shift_ir3", 1)
 
+# System values for freedreno fragment shaders.
+intrinsic("load_frag_coord_unscaled_ir3", dest_comp=4,
+          flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
+
 # IR3-specific intrinsics for tessellation control shaders.  cond_end_ir3 end
 # the shader when src0 is false and is used to narrow down the TCS shader to
 # just thread 0 before writing out tessellation levels.
@@ -1199,6 +1204,12 @@ intrinsic("cond_end_ir3", src_comp=[1])
 # end_patch_ir3 is used just before thread 0 exist the TCS and presumably
 # signals the TE that the patch is complete and can be tessellated.
 intrinsic("end_patch_ir3")
+
+# Per-view gl_FragSizeEXT and gl_FragCoord offset.
+intrinsic("load_frag_size_ir3", src_comp=[1], dest_comp=2, indices=[RANGE],
+        flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
+intrinsic("load_frag_offset_ir3", src_comp=[1], dest_comp=2, indices=[RANGE],
+        flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
 
 # IR3-specific load/store intrinsics. These access a buffer used to pass data
 # between geometry stages - perhaps it's explicit access to the vertex cache.
@@ -1459,6 +1470,8 @@ system_value("prim_xfb_query_enabled_amd", dest_comp=1, bit_sizes=[1])
 # Merged wave info. Bits 0-7 are the ES thread count, 8-15 are the GS thread count, 16-24 is the
 # GS Wave ID, 24-27 is the wave index in the workgroup, and 28-31 is the workgroup size in waves.
 system_value("merged_wave_info_amd", dest_comp=1)
+# Global ID for GS waves on GCN/RDNA legacy GS.
+system_value("gs_wave_id_amd", dest_comp=1)
 # Whether the shader should clamp vertex color outputs to [0, 1].
 system_value("clamp_vertex_color_amd", dest_comp=1, bit_sizes=[1])
 # Whether the shader should cull front facing triangles.
@@ -1475,8 +1488,8 @@ intrinsic("load_cull_any_enabled_amd", dest_comp=1, bit_sizes=[1], flags=[CAN_EL
 intrinsic("load_cull_small_prim_precision_amd", dest_comp=1, bit_sizes=[32], flags=[CAN_ELIMINATE, CAN_REORDER])
 # Initial edge flags in a Vertex Shader, packed into the format the HW needs for primitive export.
 intrinsic("load_initial_edgeflags_amd", src_comp=[], dest_comp=1, bit_sizes=[32], indices=[])
-# Allocates export space for vertices and primitives. src[] = {num_vertices, num_primitives}.
-intrinsic("alloc_vertices_and_primitives_amd", src_comp=[1, 1], indices=[])
+# Corresponds to s_sendmsg in the GCN/RDNA ISA, src[] = { m0_content }, BASE = imm
+intrinsic("sendmsg_amd", src_comp=[1], indices=[BASE])
 # Overwrites VS input registers, for use with vertex compaction after culling. src = {vertex_id, instance_id}.
 intrinsic("overwrite_vs_arguments_amd", src_comp=[1, 1], indices=[])
 # Overwrites TES input registers, for use with vertex compaction after culling. src = {tes_u, tes_v, rel_patch_id, patch_id}.

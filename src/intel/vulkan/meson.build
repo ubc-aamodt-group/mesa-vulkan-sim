@@ -36,6 +36,7 @@ anv_entrypoints = custom_target(
   command : [
     prog_python, '@INPUT0@', '--xml', '@INPUT1@', '--proto', '--weak',
     '--out-h', '@OUTPUT0@', '--out-c', '@OUTPUT1@', '--prefix', 'anv',
+    '--beta', with_vulkan_beta.to_string(),
     '--device-prefix', 'gfx9',
     '--device-prefix', 'gfx11',
     '--device-prefix', 'gfx12',
@@ -174,6 +175,7 @@ libanv_files = files(
   'anv_queue.c',
   'anv_util.c',
   'anv_utrace.c',
+  'anv_va.c',
   'anv_video.c',
   'anv_wsi.c',
 )

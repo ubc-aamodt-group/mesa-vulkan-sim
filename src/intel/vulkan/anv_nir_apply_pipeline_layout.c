@@ -730,18 +730,19 @@ try_lower_direct_buffer_intrinsic(nir_builder *b,
 
    nir_address_format addr_format = descriptor_address_format(desc, state);
 
+   /* Although we could lower non uniform binding table accesses with
+    * nir_opt_non_uniform_access, we might as well use an A64 message and
+    * avoid the loops inserted by that lowering pass.
+    */
+   if (nir_intrinsic_access(intrin) & ACCESS_NON_UNIFORM)
+      return false;
+
    if (nir_deref_mode_is(deref, nir_var_mem_ssbo)) {
       /* 64-bit atomics only support A64 messages so we can't lower them to
        * the index+offset model.
        */
       if (is_atomic && nir_dest_bit_size(intrin->dest) == 64 &&
           !state->pdevice->info.has_lsc)
-         return false;
-
-      /* Normal binding table-based messages can't handle non-uniform access
-       * so we have to fall back to A64.
-       */
-      if (nir_intrinsic_access(intrin) & ACCESS_NON_UNIFORM)
          return false;
 
       if (!descriptor_has_bti(desc, state))
@@ -1032,7 +1033,7 @@ lower_load_constant(nir_builder *b, nir_intrinsic_instr *intrin,
       nir_iadd(b,
          nir_load_reloc_const_intel(b, BRW_SHADER_RELOC_CONST_DATA_ADDR_LOW),
          offset),
-      nir_imm_int(b, INSTRUCTION_STATE_POOL_MIN_ADDRESS >> 32));
+      nir_load_reloc_const_intel(b, BRW_SHADER_RELOC_CONST_DATA_ADDR_HIGH));
 
    nir_ssa_def *data =
       nir_load_global_constant(b, const_data_addr,
