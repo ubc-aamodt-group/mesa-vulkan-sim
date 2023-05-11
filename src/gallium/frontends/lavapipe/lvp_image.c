@@ -106,6 +106,8 @@ lvp_image_create(VkDevice _device,
    }
    *pImage = lvp_image_to_handle(image);
 
+   printf("LVP: Image created at %p\n", pImage);
+
    return VK_SUCCESS;
 }
 

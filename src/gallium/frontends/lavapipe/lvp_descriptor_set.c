@@ -527,7 +527,7 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
             printf("LVP: Setting lvp_image_view %p for descriptor %d (%d). ", (void *)iview, i, j);
             printf("Type: %s; ", vk_Format_to_str(iview->image->vk.format));
             printf("Tiling: %s\n", vk_ImageTiling_to_str(iview->image->vk.tiling));
-            printf("LVP: Image stored at %p\n", desc[j].info.image_view.image);
+            printf("LVP: Image %p stored at %p using pointer %p\n", desc[j].info.image_view.image, iview->image->pmem, iview->image->pmem_gpgpusim);
          }
          break;
 
@@ -565,19 +565,21 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
                .type = write->descriptorType,
                .info.ubo.buffer_offset = buffer ? write->pBufferInfo[j].offset : 0,
                .info.ubo.buffer = buffer ? buffer->bo : NULL,
-               .info.ubo.pmem = buffer ? buffer->pmem : NULL,
+               .info.ubo.pmem = buffer ? buffer->pBuffer_gpgpusim : NULL,
                .info.ubo.buffer_size = buffer ? write->pBufferInfo[j].range : 0,
             };
             if (buffer && write->pBufferInfo[j].range == VK_WHOLE_SIZE)
                desc[j].info.ubo.buffer_size = buffer->bo->width0 - desc[j].info.ubo.buffer_offset;
             
             printf("LVP: Setting lvp_buffer %p for descriptor %d (%d). ", (void *)buffer, i, j);
-            printf("info.ubo: buffer %p + offset %d = %p; stored at %p with %d bytes. \n", 
+            printf("info.ubo: buffer %p + offset %d = %p; stored at %p using pointer %p with %d bytes. \n", 
                      (void *)desc[j].info.ubo.buffer, 
                      desc[j].info.ubo.buffer_offset,
                      (void *)desc[j].info.ubo.buffer + desc[j].info.ubo.buffer_offset,
+                     buffer->pmem,
                      desc[j].info.ubo.pmem,
                      desc[j].info.ubo.buffer_size);
+            printf("LVP: gpgpusim buffer at %p\n", buffer->pBuffer_gpgpusim);
          }
          break;
 
@@ -589,18 +591,20 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
                .type = write->descriptorType,
                .info.ssbo.buffer_offset = buffer ? write->pBufferInfo[j].offset : 0,
                .info.ssbo.buffer = buffer ? buffer->bo : NULL,
-               .info.ssbo.pmem = buffer ? buffer->pmem : NULL,
+               .info.ssbo.pmem = buffer ? buffer->pBuffer_gpgpusim : NULL,
                .info.ssbo.buffer_size = buffer ? write->pBufferInfo[j].range : 0,
             };
             if (buffer && write->pBufferInfo[j].range == VK_WHOLE_SIZE)
                desc[j].info.ssbo.buffer_size = buffer->bo->width0 - desc[j].info.ssbo.buffer_offset;
             printf("LVP: Setting lvp_buffer %p for descriptor %d (%d). ", (void *)buffer, i, j);
-            printf("info.ssbo: buffer %p + offset %d = %p; stored at %p with %d bytes. \n", 
+            printf("info.ssbo: buffer %p + offset %d = %p; stored at %p using pointer %p with %d bytes. \n", 
                      (void *)desc[j].info.ssbo.buffer, 
                      desc[j].info.ssbo.buffer_offset,
                      (void *)desc[j].info.ssbo.buffer + desc[j].info.ssbo.buffer_offset,
+                     buffer->pmem,
                      desc[j].info.ssbo.pmem,
                      desc[j].info.ssbo.buffer_size);
+            printf("LVP: gpgpusim buffer at %p\n", buffer->pBuffer_gpgpusim);
          }
          break;
 

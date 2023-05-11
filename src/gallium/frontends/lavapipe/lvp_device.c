@@ -45,6 +45,8 @@
 #include "nir.h"
 #include "nir_builder.h"
 
+#include "gpgpusim_calls_from_mesa.h"
+
 #if defined(VK_USE_PLATFORM_WAYLAND_KHR) || \
     defined(VK_USE_PLATFORM_WIN32_KHR) || \
     defined(VK_USE_PLATFORM_XCB_KHR) || \
@@ -2138,6 +2140,11 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_BindBufferMemory2(VkDevice _device,
       printf("LVP: Binding lvp_buffer %p: ", buffer);
       printf("buffer->bo: %p; buffer->pmem: %p; memory-offset: %ld;\n",
                buffer->bo, buffer->pmem, buffer->offset);
+
+      // Allocate gpgpu-sim memory
+      void* gpgpusimBuffer = gpgpusim_allocBuffer(buffer->pmem, buffer->size);
+      printf("LVP: gpgpusim buffer size %ld allocated at %p\n", buffer->size, gpgpusimBuffer);
+      buffer->pBuffer_gpgpusim = gpgpusimBuffer;
    }
    return VK_SUCCESS;
 }
@@ -2190,7 +2197,9 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_BindImageMemory2(VkDevice _device,
          image->pmem = mem->pmem;
          image->memory_offset = bind_info->memoryOffset;
       }
-      printf("LVP: Image %p bound to pmem %p\n", image, image->pmem);
+      // Allocate gpgpu-sim memory
+      image->pmem_gpgpusim = gpgpusim_allocBuffer(image->pmem, image->size);
+      printf("LVP: Image %p bound to pmem %p using pointer %p\n", image, image->pmem, image->pmem_gpgpusim);
    }
    return VK_SUCCESS;
 }

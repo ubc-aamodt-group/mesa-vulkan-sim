@@ -243,6 +243,7 @@ struct lvp_image {
    VkDeviceSize size;
    uint32_t alignment;
    struct pipe_memory_allocation *pmem;
+   void* pmem_gpgpusim;
    unsigned memory_offset;
    struct pipe_resource *bo;
 };
@@ -522,6 +523,7 @@ struct lvp_buffer {
    VkBufferUsageFlags                           usage;
 
    struct pipe_memory_allocation *pmem;
+   void *pBuffer_gpgpusim;
    struct pipe_resource *bo;
    uint64_t total_size;
    uint64_t offset;

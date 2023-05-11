@@ -40,8 +40,9 @@ extern void gpgpusim_setGeometries(const VkAccelerationStructureGeometryKHR* pGe
 extern void gpgpusim_addTreelets(VkAccelerationStructureKHR accelerationStructure);
 extern void gpgpusim_testTraversal(struct lvp_bvh_node* root);
 extern uint32_t gpgpusim_registerShader(char * shaderPath, uint32_t shader_type);
-extern void gpgpusim_allocBLAS(void* rootAddr, uint64_t bufferSize);
-extern void gpgpusim_allocTLAS(void* rootAddr, uint64_t bufferSize);
+extern void gpgpusim_allocBLAS(void* rootAddr, uint64_t bufferSize, void* gpgpusimAddr);
+extern void gpgpusim_allocTLAS(void* rootAddr, uint64_t bufferSize, void* gpgpusimAddr);
+extern void* gpgpusim_allocBuffer(void* bufferAddr, uint64_t bufferSize);
 
 extern void gpgpusim_vkCmdTraceRaysKHR(
                       void *raygen_sbt,

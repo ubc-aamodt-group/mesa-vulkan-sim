@@ -256,10 +256,10 @@ lvp_CreateAccelerationStructureKHR(
    *pAccelerationStructure = lvp_acceleration_structure_to_handle(accel);
    
    if (pCreateInfo->type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR) {
-      gpgpusim_allocTLAS((void *)accel->address.bo + accel->address.offset, buffer->total_size);
+      gpgpusim_allocTLAS((void *)accel->address.bo + accel->address.offset, buffer->total_size, buffer->pBuffer_gpgpusim);
    }
    else {
-      gpgpusim_allocBLAS((void *)accel->address.bo + accel->address.offset, buffer->total_size);
+      gpgpusim_allocBLAS((void *)accel->address.bo + accel->address.offset, buffer->total_size, buffer->pBuffer_gpgpusim);
    }
 
    return VK_SUCCESS;
