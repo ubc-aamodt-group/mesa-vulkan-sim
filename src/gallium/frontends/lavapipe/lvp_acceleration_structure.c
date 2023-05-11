@@ -254,6 +254,13 @@ lvp_CreateAccelerationStructureKHR(
    printf("LVP: Buffer %p + 0x%lx = %p allocated to accel structure %p\n", accel->address.bo, accel->address.offset, (void *)accel->address.bo + accel->address.offset, accel);
 
    *pAccelerationStructure = lvp_acceleration_structure_to_handle(accel);
+   
+   if (pCreateInfo->type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR) {
+      gpgpusim_allocTLAS((void *)accel->address.bo + accel->address.offset, buffer->total_size);
+   }
+   else {
+      gpgpusim_allocBLAS((void *)accel->address.bo + accel->address.offset, buffer->total_size);
+   }
 
    return VK_SUCCESS;
 }
