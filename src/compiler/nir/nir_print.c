@@ -650,12 +650,12 @@ print_var_decl(nir_variable *var, print_state *state)
    const char *const ronly = (access & ACCESS_NON_WRITEABLE) ? "readonly " : "";
    const char *const wonly = (access & ACCESS_NON_READABLE) ? "writeonly " : "";
    const char *const reorder = (access & ACCESS_CAN_REORDER) ? "reorderable " : "";
-   const char *const stream_cache_policy = (access & ACCESS_STREAM_CACHE_POLICY) ?
-                                           "stream-cache-policy " : "";
+   const char *const non_temporal = (access & ACCESS_NON_TEMPORAL) ?
+                                       "non-temporal" : "";
    const char *const include_helpers = (access & ACCESS_INCLUDE_HELPERS) ?
                                        "include-helpers " : "";
    fprintf(fp, "%s%s%s%s%s%s%s%s", coher, volat, restr, ronly, wonly, reorder,
-           stream_cache_policy, include_helpers);
+           non_temporal, include_helpers);
 
    if (glsl_get_base_type(glsl_without_array(var->type)) == GLSL_TYPE_IMAGE) {
       fprintf(fp, "%s ", util_format_short_name(var->data.image.format));
@@ -850,12 +850,12 @@ print_deref_instr(nir_deref_instr *instr, print_state *state)
       fprintf(fp, "%s%s", get_variable_mode_str(1 << m, true),
                           modes ? "|" : "");
    }
-   fprintf(fp, " %s) ", glsl_get_type_name(instr->type));
+   fprintf(fp, " %s)", glsl_get_type_name(instr->type));
 
    if (instr->deref_type != nir_deref_type_var &&
        instr->deref_type != nir_deref_type_cast) {
       /* Print the entire chain as a comment */
-      fprintf(fp, "/* &");
+      fprintf(fp, " /* &");
       print_deref_link(instr, true, state);
       fprintf(fp, " */");
    }

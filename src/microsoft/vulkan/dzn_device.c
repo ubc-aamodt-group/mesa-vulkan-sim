@@ -73,6 +73,7 @@
 
 static const struct vk_instance_extension_table instance_extensions = {
    .KHR_get_physical_device_properties2      = true,
+   .KHR_device_group_creation                = true,
 #ifdef DZN_USE_WSI_PLATFORM
    .KHR_surface                              = true,
    .KHR_get_surface_capabilities2            = true,
@@ -100,23 +101,36 @@ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
       .KHR_16bit_storage                     = pdev->options4.Native16BitShaderOpsSupported,
       .KHR_bind_memory2                      = true,
       .KHR_create_renderpass2                = true,
+      .KHR_dedicated_allocation              = true,
       .KHR_depth_stencil_resolve             = true,
       .KHR_descriptor_update_template        = true,
+      .KHR_device_group                      = true,
       .KHR_draw_indirect_count               = true,
       .KHR_driver_properties                 = true,
       .KHR_dynamic_rendering                 = true,
+      .KHR_image_format_list                 = true,
+      .KHR_imageless_framebuffer             = true,
       .KHR_get_memory_requirements2          = true,
       .KHR_maintenance1                      = true,
       .KHR_maintenance2                      = true,
       .KHR_maintenance3                      = true,
       .KHR_multiview                         = true,
+      .KHR_relaxed_block_layout              = true,
+      .KHR_sampler_mirror_clamp_to_edge      = true,
+      .KHR_separate_depth_stencil_layouts    = true,
       .KHR_shader_draw_parameters            = true,
       .KHR_shader_float16_int8               = pdev->options4.Native16BitShaderOpsSupported,
+      .KHR_shader_float_controls             = true,
+      .KHR_spirv_1_4                         = true,
       .KHR_storage_buffer_storage_class      = true,
 #ifdef DZN_USE_WSI_PLATFORM
       .KHR_swapchain                         = true,
 #endif
+      .KHR_timeline_semaphore                = true,
+      .KHR_uniform_buffer_standard_layout    = true,
       .EXT_descriptor_indexing               = pdev->shader_model >= D3D_SHADER_MODEL_6_6,
+      .EXT_scalar_block_layout               = true,
+      .EXT_separate_stencil_usage            = true,
       .EXT_shader_subgroup_ballot            = true,
       .EXT_shader_subgroup_vote              = true,
       .EXT_subgroup_size_control             = true,
@@ -357,7 +371,7 @@ dzn_physical_device_create(struct vk_instance *instance,
 
    VkResult result =
       vk_physical_device_init(&pdev->vk, instance,
-                              NULL, /* We set up extensions later */
+                              NULL, NULL, /* We set up extensions later */
                               &dispatch_table);
    if (result != VK_SUCCESS) {
       vk_free(&instance->alloc, pdev);
@@ -460,6 +474,13 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
       pdev->options19.MaxSamplerDescriptorHeapSize = D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE;
       pdev->options19.MaxSamplerDescriptorHeapSizeWithStaticSamplers = pdev->options19.MaxSamplerDescriptorHeapSize;
       pdev->options19.MaxViewDescriptorHeapSize = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_1;
+   }
+   {
+      D3D12_FEATURE_DATA_FORMAT_SUPPORT a4b4g4r4_support = {
+         .Format = DXGI_FORMAT_A4B4G4R4_UNORM
+      };
+      pdev->support_a4b4g4r4 =
+         SUCCEEDED(ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_FORMAT_SUPPORT, &a4b4g4r4_support, sizeof(a4b4g4r4_support)));
    }
 
    pdev->queue_families[pdev->queue_family_count++] = (struct dzn_queue_family) {
@@ -842,10 +863,16 @@ dzn_physical_device_get_format_properties(struct dzn_physical_device *pdev,
       }
    }
 
-   /* B4G4R4A4 support is required, but d3d12 doesn't support it. We map this
-    * format to R4G4B4A4 and adjust the SRV component-mapping to fake
+   /* B4G4R4A4 support is required, but d3d12 doesn't support it. The needed
+    * d3d12 format would be A4R4G4B4. We map this format to d3d12's B4G4R4A4,
+    * which is Vulkan's A4R4G4B4, and adjust the SRV component-mapping to fake
     * B4G4R4A4, but that forces us to limit the usage to sampling, which,
     * luckily, is exactly what we need to support the required features.
+    *
+    * However, since this involves swizzling the alpha channel, it can cause
+    * problems for border colors. Fortunately, d3d12 added an A4B4G4R4 format,
+    * which still isn't quite right (it'd be Vulkan R4G4B4A4), but can be
+    * swizzled by just swapping R and B, so no border color issues arise.
     */
    if (format == VK_FORMAT_B4G4R4A4_UNORM_PACK16) {
       VkFormatFeatureFlags bgra4_req_features =
@@ -1142,7 +1169,7 @@ dzn_enumerate_physical_devices(struct vk_instance *instance)
    if (result != VK_SUCCESS)
       result = dzn_enumerate_physical_devices_dxgi(instance);
 #endif
-   
+
    return result;
 }
 
@@ -1405,7 +1432,7 @@ dzn_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
       pdev->options4.Native16BitShaderOpsSupported;
    const VkPhysicalDeviceVulkan12Features core_1_2 = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
-      .samplerMirrorClampToEdge           = false,
+      .samplerMirrorClampToEdge           = true,
       .drawIndirectCount                  = true,
       .storageBuffer8BitAccess            = support_8bit,
       .uniformAndStorageBuffer8BitAccess  = support_8bit,
@@ -1438,7 +1465,7 @@ dzn_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
       .runtimeDescriptorArray                               = support_descriptor_indexing,
 
       .samplerFilterMinmax                = false,
-      .scalarBlockLayout                  = false,
+      .scalarBlockLayout                  = true,
       .imagelessFramebuffer               = true,
       .uniformBufferStandardLayout        = true,
       .shaderSubgroupExtendedTypes        = true,
@@ -1584,9 +1611,9 @@ vk_icdNegotiateLoaderICDInterfaceVersion(uint32_t *pSupportedVersion)
     *
     *    - Loader interface v4 differs from v3 in:
     *        - The ICD must implement vk_icdGetPhysicalDeviceProcAddr().
-    * 
+    *
     *    - Loader interface v5 differs from v4 in:
-    *        - The ICD must support Vulkan API version 1.1 and must not return 
+    *        - The ICD must support Vulkan API version 1.1 and must not return
     *          VK_ERROR_INCOMPATIBLE_DRIVER from vkCreateInstance() unless a
     *          Vulkan Loader with interface v4 or smaller is being used and the
     *          application provides an API version that is greater than 1.0.
@@ -1852,14 +1879,11 @@ dzn_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
       .maxDescriptorSetUpdateAfterBindStorageImages = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
       .maxDescriptorSetUpdateAfterBindInputAttachments = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
 
-      /* FIXME: add support for VK_RESOLVE_MODE_SAMPLE_ZERO_BIT,
-       * which is required by the VK 1.2 spec.
-       */
-      .supportedDepthResolveModes = VK_RESOLVE_MODE_AVERAGE_BIT,
-
-      .supportedStencilResolveModes = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT,
-      .independentResolveNone = false,
-      .independentResolve = false,
+      .supportedDepthResolveModes = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT | VK_RESOLVE_MODE_AVERAGE_BIT |
+         VK_RESOLVE_MODE_MIN_BIT | VK_RESOLVE_MODE_MAX_BIT,
+      .supportedStencilResolveModes = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT | VK_RESOLVE_MODE_MIN_BIT | VK_RESOLVE_MODE_MAX_BIT,
+      .independentResolveNone = true,
+      .independentResolve = true,
       .filterMinmaxSingleComponentFormats = false,
       .filterMinmaxImageComponentMapping = false,
       .maxTimelineSemaphoreValueDifference = UINT64_MAX,
@@ -2018,11 +2042,6 @@ dzn_queue_submit(struct vk_queue *q,
 
       cmdlists[i] = (ID3D12CommandList *)cmd_buffer->cmdlist;
 
-      util_dynarray_foreach(&cmd_buffer->events.wait, struct dzn_event *, evt) {
-         if (FAILED(ID3D12CommandQueue_Wait(queue->cmdqueue, (*evt)->fence, 1)))
-            return vk_error(device, VK_ERROR_UNKNOWN);
-      }
-
       util_dynarray_foreach(&cmd_buffer->queries.reset, struct dzn_cmd_buffer_query_range, range) {
          mtx_lock(&range->qpool->queries_lock);
          for (uint32_t q = range->start; q < range->start + range->count; q++) {
@@ -2038,7 +2057,7 @@ dzn_queue_submit(struct vk_queue *q,
    }
 
    ID3D12CommandQueue_ExecuteCommandLists(queue->cmdqueue, info->command_buffer_count, cmdlists);
-   
+
    for (uint32_t i = 0; i < info->command_buffer_count; i++) {
       struct dzn_cmd_buffer* cmd_buffer =
          container_of(info->command_buffers[i], struct dzn_cmd_buffer, vk);
@@ -3218,6 +3237,7 @@ dzn_sampler_translate_addr_mode(VkSamplerAddressMode in)
    case VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT: return D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
    case VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE: return D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
    case VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER: return D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+   case VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE: return D3D12_TEXTURE_ADDRESS_MODE_MIRROR_ONCE;
    default: unreachable("Invalid address mode");
    }
 }

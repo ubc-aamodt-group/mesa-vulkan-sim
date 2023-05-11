@@ -7092,7 +7092,7 @@ visit_load_buffer(isel_context* ctx, nir_intrinsic_instr* intrin)
    Temp idx = idxen ? as_vgpr(ctx, get_ssa_temp(ctx, intrin->src[3].ssa)) : Temp();
 
    bool glc = nir_intrinsic_access(intrin) & ACCESS_COHERENT;
-   bool slc = nir_intrinsic_access(intrin) & ACCESS_STREAM_CACHE_POLICY;
+   bool slc = nir_intrinsic_access(intrin) & ACCESS_NON_TEMPORAL;
 
    unsigned const_offset = nir_intrinsic_base(intrin);
    unsigned elem_size_bytes = intrin->dest.ssa.bit_size / 8u;
@@ -7164,7 +7164,7 @@ visit_store_buffer(isel_context* ctx, nir_intrinsic_instr* intrin)
    Temp idx = idxen ? as_vgpr(ctx, get_ssa_temp(ctx, intrin->src[4].ssa)) : Temp();
 
    bool glc = nir_intrinsic_access(intrin) & ACCESS_COHERENT;
-   bool slc = nir_intrinsic_access(intrin) & ACCESS_STREAM_CACHE_POLICY;
+   bool slc = nir_intrinsic_access(intrin) & ACCESS_NON_TEMPORAL;
 
    unsigned const_offset = nir_intrinsic_base(intrin);
    unsigned write_mask = nir_intrinsic_write_mask(intrin);
@@ -7519,9 +7519,16 @@ get_scratch_resource(isel_context* ctx)
 {
    Builder bld(ctx->program, ctx->block);
    Temp scratch_addr = ctx->program->private_segment_buffer;
-   if (ctx->stage.hw != HWStage::CS)
+   if (!scratch_addr.bytes()) {
+      Temp addr_lo = bld.sop1(aco_opcode::p_load_symbol, bld.def(s1),
+                              Operand::c32(aco_symbol_scratch_addr_lo));
+      Temp addr_hi = bld.sop1(aco_opcode::p_load_symbol, bld.def(s1),
+                              Operand::c32(aco_symbol_scratch_addr_hi));
+      scratch_addr = bld.pseudo(aco_opcode::p_create_vector, bld.def(s2), addr_lo, addr_hi);
+   } else if (ctx->stage.hw != HWStage::CS) {
       scratch_addr =
          bld.smem(aco_opcode::s_load_dwordx2, bld.def(s2), scratch_addr, Operand::zero());
+   }
 
    uint32_t rsrc_conf =
       S_008F0C_ADD_TID_ENABLE(1) | S_008F0C_INDEX_STRIDE(ctx->program->wave_size == 64 ? 3 : 2);
@@ -8991,41 +8998,27 @@ visit_intrinsic(isel_context* ctx, nir_intrinsic_instr* instr)
 
       break;
    }
-   case nir_intrinsic_emit_vertex_with_counter: {
-      assert(ctx->stage.hw == HWStage::GS);
-      unsigned stream = nir_intrinsic_stream_id(instr);
-      bld.sopp(aco_opcode::s_sendmsg, bld.m0(ctx->gs_wave_id), -1, sendmsg_gs(false, true, stream));
+   case nir_intrinsic_sendmsg_amd: {
+      unsigned imm = nir_intrinsic_base(instr);
+      Temp m0_content = bld.as_uniform(get_ssa_temp(ctx, instr->src[0].ssa));
+      bld.sopp(aco_opcode::s_sendmsg, bld.m0(m0_content), -1, imm);
       break;
    }
-   case nir_intrinsic_end_primitive_with_counter: {
-      if (ctx->stage.hw != HWStage::NGG) {
-         unsigned stream = nir_intrinsic_stream_id(instr);
-         bld.sopp(aco_opcode::s_sendmsg, bld.m0(ctx->gs_wave_id), -1,
-                  sendmsg_gs(true, false, stream));
-      }
+   case nir_intrinsic_load_gs_wave_id_amd: {
+      Temp dst = get_ssa_temp(ctx, &instr->dest.ssa);
+      if (ctx->args->merged_wave_info.used)
+         bld.pseudo(aco_opcode::p_extract, Definition(dst), bld.def(s1, scc),
+                    get_arg(ctx, ctx->args->merged_wave_info), Operand::c32(2u),
+                    Operand::c32(8u), Operand::zero());
+      else if (ctx->args->gs_wave_id.used)
+         bld.copy(Definition(dst), get_arg(ctx, ctx->args->gs_wave_id));
+      else
+         unreachable("Shader doesn't have GS wave ID.");
       break;
    }
    case nir_intrinsic_is_subgroup_invocation_lt_amd: {
       Temp src = bld.as_uniform(get_ssa_temp(ctx, instr->src[0].ssa));
       bld.copy(Definition(get_ssa_temp(ctx, &instr->dest.ssa)), lanecount_to_mask(ctx, src));
-      break;
-   }
-   case nir_intrinsic_alloc_vertices_and_primitives_amd: {
-      assert(ctx->stage.hw == HWStage::NGG);
-      Temp num_vertices = get_ssa_temp(ctx, instr->src[0].ssa);
-      Temp num_primitives = get_ssa_temp(ctx, instr->src[1].ssa);
-
-      /* Put the number of vertices and primitives into m0 for the GS_ALLOC_REQ */
-      Temp tmp =
-         bld.sop2(aco_opcode::s_lshl_b32, bld.def(s1), bld.def(s1, scc),
-                  num_primitives, Operand::c32(12u));
-      tmp = bld.sop2(aco_opcode::s_or_b32, bld.m0(bld.def(s1)), bld.def(s1, scc),
-                     tmp, num_vertices);
-
-      /* Request the SPI to allocate space for the primitives and vertices
-       * that will be exported by the threadgroup.
-       */
-      bld.sopp(aco_opcode::s_sendmsg, bld.m0(tmp), -1, sendmsg_gs_alloc_req);
       break;
    }
    case nir_intrinsic_gds_atomic_add_amd: {
@@ -11138,22 +11131,25 @@ add_startpgm(struct isel_context* ctx)
       }
    }
 
-   if (ctx->args->ring_offsets.used) {
-      if (ctx->program->gfx_level < GFX9) {
-         /* Stash these in the program so that they can be accessed later when
-          * handling spilling.
-          */
+   if (ctx->program->gfx_level < GFX9) {
+      /* Stash these in the program so that they can be accessed later when
+       * handling spilling.
+       */
+      if (ctx->args->ring_offsets.used)
          ctx->program->private_segment_buffer = get_arg(ctx, ctx->args->ring_offsets);
-         ctx->program->scratch_offset = get_arg(ctx, ctx->args->scratch_offset);
 
-      } else if (ctx->program->gfx_level <= GFX10_3 && ctx->program->stage != raytracing_cs) {
-         /* Manually initialize scratch. For RT stages scratch initialization is done in the prolog. */
-         Operand scratch_offset = Operand(get_arg(ctx, ctx->args->scratch_offset));
-         scratch_offset.setLateKill(true);
-         Builder bld(ctx->program, ctx->block);
-         bld.pseudo(aco_opcode::p_init_scratch, bld.def(s2), bld.def(s1, scc),
-                    get_arg(ctx, ctx->args->ring_offsets), scratch_offset);
-      }
+      ctx->program->scratch_offset = get_arg(ctx, ctx->args->scratch_offset);
+   } else if (ctx->program->gfx_level <= GFX10_3 && ctx->program->stage != raytracing_cs) {
+      /* Manually initialize scratch. For RT stages scratch initialization is done in the prolog. */
+      Operand scratch_offset = Operand(get_arg(ctx, ctx->args->scratch_offset));
+      scratch_offset.setLateKill(true);
+
+      Operand scratch_addr = ctx->args->ring_offsets.used ?
+         Operand(get_arg(ctx, ctx->args->ring_offsets)) : Operand(s2);
+
+      Builder bld(ctx->program, ctx->block);
+      bld.pseudo(aco_opcode::p_init_scratch, bld.def(s2), bld.def(s1, scc),
+                 scratch_addr, scratch_offset);
    }
 
    return startpgm;
@@ -11382,24 +11378,9 @@ select_program(Program* program, unsigned shader_count, struct nir_shader* const
             bld.barrier(aco_opcode::p_barrier,
                         memory_sync_info(storage_shared, semantic_acqrel, scope), scope);
          }
-
-         if (ctx.stage == vertex_geometry_gs || ctx.stage == tess_eval_geometry_gs) {
-            ctx.gs_wave_id = bld.pseudo(aco_opcode::p_extract, bld.def(s1, m0), bld.def(s1, scc),
-                                        get_arg(&ctx, args->merged_wave_info), Operand::c32(2u),
-                                        Operand::c32(8u), Operand::zero());
-         }
-      } else if (ctx.stage == geometry_gs)
-         ctx.gs_wave_id = get_arg(&ctx, args->gs_wave_id);
+      }
 
       visit_cf_list(&ctx, &func->body);
-
-      if (nir->info.stage == MESA_SHADER_GEOMETRY && !ngg_gs) {
-         Builder bld(ctx.program, ctx.block);
-         bld.barrier(aco_opcode::p_barrier,
-                     memory_sync_info(storage_vmem_output, semantic_release, scope_device));
-         bld.sopp(aco_opcode::s_sendmsg, bld.m0(ctx.gs_wave_id), -1,
-                  sendmsg_gs_done(false, false, 0));
-      }
 
       if (ctx.stage == fragment_fs && ctx.program->info.ps.has_epilog) {
          create_fs_jump_to_epilog(&ctx);

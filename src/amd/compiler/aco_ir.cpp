@@ -480,6 +480,28 @@ can_use_opsel(amd_gfx_level gfx_level, aco_opcode op, int idx)
 }
 
 bool
+can_write_m0(const aco_ptr<Instruction>& instr)
+{
+   if (instr->isSALU())
+      return true;
+
+   /* VALU can't write m0 on any GPU generations. */
+   if (instr->isVALU())
+      return false;
+
+   switch (instr->opcode) {
+   case aco_opcode::p_parallelcopy:
+   case aco_opcode::p_extract:
+   case aco_opcode::p_insert:
+      /* These pseudo instructions are implemented with SALU when writing m0. */
+      return true;
+   default:
+      /* Assume that no other instructions can write m0. */
+      return false;
+   }
+}
+
+bool
 instr_is_16bit(amd_gfx_level gfx_level, aco_opcode op)
 {
    /* partial register writes are GFX9+, only */
@@ -760,6 +782,7 @@ get_cmp_info(aco_opcode op, CmpInfo* info)
    info->swapped = aco_opcode::num_opcodes;
    info->inverse = aco_opcode::num_opcodes;
    info->f32 = aco_opcode::num_opcodes;
+   info->vcmpx = aco_opcode::num_opcodes;
    switch (op) {
       // clang-format off
 #define CMP2(ord, unord, ord_swap, unord_swap, sz)                                                 \

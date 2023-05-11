@@ -527,7 +527,7 @@ struct radeon_winsys {
     */
    enum pipe_reset_status (*ctx_query_reset_status)(struct radeon_winsys_ctx *ctx,
                                                     bool full_reset_only,
-                                                    bool *needs_reset);
+                                                    bool *needs_reset, bool *reset_completed);
 
    /**
     * Create a command stream.
@@ -728,13 +728,15 @@ struct radeon_winsys {
     * Initialize surface
     *
     * \param ws        The winsys this function is called from.
+    * \param info      radeon_info from the driver
     * \param tex       Input texture description
     * \param flags     Bitmask of RADEON_SURF_* flags
     * \param bpe       Bytes per pixel, it can be different for Z buffers.
     * \param mode      Preferred tile mode. (linear, 1D, or 2D)
     * \param surf      Output structure
     */
-   int (*surface_init)(struct radeon_winsys *ws, const struct pipe_resource *tex, uint64_t flags,
+   int (*surface_init)(struct radeon_winsys *ws, const struct radeon_info *info,
+                       const struct pipe_resource *tex, uint64_t flags,
                        unsigned bpe, enum radeon_surf_mode mode, struct radeon_surf *surf);
 
    uint64_t (*query_value)(struct radeon_winsys *ws, enum radeon_value_id value);

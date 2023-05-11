@@ -337,9 +337,17 @@ Core Mesa environment variables
    them to use a submit thread from the beginning, regardless of whether or
    not they ever see a wait-before-signal condition.
 
+.. envvar:: MESA_VK_DEVICE_SELECT_DEBUG
+
+   print debug info about device selection decision-making
+
 .. envvar:: MESA_LOADER_DRIVER_OVERRIDE
 
    chooses a different driver binary such as ``etnaviv`` or ``zink``.
+
+.. envvar:: DRI_PRIME_DEBUG
+
+   print debug info about device selection decision-making
 
 .. envvar:: DRI_PRIME
 
@@ -422,10 +430,10 @@ on Windows.
 Intel driver environment variables
 ----------------------------------------------------
 
-.. envvar:: ANV_GPL
+.. envvar:: ANV_NO_GPL
 
    If set to 1, true, or yes, then VK_EXT_graphics_pipeline_library
-   will be exposed, which may be incompatible with mesh shaders.
+   will be disabled.
 
 .. envvar:: INTEL_BLACKHOLE_DEFAULT
 
@@ -448,7 +456,9 @@ Intel driver environment variables
    ``ann``
       annotate IR in assembly dumps
    ``bat``
-      emit batch information
+      emit batch information. Can control in which frames batches
+      get dumped using ``INTEL_DEBUG_BATCH_FRAME_*``, where
+      ``INTEL_DEBUG_BATCH_FRAME_START`` <= frame < ``INTEL_DEBUG_BATCH_FRAME_STOP``
    ``blit``
       emit messages about blit operations
    ``blorp``
@@ -476,6 +486,8 @@ Intel driver environment variables
       dump shader assembly for fragment shaders
    ``gs``
       dump shader assembly for geometry shaders
+   ``heaps``
+      print information about the driver's heaps (Anv only)
    ``hex``
       print instruction hex dump with the disassembly
    ``l3``

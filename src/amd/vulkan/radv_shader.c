@@ -651,6 +651,7 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_pipeline_
                .lower_quad_broadcast_dynamic = 1,
                .lower_quad_broadcast_dynamic_to_const = gfx7minus,
                .lower_shuffle_to_swizzle_amd = 1,
+               .lower_ballot_bit_count_to_mbcnt_amd = 1,
             });
 
    NIR_PASS(_, nir, nir_lower_load_const_to_scalar);
@@ -2070,7 +2071,8 @@ static void
 radv_aco_build_shader_binary(void **bin, const struct ac_shader_config *config,
                              const char *llvm_ir_str, unsigned llvm_ir_size, const char *disasm_str,
                              unsigned disasm_size, uint32_t *statistics, uint32_t stats_size,
-                             uint32_t exec_size, const uint32_t *code, uint32_t code_dw)
+                             uint32_t exec_size, const uint32_t *code, uint32_t code_dw,
+                             const struct aco_symbol *symbols, unsigned num_symbols)
 {
    struct radv_shader_binary **binary = (struct radv_shader_binary **)bin;
    size_t size = llvm_ir_size;

@@ -160,6 +160,17 @@ enum aco_statistic {
    aco_num_statistics
 };
 
+enum aco_symbol_id {
+   aco_symbol_invalid,
+   aco_symbol_scratch_addr_lo,
+   aco_symbol_scratch_addr_hi,
+};
+
+struct aco_symbol {
+   enum aco_symbol_id id;
+   unsigned offset;
+};
+
 #ifdef __cplusplus
 }
 #endif

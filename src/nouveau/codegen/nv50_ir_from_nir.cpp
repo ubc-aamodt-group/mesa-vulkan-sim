@@ -276,6 +276,12 @@ Converter::getDType(nir_intrinsic_instr *insn)
       isFloat = true;
       isSigned = false;
       break;
+   case nir_intrinsic_bindless_image_atomic_imax:
+   case nir_intrinsic_bindless_image_atomic_imin:
+   case nir_intrinsic_global_atomic_imax:
+   case nir_intrinsic_global_atomic_imin:
+   case nir_intrinsic_image_atomic_imax:
+   case nir_intrinsic_image_atomic_imin:
    case nir_intrinsic_shared_atomic_imax:
    case nir_intrinsic_shared_atomic_imin:
    case nir_intrinsic_ssbo_atomic_imax:
@@ -1695,16 +1701,6 @@ Converter::visit(nir_intrinsic_instr *insn)
    unsigned dest_components = nir_intrinsic_dest_components(insn);
 
    switch (op) {
-   case nir_intrinsic_load_uniform: {
-      LValues &newDefs = convert(&insn->dest);
-      const DataType dType = getDType(insn);
-      Value *indirect;
-      uint32_t coffset = getIndirect(insn, 0, 0, indirect);
-      for (uint8_t i = 0; i < dest_components; ++i) {
-         loadFrom(FILE_MEMORY_CONST, 0, dType, newDefs[i], 16 * coffset, i, indirect);
-      }
-      break;
-   }
    case nir_intrinsic_store_output:
    case nir_intrinsic_store_per_vertex_output: {
       Value *indirect;
@@ -2062,7 +2058,7 @@ Converter::visit(nir_intrinsic_instr *insn)
       LValues &newDefs = convert(&insn->dest);
       Value *indirectIndex;
       Value *indirectOffset;
-      uint32_t index = getIndirect(&insn->src[0], 0, indirectIndex) + 1;
+      uint32_t index = getIndirect(&insn->src[0], 0, indirectIndex);
       uint32_t offset = getIndirect(&insn->src[1], 0, indirectOffset);
       if (indirectOffset)
          indirectOffset = mkOp1v(OP_MOV, TYPE_U32, getSSA(4, FILE_ADDRESS), indirectOffset);
@@ -2311,6 +2307,7 @@ Converter::visit(nir_intrinsic_instr *insn)
          mask = 0x8;
          FALLTHROUGH;
       case nir_intrinsic_image_samples:
+         argCount = 0; /* No coordinates */
          ty = TYPE_U32;
          bindless = op == nir_intrinsic_bindless_image_samples;
          mask = 0x8;
@@ -2318,6 +2315,7 @@ Converter::visit(nir_intrinsic_instr *insn)
       case nir_intrinsic_bindless_image_size:
       case nir_intrinsic_image_size:
          assert(nir_src_as_uint(insn->src[1]) == 0);
+         argCount = 0; /* No coordinates */
          ty = TYPE_U32;
          bindless = op == nir_intrinsic_bindless_image_size;
          break;
@@ -3524,6 +3522,7 @@ nvir_nir_shader_compiler_options(int chipset, uint8_t shader_type, bool prefer_n
    op.has_imul24 = false;
    op.has_fmulz = (prefer_nir && (chipset > NVISA_G80_CHIPSET));
    op.intel_vec4 = false;
+   op.lower_uniforms_to_ubo = true;
    op.force_indirect_unrolling = (nir_variable_mode) (
       ((shader_type == PIPE_SHADER_FRAGMENT) ? nir_var_shader_out : 0) |
       /* HW doesn't support indirect addressing of fragment program inputs

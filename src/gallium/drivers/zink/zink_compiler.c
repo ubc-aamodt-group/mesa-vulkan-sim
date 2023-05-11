@@ -407,7 +407,7 @@ lower_gl_point_gs(nir_shader *shader)
 }
 
 struct lower_pv_mode_state {
-   nir_variable *varyings[VARYING_SLOT_MAX];
+   nir_variable *varyings[VARYING_SLOT_MAX][4];
    nir_variable *pos_counter;
    nir_variable *out_pos_counter;
    nir_variable *ring_offset;
@@ -462,11 +462,12 @@ lower_pv_mode_gs_store(nir_builder *b,
       nir_variable *var = nir_deref_instr_get_variable(deref);
 
       gl_varying_slot location = var->data.location;
-      assert(state->varyings[location]);
+      unsigned location_frac = var->data.location_frac;
+      assert(state->varyings[location][location_frac]);
       assert(intrin->src[1].is_ssa);
       nir_ssa_def *pos_counter = nir_load_var(b, state->pos_counter);
       nir_ssa_def *index = lower_pv_mode_gs_ring_index(b, state, pos_counter);
-      nir_deref_instr *varying_deref = nir_build_deref_var(b, state->varyings[location]);
+      nir_deref_instr *varying_deref = nir_build_deref_var(b, state->varyings[location][location_frac]);
       nir_deref_instr *ring_deref = nir_build_deref_array(b, varying_deref, index);
       // recreate the chain of deref that lead to the store.
       nir_deref_instr *new_top_deref = replicate_derefs(b, deref, ring_deref);
@@ -533,9 +534,10 @@ lower_pv_mode_emit_rotated_prim(nir_builder *b,
       rotated_i = nir_iadd(b, rotated_i, current_vertex);
       nir_foreach_variable_with_modes(var, b->shader, nir_var_shader_out) {
          gl_varying_slot location = var->data.location;
-         if (state->varyings[location]) {
+         unsigned location_frac = var->data.location_frac;
+         if (state->varyings[location][location_frac]) {
             nir_ssa_def *index = lower_pv_mode_gs_ring_index(b, state, rotated_i);
-            nir_deref_instr *value = nir_build_deref_array(b, nir_build_deref_var(b, state->varyings[location]), index);
+            nir_deref_instr *value = nir_build_deref_array(b, nir_build_deref_var(b, state->varyings[location][location_frac]), index);
             copy_vars(b, nir_build_deref_var(b, var), value);
          }
       }
@@ -648,10 +650,11 @@ lower_pv_mode_gs(nir_shader *shader, unsigned prim)
 
    nir_foreach_variable_with_modes(var, shader, nir_var_shader_out) {
       gl_varying_slot location = var->data.location;
+      unsigned location_frac = var->data.location_frac;
 
       char name[100];
-      snprintf(name, sizeof(name), "__tmp_primverts_%d", location);
-      state.varyings[location] =
+      snprintf(name, sizeof(name), "__tmp_primverts_%d_%d", location, location_frac);
+      state.varyings[location][location_frac] =
          nir_local_variable_create(entry,
                                    glsl_array_type(var->type,
                                                    state.ring_size,
@@ -3196,8 +3199,8 @@ zink_shader_dump(const struct zink_shader *zs, void *words, size_t size, const c
    }
 }
 
-static struct zink_shader_object
-zink_shader_spirv_compile(struct zink_screen *screen, struct zink_shader *zs, struct spirv_shader *spirv, bool separate)
+struct zink_shader_object
+zink_shader_spirv_compile(struct zink_screen *screen, struct zink_shader *zs, struct spirv_shader *spirv, bool can_shobj, struct zink_program *pg)
 {
    VkShaderModuleCreateInfo smci = {0};
    VkShaderCreateInfoEXT sci = {0};
@@ -3220,10 +3223,15 @@ zink_shader_spirv_compile(struct zink_screen *screen, struct zink_shader *zs, st
    sci.codeSize = spirv->num_words * sizeof(uint32_t);
    sci.pCode = spirv->words;
    sci.pName = "main";
-   sci.setLayoutCount = zs->info.stage + 1;
    VkDescriptorSetLayout dsl[ZINK_GFX_SHADER_COUNT] = {0};
-   dsl[zs->info.stage] = zs->precompile.dsl;;
-   sci.pSetLayouts = dsl;
+   if (pg) {
+      sci.setLayoutCount = pg->num_dsl;
+      sci.pSetLayouts = pg->dsl;
+   } else {
+      sci.setLayoutCount = zs->info.stage + 1;
+      dsl[zs->info.stage] = zs->precompile.dsl;;
+      sci.pSetLayouts = dsl;
+   }
    VkPushConstantRange pcr;
    pcr.stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS;
    pcr.offset = 0;
@@ -3310,8 +3318,8 @@ zink_shader_spirv_compile(struct zink_screen *screen, struct zink_shader *zs, st
 #endif
 
    VkResult ret;
-   struct zink_shader_object obj;
-   if (!separate || !screen->info.have_EXT_shader_object)
+   struct zink_shader_object obj = {0};
+   if (!can_shobj || !screen->info.have_EXT_shader_object)
       ret = VKSCR(CreateShaderModule)(screen->dev, &smci, NULL, &obj.mod);
    else
       ret = VKSCR(CreateShadersEXT)(screen->dev, 1, &sci, NULL, &obj.obj);
@@ -3344,7 +3352,7 @@ flag_shadow_tex(nir_variable *var, struct zink_shader *zs)
 }
 
 static nir_ssa_def *
-rewrite_tex_dest(nir_builder *b, nir_tex_instr *tex, nir_variable *var, void *data)
+rewrite_tex_dest(nir_builder *b, nir_tex_instr *tex, nir_variable *var, struct zink_shader *zs)
 {
    assert(var);
    const struct glsl_type *type = glsl_without_array(var->type);
@@ -3358,11 +3366,18 @@ rewrite_tex_dest(nir_builder *b, nir_tex_instr *tex, nir_variable *var, void *da
    if (bit_size == dest_size && !rewrite_depth)
       return NULL;
    nir_ssa_def *dest = &tex->dest.ssa;
-   if (rewrite_depth && data) {
-      if (b->shader->info.stage == MESA_SHADER_FRAGMENT)
-         flag_shadow_tex(var, data);
-      else
-         mesa_loge("unhandled old-style shadow sampler in non-fragment stage!");
+   if (rewrite_depth && zs) {
+      /* If only .x is used in the NIR, then it's effectively not a legacy depth
+       * sample anyway and we don't want to ask for shader recompiles.  This is
+       * the typical path, since GL_DEPTH_TEXTURE_MODE defaults to either RED or
+       * LUMINANCE, so apps just use the first channel.
+       */
+      if (nir_ssa_def_components_read(dest) & ~1) {
+         if (b->shader->info.stage == MESA_SHADER_FRAGMENT)
+            flag_shadow_tex(var, zs);
+         else
+            mesa_loge("unhandled old-style shadow sampler in non-fragment stage!");
+      }
       return NULL;
    }
    if (bit_size != dest_size) {
@@ -3490,9 +3505,21 @@ lower_zs_swizzle_tex_instr(nir_builder *b, nir_instr *instr, void *data)
    return true;
 }
 
+/* Applies in-shader swizzles when necessary for depth/shadow sampling.
+ *
+ * SPIRV only has new-style (scalar result) shadow sampling, so to emulate
+ * !is_new_style_shadow (vec4 result) shadow sampling we lower to a
+ * new-style-shadow sample, and apply GL_DEPTH_TEXTURE_MODE swizzles in the NIR
+ * shader to expand out to vec4.  Since this depends on sampler state, it's a
+ * draw-time shader recompile to do so.
+ *
+ * We may also need to apply shader swizzles for
+ * driver_workarounds.needs_zs_shader_swizzle.
+ */
 static bool
 lower_zs_swizzle_tex(nir_shader *nir, const void *swizzle, bool shadow_only)
 {
+   /* We don't use nir_lower_tex to do our swizzling, because of this base_sampler_id. */
    unsigned base_sampler_id = gl_shader_stage_is_compute(nir->info.stage) ? 0 : PIPE_MAX_SAMPLERS * nir->info.stage;
    struct lower_zs_swizzle_state state = {shadow_only, base_sampler_id, swizzle};
    return nir_shader_instructions_pass(nir, lower_zs_swizzle_tex_instr, nir_metadata_dominance | nir_metadata_block_index, (void*)&state);
@@ -3525,7 +3552,7 @@ invert_point_coord(nir_shader *nir)
 }
 
 static struct zink_shader_object
-compile_module(struct zink_screen *screen, struct zink_shader *zs, nir_shader *nir, bool separate)
+compile_module(struct zink_screen *screen, struct zink_shader *zs, nir_shader *nir, bool can_shobj, struct zink_program *pg)
 {
    struct zink_shader_info *sinfo = &zs->sinfo;
    prune_io(nir);
@@ -3535,19 +3562,19 @@ compile_module(struct zink_screen *screen, struct zink_shader *zs, nir_shader *n
    struct zink_shader_object obj;
    struct spirv_shader *spirv = nir_to_spirv(nir, sinfo, screen->spirv_version);
    if (spirv)
-      obj = zink_shader_spirv_compile(screen, zs, spirv, separate);
+      obj = zink_shader_spirv_compile(screen, zs, spirv, can_shobj, pg);
 
    /* TODO: determine if there's any reason to cache spirv output? */
    if (zs->info.stage == MESA_SHADER_TESS_CTRL && zs->non_fs.is_generated)
       zs->spirv = spirv;
    else
-      ralloc_free(spirv);
+      obj.spirv = spirv;
    return obj;
 }
 
-VkShaderModule
-zink_shader_compile(struct zink_screen *screen, struct zink_shader *zs,
-                    nir_shader *nir, const struct zink_shader_key *key, const void *extra_data)
+struct zink_shader_object
+zink_shader_compile(struct zink_screen *screen, bool can_shobj, struct zink_shader *zs,
+                    nir_shader *nir, const struct zink_shader_key *key, const void *extra_data, struct zink_program *pg)
 {
    struct zink_shader_info *sinfo = &zs->sinfo;
    bool need_optimize = false;
@@ -3671,9 +3698,6 @@ zink_shader_compile(struct zink_screen *screen, struct zink_shader *zs,
          if (zink_fs_key_base(key)->force_dual_color_blend && nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_DATA1)) {
             NIR_PASS_V(nir, lower_dual_blend);
          }
-         if (zink_fs_key_base(key)->single_sample) {
-            NIR_PASS_V(nir, nir_lower_single_sampled);
-         }
          if (zink_fs_key_base(key)->coord_replace_bits)
             NIR_PASS_V(nir, nir_lower_texcoord_replace, zink_fs_key_base(key)->coord_replace_bits, false, false);
          if (zink_fs_key_base(key)->point_coord_yinvert)
@@ -3739,9 +3763,9 @@ zink_shader_compile(struct zink_screen *screen, struct zink_shader *zs,
    } else if (need_optimize)
       optimize_nir(nir, zs);
    
-   struct zink_shader_object obj = compile_module(screen, zs, nir, false);
+   struct zink_shader_object obj = compile_module(screen, zs, nir, can_shobj, pg);
    ralloc_free(nir);
-   return obj.mod;
+   return obj;
 }
 
 struct zink_shader_object
@@ -3755,7 +3779,7 @@ zink_shader_compile_separate(struct zink_screen *screen, struct zink_shader *zs)
    unsigned offsets[4];
    zink_descriptor_shader_get_binding_offsets(zs, offsets);
    nir_foreach_variable_with_modes(var, nir, nir_var_mem_ubo | nir_var_mem_ssbo | nir_var_uniform | nir_var_image) {
-      if (var->data.bindless)
+      if (var->data.descriptor_set == screen->desc_set_id[ZINK_DESCRIPTOR_BINDLESS])
          continue;
       var->data.descriptor_set = set;
       switch (var->data.mode) {
@@ -3783,17 +3807,42 @@ zink_shader_compile_separate(struct zink_screen *screen, struct zink_shader *zs)
    optimize_nir(nir, zs);
    zink_descriptor_shader_init(screen, zs);
    zs->sinfo.last_vertex = zs->sinfo.have_xfb;
-   struct zink_shader_object obj = compile_module(screen, zs, nir, true);
-   /* always try to pre-generate a tcs in case it's needed */
-   if (zs->info.stage == MESA_SHADER_TESS_EVAL && screen->info.have_EXT_shader_object && !zs->info.internal) {
-      nir_shader *nir_tcs = NULL;
-      /* use max pcp for compat */
-      zs->non_fs.generated_tcs = zink_shader_tcs_create(screen, nir, 32, &nir_tcs);
-      nir_tcs->info.separate_shader = true;
-      zs->non_fs.generated_tcs->precompile.obj = zink_shader_compile_separate(screen, zs->non_fs.generated_tcs);
-      ralloc_free(nir_tcs);
+   nir_shader *nir_clone = NULL;
+   if (screen->info.have_EXT_shader_object)
+      nir_clone = nir_shader_clone(nir, nir);
+   struct zink_shader_object obj = compile_module(screen, zs, nir, true, NULL);
+   if (screen->info.have_EXT_shader_object && !zs->info.internal) {
+      /* always try to pre-generate a tcs in case it's needed */
+      if (zs->info.stage == MESA_SHADER_TESS_EVAL) {
+         nir_shader *nir_tcs = NULL;
+         /* use max pcp for compat */
+         zs->non_fs.generated_tcs = zink_shader_tcs_create(screen, nir_clone, 32, &nir_tcs);
+         nir_tcs->info.separate_shader = true;
+         zs->non_fs.generated_tcs->precompile.obj = zink_shader_compile_separate(screen, zs->non_fs.generated_tcs);
+         ralloc_free(nir_tcs);
+      }
+      if (zs->info.stage == MESA_SHADER_VERTEX || zs->info.stage == MESA_SHADER_TESS_EVAL) {
+         /* create a second variant with PSIZ removed:
+          * this works around a bug in drivers using nir_assign_io_var_locations()
+          * where builtins that aren't read by following stages get assigned
+          * driver locations before varyings and break the i/o interface between shaders even
+          * though zink has correctly assigned all locations
+          */
+         nir_variable *var = nir_find_variable_with_location(nir_clone, nir_var_shader_out, VARYING_SLOT_PSIZ);
+         if (var && !var->data.explicit_location) {
+            var->data.mode = nir_var_shader_temp;
+            nir_fixup_deref_modes(nir_clone);
+            NIR_PASS_V(nir_clone, nir_remove_dead_variables, nir_var_shader_temp, NULL);
+            optimize_nir(nir_clone, NULL);
+            zs->precompile.no_psiz_obj = compile_module(screen, zs, nir_clone, true, NULL);
+            spirv_shader_delete(zs->precompile.no_psiz_obj.spirv);
+            zs->precompile.no_psiz_obj.spirv = NULL;
+         }
+      }
    }
    ralloc_free(nir);
+   spirv_shader_delete(obj.spirv);
+   obj.spirv = NULL;
    return obj;
 }
 
@@ -5062,7 +5111,7 @@ zink_shader_create(struct zink_screen *screen, struct nir_shader *nir,
    if (!nir->info.internal)
       nir_foreach_shader_out_variable(var, nir)
          var->data.explicit_xfb_buffer = 0;
-   if (so_info && so_info->num_outputs)
+   if (so_info && so_info->num_outputs && nir->info.outputs_written)
       update_so_info(ret, nir, so_info, nir->info.outputs_written, have_psiz);
    else if (have_psiz) {
       bool have_fake_psiz = false;
@@ -5127,6 +5176,7 @@ zink_shader_free(struct zink_screen *screen, struct zink_shader *shader)
    zink_descriptor_shader_deinit(screen, shader);
    if (screen->info.have_EXT_shader_object) {
       VKSCR(DestroyShaderEXT)(screen->dev, shader->precompile.obj.obj, NULL);
+      VKSCR(DestroyShaderEXT)(screen->dev, shader->precompile.no_psiz_obj.obj, NULL);
    } else {
       if (shader->precompile.obj.mod)
          VKSCR(DestroyShaderModule)(screen->dev, shader->precompile.obj.mod, NULL);
@@ -5225,12 +5275,12 @@ zink_gfx_shader_free(struct zink_screen *screen, struct zink_shader *shader)
 
 
 struct zink_shader_object
-zink_shader_tcs_compile(struct zink_screen *screen, struct zink_shader *zs, unsigned patch_vertices)
+zink_shader_tcs_compile(struct zink_screen *screen, struct zink_shader *zs, unsigned patch_vertices, bool can_shobj, struct zink_program *pg)
 {
    assert(zs->info.stage == MESA_SHADER_TESS_CTRL);
    /* shortcut all the nir passes since we just have to change this one word */
    zs->spirv->words[zs->spirv->tcs_vertices_out_word] = patch_vertices;
-   return zink_shader_spirv_compile(screen, zs, NULL, false);
+   return zink_shader_spirv_compile(screen, zs, NULL, can_shobj, pg);
 }
 
 /* creating a passthrough tcs shader that's roughly:
