@@ -1157,9 +1157,6 @@ static void handle_trace_ray(struct vk_cmd_queue_entry *cmd,
       cmd->u.trace_rays_khr.depth,
       0
    );
-
-   // Temporarily just crash program here. 
-   abort();
 }
 
 static void handle_pipeline(struct vk_cmd_queue_entry *cmd,
