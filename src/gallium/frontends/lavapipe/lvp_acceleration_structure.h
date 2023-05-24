@@ -4,6 +4,10 @@
 #include <vulkan/vulkan.h>
 #include "gpgpusim_bvh.h"
 
+#include "embree3/rtcore.h"
+#include "embree3/rtcore_device.h"
+#include "embree3/rtcore_builder.h"
+
 // #include "vk_object.h"
 // #include <vulkan/vulkan_intel.h>
 // #include <vulkan/vk_icd.h>
@@ -52,5 +56,6 @@ void print_vec3(struct vsim_bvh_vec3f val);
 void print_tri(struct vsim_bvh_triangle val);
 void print_node(struct vsim_bvh_node val);
 void print_leaf(struct vsim_bvh_leaf val);
+void embree_error_function(void* userPtr, enum RTCError error, const char* str);
 
 #endif /* VSIM_ACCELERATION_STRUCTURE_H */

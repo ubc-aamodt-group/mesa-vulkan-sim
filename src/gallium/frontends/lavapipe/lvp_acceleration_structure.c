@@ -38,9 +38,6 @@
 // #include "../intel/genxml/gen125_rt_pack.h"
 #include "gpgpusim_bvh.h"
 
-#include "embree3/rtcore.h"
-#include "embree3/rtcore_device.h"
-#include "embree3/rtcore_builder.h"
 
 #include "gpgpusim_calls_from_mesa.h"
 
@@ -77,6 +74,11 @@ void print_leaf(struct vsim_bvh_leaf val) {
    printf("Leaf: %c\t", val.is_leaf ? 'y' : 'n');
    printf("geomID: %d\t primID: %d\n", val.geometry_id, val.primitive_id);
 }
+
+void embree_error_function(void* userPtr, enum RTCError error, const char* str) {
+  printf("EMBREE: Error %d: %s\n", error, str);
+}
+
 
 static uint64_t
 lvp_bvh_max_size(VkAccelerationStructureTypeKHR type, uint64_t leaf_count)
@@ -1166,6 +1168,7 @@ lvp_cpu_build_acceleration_structures(
 {
    printf("LVP: Building acceleration structure\n");
    RTCDevice rtc = rtcNewDevice("ignore_config_files=1");
+   rtcSetDeviceErrorFunction(rtc, embree_error_function, NULL);
 
    for (uint32_t i = 0; i < infoCount; i++) {
       const VkAccelerationStructureBuildGeometryInfoKHR *pInfo = &pInfos[i];
@@ -1316,7 +1319,20 @@ lvp_cpu_build_acceleration_structures(
          args.setNodeBounds = rtc_set_node_bounds_cb;
          args.createLeaf = rtc_create_leaf_cb;
          args.userPtr = &build_state;
+         
+         const char* env_build_args = getenv("MESA_BVH_BUILD_ARGS");
+         if (env_build_args) {
+            printf("EMBREE: Using custom build args: %s\n", env_build_args);
+            sscanf(env_build_args, "%u,%u,%u", &args.maxBranchingFactor, &args.maxDepth, &args.buildQuality);
+         }
+
+         printf("EMBREE: Building %d wide tree (max depth %d) using quality %d\n", args.maxBranchingFactor, args.maxDepth, args.buildQuality);
          root = rtcBuildBVH(&args);
+
+         if (!root) {
+            abort();
+         }
+
          MESA_VSIM_DPRINTF("EMBREE: Build BVH with root %p\n", root);
          print_node(*root);
       }
