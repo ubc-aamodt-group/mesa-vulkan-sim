@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # shellcheck disable=SC2086 # we want word splitting
 
 set -ex
@@ -12,14 +12,16 @@ pushd /platform/crosvm
 git checkout "$CROSVM_VERSION"
 git submodule update --init
 
-VIRGLRENDERER_VERSION=5290e941f2a9123de453fd8e62a445abf50cc7b2
+VIRGLRENDERER_VERSION=5d15b42723b5a9ee6dd0d12770e08698642c10ca
 rm -rf third_party/virglrenderer
 git clone --single-branch -b master --no-checkout https://gitlab.freedesktop.org/virgl/virglrenderer.git third_party/virglrenderer
 pushd third_party/virglrenderer
 git checkout "$VIRGLRENDERER_VERSION"
-meson build/ -Drender-server-worker=process -Dvenus=true $EXTRA_MESON_ARGS
-ninja -C build install
+meson setup build/ -D libdir=lib -D render-server-worker=process -D venus=true $EXTRA_MESON_ARGS
+meson install -C build
 popd
+
+cargo update -p pkg-config@0.3.26 --precise 0.3.27
 
 RUSTFLAGS='-L native=/usr/local/lib' cargo install \
   bindgen-cli \

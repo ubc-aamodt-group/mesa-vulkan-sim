@@ -212,6 +212,53 @@ _vtn_fail(struct vtn_builder *b, const char *file, unsigned line,
    vtn_longjmp(b->fail_jump, 1);
 }
 
+const char *
+vtn_value_type_to_string(enum vtn_value_type t)
+{
+#define CASE(typ) case vtn_value_type_##typ: return #typ
+   switch (t) {
+   CASE(invalid);
+   CASE(undef);
+   CASE(string);
+   CASE(decoration_group);
+   CASE(type);
+   CASE(constant);
+   CASE(pointer);
+   CASE(function);
+   CASE(block);
+   CASE(ssa);
+   CASE(extension);
+   CASE(image_pointer);
+   }
+#undef CASE
+   unreachable("unknown value type");
+   return "UNKNOWN";
+}
+
+void
+_vtn_fail_value_type_mismatch(struct vtn_builder *b, uint32_t value_id,
+                              enum vtn_value_type value_type)
+{
+   struct vtn_value *val = vtn_untyped_value(b, value_id);
+   vtn_fail(
+      "SPIR-V id %u is the wrong kind of value: "
+      "expected '%s' but got '%s'",
+      vtn_id_for_value(b, val),
+      vtn_value_type_to_string(value_type),
+      vtn_value_type_to_string(val->value_type));
+}
+
+void _vtn_fail_value_not_pointer(struct vtn_builder *b,
+                                 uint32_t value_id)
+{
+   struct vtn_value *val = vtn_untyped_value(b, value_id);
+   vtn_fail("SPIR-V id %u is the wrong kind of value: "
+            "expected 'pointer' OR null constant but got "
+            "'%s' (%s)", value_id,
+            vtn_value_type_to_string(val->value_type),
+            val->is_null_constant ? "null constant" : "not null constant");
+}
+
 static struct vtn_ssa_value *
 vtn_undef_ssa_value(struct vtn_builder *b, const struct glsl_type *type)
 {
@@ -320,7 +367,7 @@ vtn_push_ssa_value(struct vtn_builder *b, uint32_t value_id,
 
    /* See vtn_create_ssa_value */
    vtn_fail_if(ssa->type != glsl_get_bare_type(type->type),
-               "Type mismatch for SPIR-V SSA value");
+               "Type mismatch for SPIR-V value %%%u", value_id);
 
    struct vtn_value *val;
    if (type->base_type == vtn_base_type_pointer) {
@@ -3148,7 +3195,7 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
    instr->dest_type = dest_type;
 
    nir_ssa_dest_init(&instr->instr, &instr->dest,
-                     nir_tex_instr_dest_size(instr), 32, NULL);
+                     nir_tex_instr_dest_size(instr), 32);
 
    vtn_assert(glsl_get_vector_elements(ret_type->type) ==
               nir_tex_instr_result_size(instr));
@@ -3194,6 +3241,33 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
       vtn_push_ssa_value(b, w[2], dest);
    } else {
       vtn_push_nir_ssa(b, w[2], &instr->dest.ssa);
+   }
+}
+
+static nir_atomic_op
+translate_atomic_op(SpvOp opcode)
+{
+   switch (opcode) {
+   case SpvOpAtomicExchange:            return nir_atomic_op_xchg;
+   case SpvOpAtomicCompareExchange:     return nir_atomic_op_cmpxchg;
+   case SpvOpAtomicCompareExchangeWeak: return nir_atomic_op_cmpxchg;
+   case SpvOpAtomicIIncrement:          return nir_atomic_op_iadd;
+   case SpvOpAtomicIDecrement:          return nir_atomic_op_iadd;
+   case SpvOpAtomicIAdd:                return nir_atomic_op_iadd;
+   case SpvOpAtomicISub:                return nir_atomic_op_iadd;
+   case SpvOpAtomicSMin:                return nir_atomic_op_imin;
+   case SpvOpAtomicUMin:                return nir_atomic_op_umin;
+   case SpvOpAtomicSMax:                return nir_atomic_op_imax;
+   case SpvOpAtomicUMax:                return nir_atomic_op_umax;
+   case SpvOpAtomicAnd:                 return nir_atomic_op_iand;
+   case SpvOpAtomicOr:                  return nir_atomic_op_ior;
+   case SpvOpAtomicXor:                 return nir_atomic_op_ixor;
+   case SpvOpAtomicFAddEXT:             return nir_atomic_op_fadd;
+   case SpvOpAtomicFMinEXT:             return nir_atomic_op_fmin;
+   case SpvOpAtomicFMaxEXT:             return nir_atomic_op_fmax;
+   case SpvOpAtomicFlagTestAndSet:      return nir_atomic_op_cmpxchg;
+   default:
+      unreachable("Invalid atomic");
    }
 }
 
@@ -3437,23 +3511,23 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
    OP(ImageWrite,                store)
    OP(AtomicLoad,                load)
    OP(AtomicStore,               store)
-   OP(AtomicExchange,            atomic_exchange)
-   OP(AtomicCompareExchange,     atomic_comp_swap)
-   OP(AtomicCompareExchangeWeak, atomic_comp_swap)
-   OP(AtomicIIncrement,          atomic_add)
-   OP(AtomicIDecrement,          atomic_add)
-   OP(AtomicIAdd,                atomic_add)
-   OP(AtomicISub,                atomic_add)
-   OP(AtomicSMin,                atomic_imin)
-   OP(AtomicUMin,                atomic_umin)
-   OP(AtomicSMax,                atomic_imax)
-   OP(AtomicUMax,                atomic_umax)
-   OP(AtomicAnd,                 atomic_and)
-   OP(AtomicOr,                  atomic_or)
-   OP(AtomicXor,                 atomic_xor)
-   OP(AtomicFAddEXT,             atomic_fadd)
-   OP(AtomicFMinEXT,             atomic_fmin)
-   OP(AtomicFMaxEXT,             atomic_fmax)
+   OP(AtomicExchange,            atomic)
+   OP(AtomicCompareExchange,     atomic_swap)
+   OP(AtomicCompareExchangeWeak, atomic_swap)
+   OP(AtomicIIncrement,          atomic)
+   OP(AtomicIDecrement,          atomic)
+   OP(AtomicIAdd,                atomic)
+   OP(AtomicISub,                atomic)
+   OP(AtomicSMin,                atomic)
+   OP(AtomicUMin,                atomic)
+   OP(AtomicSMax,                atomic)
+   OP(AtomicUMax,                atomic)
+   OP(AtomicAnd,                 atomic)
+   OP(AtomicOr,                  atomic)
+   OP(AtomicXor,                 atomic)
+   OP(AtomicFAddEXT,             atomic)
+   OP(AtomicFMinEXT,             atomic)
+   OP(AtomicFMaxEXT,             atomic)
    OP(ImageQueryFormat,          format)
    OP(ImageQueryOrder,           order)
    OP(ImageQuerySamples,         samples)
@@ -3463,6 +3537,8 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
    }
 
    nir_intrinsic_instr *intrin = nir_intrinsic_instr_create(b->shader, op);
+   if (nir_intrinsic_has_atomic_op(intrin))
+      nir_intrinsic_set_atomic_op(intrin, translate_atomic_op(opcode));
 
    intrin->src[0] = nir_src_for_ssa(&image.image->dest.ssa);
    nir_intrinsic_set_image_dim(intrin, glsl_get_sampler_dim(image.image->type));
@@ -3600,8 +3676,7 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
          bit_size = MIN2(bit_size, 32);
 
       nir_ssa_dest_init(&intrin->instr, &intrin->dest,
-                        nir_intrinsic_dest_components(intrin),
-                        bit_size, NULL);
+                        nir_intrinsic_dest_components(intrin), bit_size);
 
       nir_builder_instr_insert(&b->nb, &intrin->instr);
 
@@ -3676,24 +3751,24 @@ get_deref_nir_atomic_op(struct vtn_builder *b, SpvOp opcode)
    case SpvOpAtomicFlagClear:
    case SpvOpAtomicStore:        return nir_intrinsic_store_deref;
 #define OP(S, N) case SpvOp##S: return nir_intrinsic_deref_##N;
-   OP(AtomicExchange,            atomic_exchange)
-   OP(AtomicCompareExchange,     atomic_comp_swap)
-   OP(AtomicCompareExchangeWeak, atomic_comp_swap)
-   OP(AtomicIIncrement,          atomic_add)
-   OP(AtomicIDecrement,          atomic_add)
-   OP(AtomicIAdd,                atomic_add)
-   OP(AtomicISub,                atomic_add)
-   OP(AtomicSMin,                atomic_imin)
-   OP(AtomicUMin,                atomic_umin)
-   OP(AtomicSMax,                atomic_imax)
-   OP(AtomicUMax,                atomic_umax)
-   OP(AtomicAnd,                 atomic_and)
-   OP(AtomicOr,                  atomic_or)
-   OP(AtomicXor,                 atomic_xor)
-   OP(AtomicFAddEXT,             atomic_fadd)
-   OP(AtomicFMinEXT,             atomic_fmin)
-   OP(AtomicFMaxEXT,             atomic_fmax)
-   OP(AtomicFlagTestAndSet,      atomic_comp_swap)
+   OP(AtomicExchange,            atomic)
+   OP(AtomicCompareExchange,     atomic_swap)
+   OP(AtomicCompareExchangeWeak, atomic_swap)
+   OP(AtomicIIncrement,          atomic)
+   OP(AtomicIDecrement,          atomic)
+   OP(AtomicIAdd,                atomic)
+   OP(AtomicISub,                atomic)
+   OP(AtomicSMin,                atomic)
+   OP(AtomicUMin,                atomic)
+   OP(AtomicSMax,                atomic)
+   OP(AtomicUMax,                atomic)
+   OP(AtomicAnd,                 atomic)
+   OP(AtomicOr,                  atomic)
+   OP(AtomicXor,                 atomic)
+   OP(AtomicFAddEXT,             atomic)
+   OP(AtomicFMinEXT,             atomic)
+   OP(AtomicFMaxEXT,             atomic)
+   OP(AtomicFlagTestAndSet,      atomic_swap)
 #undef OP
    default:
       vtn_fail_with_opcode("Invalid shared atomic", opcode);
@@ -3796,6 +3871,9 @@ vtn_handle_atomics(struct vtn_builder *b, SpvOp opcode,
       atomic = nir_intrinsic_instr_create(b->nb.shader, op);
       atomic->src[0] = nir_src_for_ssa(&deref->dest.ssa);
 
+      if (nir_intrinsic_has_atomic_op(atomic))
+         nir_intrinsic_set_atomic_op(atomic, translate_atomic_op(opcode));
+
       if (ptr->mode != vtn_variable_mode_workgroup)
          access |= ACCESS_COHERENT;
 
@@ -3863,12 +3941,11 @@ vtn_handle_atomics(struct vtn_builder *b, SpvOp opcode,
 
       if (opcode == SpvOpAtomicFlagTestAndSet) {
          /* map atomic flag to a 32-bit atomic integer. */
-         nir_ssa_dest_init(&atomic->instr, &atomic->dest,
-                           1, 32, NULL);
+         nir_ssa_dest_init(&atomic->instr, &atomic->dest, 1, 32);
       } else {
          nir_ssa_dest_init(&atomic->instr, &atomic->dest,
                            glsl_get_vector_elements(type->type),
-                           glsl_get_bit_size(type->type), NULL);
+                           glsl_get_bit_size(type->type));
 
          vtn_push_nir_ssa(b, w[2], &atomic->dest.ssa);
       }
@@ -3888,8 +3965,7 @@ create_vec(struct vtn_builder *b, unsigned num_components, unsigned bit_size)
 {
    nir_op op = nir_op_vec(num_components);
    nir_alu_instr *vec = nir_alu_instr_create(b->shader, op);
-   nir_ssa_dest_init(&vec->instr, &vec->dest.dest, num_components,
-                     bit_size, NULL);
+   nir_ssa_dest_init(&vec->instr, &vec->dest.dest, num_components, bit_size);
    vec->dest.write_mask = (1 << num_components) - 1;
 
    return vec;
@@ -4465,28 +4541,13 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
                                 const uint32_t *w, unsigned count)
 {
    switch (opcode) {
-   case SpvOpSource: {
-      const char *lang;
-      switch (w[1]) {
-      default:
-      case SpvSourceLanguageUnknown:      lang = "unknown";    break;
-      case SpvSourceLanguageESSL:         lang = "ESSL";       break;
-      case SpvSourceLanguageGLSL:         lang = "GLSL";       break;
-      case SpvSourceLanguageOpenCL_C:     lang = "OpenCL C";   break;
-      case SpvSourceLanguageOpenCL_CPP:   lang = "OpenCL C++"; break;
-      case SpvSourceLanguageHLSL:         lang = "HLSL";       break;
-      }
-
-      uint32_t version = w[2];
-
-      const char *file =
-         (count > 3) ? vtn_value(b, w[3], vtn_value_type_string)->str : "";
-
-      vtn_info("Parsing SPIR-V from %s %u source file %s", lang, version, file);
-
-      b->source_lang = w[1];
+   case SpvOpString:
+   case SpvOpSource:
+   case SpvOpSourceExtension:
+   case SpvOpSourceContinued:
+   case SpvOpModuleProcessed:
+      vtn_handle_debug_text(b, opcode, w, count);
       break;
-   }
 
    case SpvOpExtension: {
       /* Implementing both NV_mesh_shader and EXT_mesh_shader
@@ -4498,11 +4559,6 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
          b->shader->info.mesh.nv = true;
       break;
    }
-   case SpvOpSourceExtension:
-   case SpvOpSourceContinued:
-   case SpvOpModuleProcessed:
-      /* Unhandled, but these are for debug so that's ok. */
-      break;
 
    case SpvOpCapability: {
       SpvCapability cap = w[1];
@@ -4990,11 +5046,6 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
       vtn_handle_entry_point(b, w, count);
       break;
 
-   case SpvOpString:
-      vtn_push_value(b, w[1], vtn_value_type_string)->str =
-         vtn_string_literal(b, &w[2], count - 2, NULL);
-      break;
-
    case SpvOpName:
       b->values[w[1]].name = vtn_string_literal(b, &w[2], count - 2, NULL);
       break;
@@ -5029,6 +5080,50 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
    }
 
    return true;
+}
+
+void
+vtn_handle_debug_text(struct vtn_builder *b, SpvOp opcode,
+                      const uint32_t *w, unsigned count)
+{
+   switch (opcode) {
+   case SpvOpString:
+      vtn_push_value(b, w[1], vtn_value_type_string)->str =
+         vtn_string_literal(b, &w[2], count - 2, NULL);
+      break;
+
+   case SpvOpSource: {
+      const char *lang;
+      switch (w[1]) {
+      default:
+      case SpvSourceLanguageUnknown:      lang = "unknown";    break;
+      case SpvSourceLanguageESSL:         lang = "ESSL";       break;
+      case SpvSourceLanguageGLSL:         lang = "GLSL";       break;
+      case SpvSourceLanguageOpenCL_C:     lang = "OpenCL C";   break;
+      case SpvSourceLanguageOpenCL_CPP:   lang = "OpenCL C++"; break;
+      case SpvSourceLanguageHLSL:         lang = "HLSL";       break;
+      }
+
+      uint32_t version = w[2];
+
+      const char *file =
+         (count > 3) ? vtn_value(b, w[3], vtn_value_type_string)->str : "";
+
+      vtn_info("Parsing SPIR-V from %s %u source file %s", lang, version, file);
+
+      b->source_lang = w[1];
+      break;
+   }
+
+   case SpvOpSourceExtension:
+   case SpvOpSourceContinued:
+   case SpvOpModuleProcessed:
+      /* Unhandled, but these are for debug so that's ok. */
+      break;
+
+   default:
+      unreachable("Unhandled opcode");
+   }
 }
 
 static void
@@ -5539,7 +5634,7 @@ vtn_handle_select(struct vtn_builder *b, SpvOp opcode,
 
    vtn_fail_if(obj1_val->type != res_val->type ||
                obj2_val->type != res_val->type,
-               "Object types must match the result type in OpSelect");
+               "Object types must match the result type in OpSelect (%%%u = %%%u ? %%%u : %%%u)", w[2], w[3], w[4], w[5]);
 
    vtn_fail_if((cond_val->type->base_type != vtn_base_type_scalar &&
                 cond_val->type->base_type != vtn_base_type_vector) ||
@@ -5663,7 +5758,7 @@ vtn_handle_ray_intrinsic(struct vtn_builder *b, SpvOp opcode,
                                           nir_intrinsic_report_ray_intersection);
       intrin->src[0] = nir_src_for_ssa(vtn_ssa_value(b, w[3])->def);
       intrin->src[1] = nir_src_for_ssa(vtn_ssa_value(b, w[4])->def);
-      nir_ssa_dest_init(&intrin->instr, &intrin->dest, 1, 1, NULL);
+      nir_ssa_dest_init(&intrin->instr, &intrin->dest, 1, 1);
       nir_builder_instr_insert(&b->nb, &intrin->instr);
       vtn_push_nir_ssa(b, w[2], &intrin->dest.ssa);
       break;
@@ -5808,7 +5903,7 @@ spirv_to_nir_type_ray_query_intrinsic(struct vtn_builder *b,
 static void
 ray_query_load_intrinsic_create(struct vtn_builder *b, SpvOp opcode,
                                 const uint32_t *w, nir_ssa_def *src0,
-                                nir_ssa_def *src1)
+                                bool committed)
 {
    struct ray_query_value value =
       spirv_to_nir_type_ray_query_intrinsic(b, opcode);
@@ -5823,8 +5918,9 @@ ray_query_load_intrinsic_create(struct vtn_builder *b, SpvOp opcode,
             nir_build_rq_load(&b->nb,
                               glsl_get_vector_elements(elem_type),
                               glsl_get_bit_size(elem_type),
-                              src0, src1,
+                              src0,
                               .ray_query_value = value.nir_value,
+                              .committed = committed,
                               .column = i);
       }
 
@@ -5836,8 +5932,9 @@ ray_query_load_intrinsic_create(struct vtn_builder *b, SpvOp opcode,
                        nir_rq_load(&b->nb,
                                    glsl_get_vector_elements(value.glsl_type),
                                    glsl_get_bit_size(value.glsl_type),
-                                   src0, src1,
-                                   .ray_query_value = value.nir_value));
+                                   src0,
+                                   .ray_query_value = value.nir_value,
+                                   .committed = committed));
    }
 }
 
@@ -5892,7 +5989,7 @@ vtn_handle_ray_query_intrinsic(struct vtn_builder *b, SpvOp opcode,
    case SpvOpRayQueryGetIntersectionTriangleVertexPositionsKHR:
       ray_query_load_intrinsic_create(b, opcode, w,
                                       vtn_ssa_value(b, w[3])->def,
-                                      nir_i2b(&b->nb, vtn_ssa_value(b, w[4])->def));
+                                      vtn_constant_uint(b, w[4]));
       break;
 
    case SpvOpRayQueryGetRayTMinKHR:
@@ -5903,7 +6000,7 @@ vtn_handle_ray_query_intrinsic(struct vtn_builder *b, SpvOp opcode,
       ray_query_load_intrinsic_create(b, opcode, w,
                                       vtn_ssa_value(b, w[3])->def,
                                       /* Committed value is ignored for these */
-                                      nir_imm_bool(&b->nb, false));
+                                      false);
       break;
 
    default:

@@ -77,9 +77,6 @@ radv_use_tc_compat_htile_for_image(struct radv_device *device, const VkImageCrea
    if (device->physical_device->rad_info.gfx_level < GFX8)
       return false;
 
-   if ((pCreateInfo->usage & VK_IMAGE_USAGE_STORAGE_BIT))
-      return false;
-
    if (pCreateInfo->tiling == VK_IMAGE_TILING_LINEAR)
       return false;
 
@@ -1555,7 +1552,7 @@ radv_image_alloc_values(const struct radv_device *device, struct radv_image *ima
 static bool
 radv_image_is_pipe_misaligned(const struct radv_device *device, const struct radv_image *image)
 {
-   struct radeon_info *rad_info = &device->physical_device->rad_info;
+   const struct radeon_info *rad_info = &device->physical_device->rad_info;
    int log2_samples = util_logbase2(image->vk.samples);
 
    assert(rad_info->gfx_level >= GFX10);
@@ -1738,7 +1735,8 @@ radv_get_ac_surf_info(struct radv_device *device, const struct radv_image *image
    info.num_channels = vk_format_get_nr_components(image->vk.format);
 
    if (!vk_format_is_depth_or_stencil(image->vk.format) && !image->shareable &&
-       !(image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_ALIASED_BIT) &&
+       !(image->vk.create_flags & (VK_IMAGE_CREATE_SPARSE_ALIASED_BIT |
+                                   VK_IMAGE_CREATE_ALIAS_BIT)) &&
        image->vk.tiling != VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT) {
       info.surf_index = &device->image_mrt_offset_counter;
    }
@@ -1997,8 +1995,7 @@ radv_image_create(VkDevice _device, const struct radv_image_create_info *create_
    if (image->vk.external_handle_types &
        VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID) {
 #ifdef ANDROID
-      image->vk.ahardware_buffer_format =
-         radv_ahb_format_for_vk_format(image->vk.format);
+      image->vk.ahb_format = radv_ahb_format_for_vk_format(image->vk.format);
 #endif
 
       *pImage = radv_image_to_handle(image);

@@ -613,7 +613,6 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_pipeline_
       .lower_to_fragment_fetch_amd = device->physical_device->use_fmask,
       .lower_lod_zero_width = true,
       .lower_invalid_implicit_lod = true,
-      .lower_array_layer_round_even = !device->physical_device->rad_info.conformant_trunc_coord,
    };
 
    NIR_PASS(_, nir, nir_lower_tex, &tex_options);
@@ -740,7 +739,6 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_pipeline_
       /* Optimize the lowered code before the linking optimizations. */
       radv_optimize_nir(nir, false);
    }
-
 
    return nir;
 }
@@ -2636,10 +2634,10 @@ unsigned
 radv_get_max_waves(const struct radv_device *device, struct radv_shader *shader,
                    gl_shader_stage stage)
 {
-   struct radeon_info *info = &device->physical_device->rad_info;
-   enum amd_gfx_level gfx_level = info->gfx_level;
-   uint8_t wave_size = shader->info.wave_size;
-   struct ac_shader_config *conf = &shader->config;
+   const struct radeon_info *info = &device->physical_device->rad_info;
+   const enum amd_gfx_level gfx_level = info->gfx_level;
+   const uint8_t wave_size = shader->info.wave_size;
+   const struct ac_shader_config *conf = &shader->config;
    unsigned max_simd_waves;
    unsigned lds_per_wave = 0;
 

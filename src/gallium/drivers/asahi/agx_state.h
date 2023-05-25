@@ -212,6 +212,7 @@ struct agx_batch {
    /* PIPE_CLEAR_* bitmask */
    uint32_t clear, draw, load, resolve;
    bool any_draws;
+   bool initialized;
 
    uint64_t uploaded_clear_color[PIPE_MAX_COLOR_BUFS];
    double clear_depth;
@@ -527,7 +528,6 @@ struct agx_sampler_view {
 struct agx_screen {
    struct pipe_screen pscreen;
    struct agx_device dev;
-   struct sw_winsys *winsys;
    struct disk_cache *disk_cache;
 };
 
@@ -563,10 +563,6 @@ struct agx_resource {
 
    /* Hardware backing */
    struct agx_bo *bo;
-
-   /* Software backing (XXX) */
-   struct sw_displaytarget *dt;
-   unsigned dt_stride;
 
    struct renderonly_scanout *scanout;
 

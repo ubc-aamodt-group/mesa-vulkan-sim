@@ -287,6 +287,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .KHR_video_queue                       = device->video_decode_enabled,
       .KHR_video_decode_queue                = device->video_decode_enabled,
       .KHR_video_decode_h264                 = VIDEO_CODEC_H264DEC && device->video_decode_enabled,
+      .KHR_video_decode_h265                 = VIDEO_CODEC_H265DEC && device->video_decode_enabled,
       .KHR_vulkan_memory_model               = true,
       .KHR_workgroup_memory_explicit_layout  = true,
       .KHR_zero_initialize_workgroup_memory  = true,
@@ -590,7 +591,7 @@ get_features(const struct anv_physical_device *pdevice,
 
       /* VK_EXT_graphics_pipeline_library */
       .graphicsPipelineLibrary =
-         pdevice->vk.supported_features.graphicsPipelineLibrary,
+         pdevice->vk.supported_extensions.EXT_graphics_pipeline_library,
 
       /* VK_KHR_fragment_shading_rate */
       .pipelineFragmentShadingRate = true,
@@ -747,7 +748,7 @@ get_features(const struct anv_physical_device *pdevice,
       /* VK_EXT_extended_dynamic_state2 */
       .extendedDynamicState2 = true,
       .extendedDynamicState2LogicOp = true,
-      .extendedDynamicState2PatchControlPoints = false,
+      .extendedDynamicState2PatchControlPoints = true,
 
       /* VK_EXT_extended_dynamic_state3 */
       .extendedDynamicState3PolygonMode = true,
@@ -871,7 +872,6 @@ anv_update_meminfo(struct anv_physical_device *device, int fd)
    device->vram_non_mappable.available = devinfo->mem.vram.unmappable.free;
 }
 
-
 static VkResult
 anv_physical_device_init_heaps(struct anv_physical_device *device, int fd)
 {
@@ -913,65 +913,6 @@ anv_physical_device_init_heaps(struct anv_physical_device *device, int fd)
             .is_local_mem = true,
          };
       }
-
-      device->memory.type_count = 3;
-      device->memory.types[0] = (struct anv_memory_type) {
-         .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-         .heapIndex = 0,
-      };
-      device->memory.types[1] = (struct anv_memory_type) {
-         .propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
-                          VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
-         .heapIndex = 1,
-      };
-      device->memory.types[2] = (struct anv_memory_type) {
-         .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-         /* This memory type either comes from heaps[0] if there is only
-          * mappable vram region, or from heaps[2] if there is both mappable &
-          * non-mappable vram regions.
-          */
-         .heapIndex = device->vram_non_mappable.size > 0 ? 2 : 0,
-      };
-   } else if (device->info.has_llc) {
-      device->memory.heap_count = 1;
-      device->memory.heaps[0] = (struct anv_memory_heap) {
-         .size = device->sys.size,
-         .flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
-         .is_local_mem = false,
-      };
-
-      /* Big core GPUs share LLC with the CPU and thus one memory type can be
-       * both cached and coherent at the same time.
-       *
-       * But some game engines can't handle single type well
-       * https://gitlab.freedesktop.org/mesa/mesa/-/issues/7360#note_1719438
-       *
-       * The second memory type w/out HOST_CACHED_BIT will get write-combining.
-       * See anv_AllocateMemory()).
-       *
-       * The Intel Vulkan driver for Windows also advertises these memory types.
-       */
-      device->memory.type_count = 3;
-      device->memory.types[0] = (struct anv_memory_type) {
-         .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-         .heapIndex = 0,
-      };
-      device->memory.types[1] = (struct anv_memory_type) {
-         .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-         .heapIndex = 0,
-      };
-      device->memory.types[2] = (struct anv_memory_type) {
-         .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
-                          VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
-         .heapIndex = 0,
-      };
    } else {
       device->memory.heap_count = 1;
       device->memory.heaps[0] = (struct anv_memory_heap) {
@@ -979,26 +920,20 @@ anv_physical_device_init_heaps(struct anv_physical_device *device, int fd)
          .flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
          .is_local_mem = false,
       };
-
-      /* The spec requires that we expose a host-visible, coherent memory
-       * type, but Atom GPUs don't share LLC. Thus we offer two memory types
-       * to give the application a choice between cached, but not coherent and
-       * coherent but uncached (WC though).
-       */
-      device->memory.type_count = 2;
-      device->memory.types[0] = (struct anv_memory_type) {
-         .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                          VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
-         .heapIndex = 0,
-      };
-      device->memory.types[1] = (struct anv_memory_type) {
-         .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-         .heapIndex = 0,
-      };
    }
+
+   switch (device->info.kmd_type) {
+   case INTEL_KMD_TYPE_XE:
+      result = anv_xe_physical_device_init_memory_types(device);
+      break;
+   case INTEL_KMD_TYPE_I915:
+   default:
+      result = anv_i915_physical_device_init_memory_types(device);
+      break;
+   }
+
+   if (result != VK_SUCCESS)
+      return result;
 
    for (unsigned i = 0; i < device->memory.type_count; i++) {
       VkMemoryPropertyFlags props = device->memory.types[i].propertyFlags;
@@ -1283,6 +1218,12 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
       goto fail_fd;
    }
 
+   if (!devinfo.has_context_isolation) {
+      result = vk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
+                         "Vulkan requires context isolation for %s", devinfo.name);
+      goto fail_fd;
+   }
+
    struct anv_physical_device *device =
       vk_zalloc(&instance->vk.alloc, sizeof(*device), 8,
                 VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
@@ -1398,8 +1339,7 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
    }
    device->compiler->shader_debug_log = compiler_debug_log;
    device->compiler->shader_perf_log = compiler_perf_log;
-   device->compiler->constant_buffer_0_is_relative =
-      !device->info.has_context_isolation;
+   device->compiler->constant_buffer_0_is_relative = false;
    device->compiler->supports_shader_constants = true;
    device->compiler->indirect_ubos_use_sampler = device->info.ver < 12;
 
@@ -2635,8 +2575,10 @@ void anv_GetPhysicalDeviceQueueFamilyProperties2(
             case VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR: {
                VkQueueFamilyVideoPropertiesKHR *prop =
                   (VkQueueFamilyVideoPropertiesKHR *)ext;
-               if (queue_family->queueFlags & VK_QUEUE_VIDEO_DECODE_BIT_KHR)
-                  prop->videoCodecOperations = VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR;
+               if (queue_family->queueFlags & VK_QUEUE_VIDEO_DECODE_BIT_KHR) {
+                  prop->videoCodecOperations = VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR |
+                                               VK_VIDEO_CODEC_OPERATION_DECODE_H265_BIT_KHR;
+               }
                break;
             }
             default:
@@ -3031,6 +2973,10 @@ VkResult anv_CreateDevice(
       vk_device_dispatch_table_from_entrypoints(&dispatch_table, &doom64_device_entrypoints, true);
       override_initial_entrypoints = false;
    }
+#ifdef ANDROID
+   vk_device_dispatch_table_from_entrypoints(&dispatch_table, &android_device_entrypoints, true);
+   override_initial_entrypoints = false;
+#endif
    vk_device_dispatch_table_from_entrypoints(&dispatch_table,
       anv_genX(&physical_device->info, device_entrypoints),
       override_initial_entrypoints);
@@ -3151,6 +3097,7 @@ VkResult anv_CreateDevice(
                       device->physical->va.high_heap.size);
 
    list_inithead(&device->memory_objects);
+   list_inithead(&device->image_private_objects);
 
    if (pthread_mutex_init(&device->mutex, NULL) != 0) {
       result = vk_error(device, VK_ERROR_INITIALIZATION_FAILED);
@@ -3282,9 +3229,7 @@ VkResult anv_CreateDevice(
 
    result = anv_device_alloc_bo(device, "workaround", 4096,
                                 ANV_BO_ALLOC_CAPTURE |
-                                ANV_BO_ALLOC_MAPPED |
-                                (device->info->has_local_mem ?
-                                 ANV_BO_ALLOC_WRITE_COMBINE : 0),
+                                ANV_BO_ALLOC_MAPPED,
                                 0 /* explicit_address */,
                                 &device->workaround_bo);
    if (result != VK_SUCCESS)
@@ -3791,16 +3736,8 @@ VkResult anv_AllocateMemory(
        (mem_type->propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
       alloc_flags |= ANV_BO_ALLOC_LOCAL_MEM_CPU_VISIBLE;
 
-   if (!(mem_type->propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
+   if (!mem_heap->is_local_mem)
       alloc_flags |= ANV_BO_ALLOC_NO_LOCAL_MEM;
-
-   /* If the allocated buffer might end up in local memory and it's host
-    * visible and uncached, enable CPU write-combining. It should be faster.
-    */
-   if (!(alloc_flags & ANV_BO_ALLOC_NO_LOCAL_MEM) &&
-       (mem_type->propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) == 0 &&
-       (mem_type->propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
-      alloc_flags |= ANV_BO_ALLOC_WRITE_COMBINE;
 
    if (mem->vk.alloc_flags & VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT)
       alloc_flags |= ANV_BO_ALLOC_CLIENT_VISIBLE_ADDRESS;

@@ -13,7 +13,6 @@
 #include "asahi/lib/agx_formats.h"
 #include "asahi/lib/decode.h"
 #include "drm-uapi/drm_fourcc.h"
-#include "frontend/sw_winsys.h"
 #include "frontend/winsys_handle.h"
 #include "gallium/auxiliary/renderonly/renderonly.h"
 #include "gallium/auxiliary/util/u_debug_cb.h"
@@ -424,8 +423,8 @@ agx_compression_allowed(const struct agx_resource *pres)
    assert(!util_format_is_compressed(pres->base.format) &&
           "block-compressed formats are not renderable");
 
-   /* Small textures cannot (should not?) be compressed */
-   if (pres->base.width0 < 16 || pres->base.height0 < 16) {
+   if (!ail_can_compress(pres->base.width0, pres->base.height0,
+                         MAX2(pres->base.nr_samples, 1))) {
       rsrc_debug(pres, "No compression: too small\n");
       return false;
    }
@@ -522,35 +521,11 @@ agx_resource_create_with_modifiers(struct pipe_screen *screen,
 
    pipe_reference_init(&nresource->base.reference, 1);
 
-   struct sw_winsys *winsys = ((struct agx_screen *)screen)->winsys;
-
    ail_make_miptree(&nresource->layout);
 
    if (templ->target == PIPE_BUFFER) {
       assert(nresource->layout.tiling == AIL_TILING_LINEAR);
       util_range_init(&nresource->valid_buffer_range);
-   }
-
-   if (winsys && templ->bind & PIPE_BIND_DISPLAY_TARGET) {
-      unsigned width = templ->width0;
-      unsigned height = templ->height0;
-
-      if (nresource->layout.tiling == AIL_TILING_TWIDDLED) {
-         width = ALIGN_POT(width, 64);
-         height = ALIGN_POT(height, 64);
-      }
-
-      nresource->dt = winsys->displaytarget_create(
-         winsys, templ->bind, templ->format, width, height, 64,
-         NULL /*map_front_private*/, &nresource->dt_stride);
-
-      if (nresource->layout.tiling == AIL_TILING_LINEAR)
-         nresource->layout.linear_stride_B = nresource->dt_stride;
-
-      if (nresource->dt == NULL) {
-         FREE(nresource);
-         return NULL;
-      }
    }
 
    /* Guess a label based on the bind */
@@ -615,12 +590,6 @@ agx_resource_destroy(struct pipe_screen *screen, struct pipe_resource *prsrc)
 
    if (prsrc->target == PIPE_BUFFER)
       util_range_destroy(&rsrc->valid_buffer_range);
-
-   if (rsrc->dt) {
-      /* display target */
-      struct sw_winsys *winsys = agx_screen->winsys;
-      winsys->displaytarget_destroy(winsys, rsrc->dt);
-   }
 
    if (rsrc->scanout)
       renderonly_scanout_destroy(rsrc->scanout, agx_screen->dev.ro);
@@ -1092,6 +1061,9 @@ agx_clear(struct pipe_context *pctx, unsigned buffers,
          util_framebuffer_get_num_samples(&ctx->framebuffer) > 1);
    }
 
+   if (fastclear)
+      agx_batch_init_state(batch);
+
    batch->clear |= fastclear;
    batch->resolve |= buffers;
    assert((batch->draw & slowclear) == slowclear);
@@ -1199,6 +1171,8 @@ agx_flush_batch(struct agx_context *ctx, struct agx_batch *batch)
       agx_batch_reset(ctx, batch);
       return;
    }
+
+   assert(batch->initialized);
 
    /* Finalize the encoder */
    uint8_t stop[5 + 64] = {0x00, 0x00, 0x00, 0xc0, 0x00};
@@ -1353,6 +1327,13 @@ agx_invalidate_resource(struct pipe_context *pctx,
    }
 }
 
+static void
+agx_memory_barrier(struct pipe_context *pctx, unsigned flags)
+{
+   /* Be conservative for now, we can try to optimize this more later */
+   agx_flush_all(agx_context(pctx), "Memory barrier");
+}
+
 static struct pipe_context *
 agx_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
 {
@@ -1394,6 +1375,10 @@ agx_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
    pctx->set_debug_callback = u_default_set_debug_callback;
    pctx->get_sample_position = u_default_get_sample_position;
    pctx->invalidate_resource = agx_invalidate_resource;
+   pctx->memory_barrier = agx_memory_barrier;
+
+   pctx->create_fence_fd = agx_create_fence_fd;
+   pctx->fence_server_sync = agx_fence_server_sync;
 
    agx_init_state_functions(pctx);
    agx_init_query_functions(pctx);
@@ -1420,32 +1405,6 @@ agx_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
    ctx->syncobj = ctx->dummy_syncobj;
 
    return pctx;
-}
-
-static void
-agx_flush_frontbuffer(struct pipe_screen *_screen, struct pipe_context *pctx,
-                      struct pipe_resource *prsrc, unsigned level,
-                      unsigned layer, void *context_private,
-                      struct pipe_box *box)
-{
-   struct agx_resource *rsrc = (struct agx_resource *)prsrc;
-   struct agx_screen *agx_screen = (struct agx_screen *)_screen;
-   struct sw_winsys *winsys = agx_screen->winsys;
-
-   /* Dump the framebuffer */
-   assert(rsrc->dt);
-   void *map = winsys->displaytarget_map(winsys, rsrc->dt, PIPE_USAGE_DEFAULT);
-   assert(map != NULL);
-
-   if (rsrc->modifier == DRM_FORMAT_MOD_APPLE_TWIDDLED) {
-      ail_detile(rsrc->bo->ptr.cpu, map, &rsrc->layout, 0, rsrc->dt_stride, 0,
-                 0, rsrc->base.width0, rsrc->base.height0);
-   } else {
-      assert(rsrc->modifier == DRM_FORMAT_MOD_LINEAR);
-      memcpy(map, rsrc->bo->ptr.cpu, rsrc->dt_stride * rsrc->base.height0);
-   }
-
-   winsys->displaytarget_display(winsys, rsrc->dt, context_private, box);
 }
 
 static const char *
@@ -2052,7 +2011,7 @@ agx_screen_get_fd(struct pipe_screen *pscreen)
 }
 
 struct pipe_screen *
-agx_screen_create(int fd, struct renderonly *ro, struct sw_winsys *winsys)
+agx_screen_create(int fd, struct renderonly *ro)
 {
    struct agx_screen *agx_screen;
    struct pipe_screen *screen;
@@ -2062,7 +2021,6 @@ agx_screen_create(int fd, struct renderonly *ro, struct sw_winsys *winsys)
       return NULL;
 
    screen = &agx_screen->pscreen;
-   agx_screen->winsys = winsys;
 
    /* Set debug before opening */
    agx_screen->dev.debug =
@@ -2107,7 +2065,6 @@ agx_screen_create(int fd, struct renderonly *ro, struct sw_winsys *winsys)
    screen->resource_get_handle = agx_resource_get_handle;
    screen->resource_get_param = agx_resource_get_param;
    screen->resource_create_with_modifiers = agx_resource_create_with_modifiers;
-   screen->flush_frontbuffer = agx_flush_frontbuffer;
    screen->get_timestamp = u_default_get_timestamp;
    screen->fence_reference = agx_fence_reference;
    screen->fence_finish = agx_fence_finish;

@@ -40,7 +40,6 @@
 
 #include "nir/tgsi_to_nir.h"
 #include "tgsi/tgsi_dump.h"
-#include "tgsi/tgsi_from_mesa.h"
 
 #include "util/u_memory.h"
 
@@ -55,7 +54,7 @@ static void
 copy_vars(nir_builder *b, nir_deref_instr *dst, nir_deref_instr *src)
 {
    assert(glsl_get_bare_type(dst->type) == glsl_get_bare_type(src->type));
-   if (glsl_type_is_struct(dst->type)) {
+   if (glsl_type_is_struct_or_ifc(dst->type)) {
       for (unsigned i = 0; i < glsl_get_length(dst->type); ++i) {
          copy_vars(b, nir_build_deref_struct(b, dst, i), nir_build_deref_struct(b, src, i));
       }
@@ -237,7 +236,7 @@ lower_basevertex_instr(nir_builder *b, nir_instr *in, void *data)
    load->src[0] = nir_src_for_ssa(nir_imm_int(b, ZINK_GFX_PUSHCONST_DRAW_MODE_IS_INDEXED));
    nir_intrinsic_set_range(load, 4);
    load->num_components = 1;
-   nir_ssa_dest_init(&load->instr, &load->dest, 1, 32, "draw_mode_is_indexed");
+   nir_ssa_dest_init(&load->instr, &load->dest, 1, 32);
    nir_builder_instr_insert(b, &load->instr);
 
    nir_ssa_def *composite = nir_build_alu(b, nir_op_bcsel,
@@ -278,7 +277,7 @@ lower_drawid_instr(nir_builder *b, nir_instr *in, void *data)
    load->src[0] = nir_src_for_ssa(nir_imm_int(b, ZINK_GFX_PUSHCONST_DRAW_ID));
    nir_intrinsic_set_range(load, 4);
    load->num_components = 1;
-   nir_ssa_dest_init(&load->instr, &load->dest, 1, 32, "draw_id");
+   nir_ssa_dest_init(&load->instr, &load->dest, 1, 32);
    nir_builder_instr_insert(b, &load->instr);
 
    nir_ssa_def_rewrite_uses(&instr->dest.ssa, &load->dest.ssa);
@@ -340,13 +339,13 @@ lower_gl_point_gs_instr(nir_builder *b, nir_instr *instr, void *data)
    nir_ssa_def *w_delta = nir_fdiv(b, point_size, nir_channel(b, vp_scale, 0));
    w_delta = nir_fmul(b, w_delta, nir_channel(b, point_pos, 3));
    // halt_w_delta = w_delta / 2
-   nir_ssa_def *half_w_delta = nir_fmul(b, w_delta, nir_imm_float(b, 0.5));
+   nir_ssa_def *half_w_delta = nir_fmul_imm(b, w_delta, 0.5);
 
    // h_delta = gl_point_size / height_viewport_size_scale * gl_Position.w
    nir_ssa_def *h_delta = nir_fdiv(b, point_size, nir_channel(b, vp_scale, 1));
    h_delta = nir_fmul(b, h_delta, nir_channel(b, point_pos, 3));
    // halt_h_delta = h_delta / 2
-   nir_ssa_def *half_h_delta = nir_fmul(b, h_delta, nir_imm_float(b, 0.5));
+   nir_ssa_def *half_h_delta = nir_fmul_imm(b, h_delta, 0.5);
 
    nir_ssa_def *point_dir[4][2] = {
       { nir_imm_float(b, -1), nir_imm_float(b, -1) },
@@ -1240,6 +1239,11 @@ zink_create_quads_emulation_gs(const nir_shader_compiler_options *options,
    nir_foreach_shader_out_variable(var, prev_stage) {
       assert(!var->data.patch);
 
+      /* input vars can't be created for those */
+      if (var->data.location == VARYING_SLOT_LAYER ||
+          var->data.location == VARYING_SLOT_VIEW_INDEX)
+         continue;
+
       char name[100];
       if (var->name)
          snprintf(name, sizeof(name), "in_%s", var->name);
@@ -1373,6 +1377,7 @@ zink_screen_init_compiler(struct zink_screen *screen)
       .has_isub = true,
       .has_txs = true,
       .lower_mul_2x32_64 = true,
+      .use_scoped_barrier = true,
       .support_16bit_alu = true, /* not quite what it sounds like */
       .max_unroll_iterations = 0,
    };
@@ -1731,7 +1736,7 @@ lower_txf_lod_robustness_instr(nir_builder *b, nir_instr *in, void *data)
       nir_src_copy(&levels->src[!!(offset_idx >= 0)].src, &txf->src[handle_idx].src, &levels->instr);
    }
    nir_ssa_dest_init(&levels->instr, &levels->dest,
-                     nir_tex_instr_dest_size(levels), 32, NULL);
+                     nir_tex_instr_dest_size(levels), 32);
    nir_builder_instr_insert(b, &levels->instr);
 
    nir_if *lod_oob_if = nir_push_if(b, nir_ilt(b, lod, &levels->dest.ssa));
@@ -2151,17 +2156,8 @@ rewrite_bo_access_instr(nir_builder *b, nir_instr *instr, void *data)
    nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
    b->cursor = nir_before_instr(instr);
    switch (intr->intrinsic) {
-   case nir_intrinsic_ssbo_atomic_fadd:
-   case nir_intrinsic_ssbo_atomic_add:
-   case nir_intrinsic_ssbo_atomic_umin:
-   case nir_intrinsic_ssbo_atomic_imin:
-   case nir_intrinsic_ssbo_atomic_umax:
-   case nir_intrinsic_ssbo_atomic_imax:
-   case nir_intrinsic_ssbo_atomic_and:
-   case nir_intrinsic_ssbo_atomic_or:
-   case nir_intrinsic_ssbo_atomic_xor:
-   case nir_intrinsic_ssbo_atomic_exchange:
-   case nir_intrinsic_ssbo_atomic_comp_swap: {
+   case nir_intrinsic_ssbo_atomic:
+   case nir_intrinsic_ssbo_atomic_swap: {
       /* convert offset to uintN_t[idx] */
       nir_ssa_def *offset = nir_udiv_imm(b, intr->src[1].ssa, nir_dest_bit_size(intr->dest) / 8);
       nir_instr_rewrite_src_ssa(instr, &intr->src[1], offset);
@@ -2322,52 +2318,12 @@ rewrite_atomic_ssbo_instr(nir_builder *b, nir_instr *instr, struct bo_vars *bo)
 {
    nir_intrinsic_op op;
    nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-   switch (intr->intrinsic) {
-   case nir_intrinsic_ssbo_atomic_fadd:
-      op = nir_intrinsic_deref_atomic_fadd;
-      break;
-   case nir_intrinsic_ssbo_atomic_fmin:
-      op = nir_intrinsic_deref_atomic_fmin;
-      break;
-   case nir_intrinsic_ssbo_atomic_fmax:
-      op = nir_intrinsic_deref_atomic_fmax;
-      break;
-   case nir_intrinsic_ssbo_atomic_fcomp_swap:
-      op = nir_intrinsic_deref_atomic_fcomp_swap;
-      break;
-   case nir_intrinsic_ssbo_atomic_add:
-      op = nir_intrinsic_deref_atomic_add;
-      break;
-   case nir_intrinsic_ssbo_atomic_umin:
-      op = nir_intrinsic_deref_atomic_umin;
-      break;
-   case nir_intrinsic_ssbo_atomic_imin:
-      op = nir_intrinsic_deref_atomic_imin;
-      break;
-   case nir_intrinsic_ssbo_atomic_umax:
-      op = nir_intrinsic_deref_atomic_umax;
-      break;
-   case nir_intrinsic_ssbo_atomic_imax:
-      op = nir_intrinsic_deref_atomic_imax;
-      break;
-   case nir_intrinsic_ssbo_atomic_and:
-      op = nir_intrinsic_deref_atomic_and;
-      break;
-   case nir_intrinsic_ssbo_atomic_or:
-      op = nir_intrinsic_deref_atomic_or;
-      break;
-   case nir_intrinsic_ssbo_atomic_xor:
-      op = nir_intrinsic_deref_atomic_xor;
-      break;
-   case nir_intrinsic_ssbo_atomic_exchange:
-      op = nir_intrinsic_deref_atomic_exchange;
-      break;
-   case nir_intrinsic_ssbo_atomic_comp_swap:
-      op = nir_intrinsic_deref_atomic_comp_swap;
-      break;
-   default:
+   if (intr->intrinsic == nir_intrinsic_ssbo_atomic)
+      op = nir_intrinsic_deref_atomic;
+   else if (intr->intrinsic == nir_intrinsic_ssbo_atomic_swap)
+      op = nir_intrinsic_deref_atomic_swap;
+   else
       unreachable("unknown intrinsic");
-   }
    nir_ssa_def *offset = intr->src[1].ssa;
    nir_src *src = &intr->src[0];
    nir_variable *var = get_bo_var(b->shader, bo, true, src, nir_dest_bit_size(intr->dest));
@@ -2384,7 +2340,9 @@ rewrite_atomic_ssbo_instr(nir_builder *b, nir_instr *instr, struct bo_vars *bo)
    for (unsigned i = 0; i < num_components; i++) {
       nir_deref_instr *deref_arr = nir_build_deref_array(b, deref_struct, offset);
       nir_intrinsic_instr *new_instr = nir_intrinsic_instr_create(b->shader, op);
-      nir_ssa_dest_init(&new_instr->instr, &new_instr->dest, 1, nir_dest_bit_size(intr->dest), "");
+      nir_ssa_dest_init(&new_instr->instr, &new_instr->dest, 1,
+                        nir_dest_bit_size(intr->dest));
+      nir_intrinsic_set_atomic_op(new_instr, nir_intrinsic_atomic_op(intr));
       new_instr->src[0] = nir_src_for_ssa(&deref_arr->dest.ssa);
       /* deref ops have no offset src, so copy the srcs after it */
       for (unsigned i = 2; i < nir_intrinsic_infos[intr->intrinsic].num_srcs; i++)
@@ -2414,20 +2372,8 @@ remove_bo_access_instr(nir_builder *b, nir_instr *instr, void *data)
    nir_src *src;
    bool ssbo = true;
    switch (intr->intrinsic) {
-   case nir_intrinsic_ssbo_atomic_fadd:
-   case nir_intrinsic_ssbo_atomic_fmin:
-   case nir_intrinsic_ssbo_atomic_fmax:
-   case nir_intrinsic_ssbo_atomic_fcomp_swap:
-   case nir_intrinsic_ssbo_atomic_add:
-   case nir_intrinsic_ssbo_atomic_umin:
-   case nir_intrinsic_ssbo_atomic_imin:
-   case nir_intrinsic_ssbo_atomic_umax:
-   case nir_intrinsic_ssbo_atomic_imax:
-   case nir_intrinsic_ssbo_atomic_and:
-   case nir_intrinsic_ssbo_atomic_or:
-   case nir_intrinsic_ssbo_atomic_xor:
-   case nir_intrinsic_ssbo_atomic_exchange:
-   case nir_intrinsic_ssbo_atomic_comp_swap:
+   case nir_intrinsic_ssbo_atomic:
+   case nir_intrinsic_ssbo_atomic_swap:
       rewrite_atomic_ssbo_instr(b, instr, bo);
       return true;
    case nir_intrinsic_store_ssbo:
@@ -3538,7 +3484,7 @@ invert_point_coord_instr(nir_builder *b, nir_instr *instr, void *data)
       return false;
    b->cursor = nir_after_instr(instr);
    nir_ssa_def *def = nir_vec2(b, nir_channel(b, &intr->dest.ssa, 0),
-                                  nir_fsub(b, nir_imm_float(b, 1.0), nir_channel(b, &intr->dest.ssa, 1)));
+                                  nir_fsub_imm(b, 1.0, nir_channel(b, &intr->dest.ssa, 1)));
    nir_ssa_def_rewrite_uses_after(&intr->dest.ssa, def, def->parent_instr);
    return true;
 }
@@ -4019,20 +3965,8 @@ analyze_io(struct zink_shader *zs, nir_shader *shader)
             ret = true;
             break;
          }
-         case nir_intrinsic_ssbo_atomic_fadd:
-         case nir_intrinsic_ssbo_atomic_add:
-         case nir_intrinsic_ssbo_atomic_imin:
-         case nir_intrinsic_ssbo_atomic_umin:
-         case nir_intrinsic_ssbo_atomic_imax:
-         case nir_intrinsic_ssbo_atomic_umax:
-         case nir_intrinsic_ssbo_atomic_and:
-         case nir_intrinsic_ssbo_atomic_or:
-         case nir_intrinsic_ssbo_atomic_xor:
-         case nir_intrinsic_ssbo_atomic_exchange:
-         case nir_intrinsic_ssbo_atomic_comp_swap:
-         case nir_intrinsic_ssbo_atomic_fmin:
-         case nir_intrinsic_ssbo_atomic_fmax:
-         case nir_intrinsic_ssbo_atomic_fcomp_swap:
+         case nir_intrinsic_ssbo_atomic:
+         case nir_intrinsic_ssbo_atomic_swap:
          case nir_intrinsic_load_ssbo:
             zs->ssbos_used |= get_src_mask_ssbo(shader->info.num_ssbos, intrin->src[0]);
             break;
@@ -4134,21 +4068,8 @@ lower_bindless_instr(nir_builder *b, nir_instr *in, void *data)
 
    /* convert bindless intrinsics to deref intrinsics */
    switch (instr->intrinsic) {
-   OP_SWAP(atomic_add)
-   OP_SWAP(atomic_and)
-   OP_SWAP(atomic_comp_swap)
-   OP_SWAP(atomic_dec_wrap)
-   OP_SWAP(atomic_exchange)
-   OP_SWAP(atomic_fadd)
-   OP_SWAP(atomic_fmax)
-   OP_SWAP(atomic_fmin)
-   OP_SWAP(atomic_imax)
-   OP_SWAP(atomic_imin)
-   OP_SWAP(atomic_inc_wrap)
-   OP_SWAP(atomic_or)
-   OP_SWAP(atomic_umax)
-   OP_SWAP(atomic_umin)
-   OP_SWAP(atomic_xor)
+   OP_SWAP(atomic)
+   OP_SWAP(atomic_swap)
    OP_SWAP(format)
    OP_SWAP(load)
    OP_SWAP(order)
@@ -4409,17 +4330,8 @@ scan_nir(struct zink_screen *screen, nir_shader *shader, struct zink_shader *zs)
             if (intr->intrinsic == nir_intrinsic_image_deref_load ||
                 intr->intrinsic == nir_intrinsic_image_deref_sparse_load ||
                 intr->intrinsic == nir_intrinsic_image_deref_store ||
-                intr->intrinsic == nir_intrinsic_image_deref_atomic_add ||
-                intr->intrinsic == nir_intrinsic_image_deref_atomic_imin ||
-                intr->intrinsic == nir_intrinsic_image_deref_atomic_umin ||
-                intr->intrinsic == nir_intrinsic_image_deref_atomic_imax ||
-                intr->intrinsic == nir_intrinsic_image_deref_atomic_umax ||
-                intr->intrinsic == nir_intrinsic_image_deref_atomic_and ||
-                intr->intrinsic == nir_intrinsic_image_deref_atomic_or ||
-                intr->intrinsic == nir_intrinsic_image_deref_atomic_xor ||
-                intr->intrinsic == nir_intrinsic_image_deref_atomic_exchange ||
-                intr->intrinsic == nir_intrinsic_image_deref_atomic_comp_swap ||
-                intr->intrinsic == nir_intrinsic_image_deref_atomic_fadd ||
+                intr->intrinsic == nir_intrinsic_image_deref_atomic ||
+                intr->intrinsic == nir_intrinsic_image_deref_atomic_swap ||
                 intr->intrinsic == nir_intrinsic_image_deref_size ||
                 intr->intrinsic == nir_intrinsic_image_deref_samples ||
                 intr->intrinsic == nir_intrinsic_image_deref_format ||
@@ -4441,9 +4353,10 @@ scan_nir(struct zink_screen *screen, nir_shader *shader, struct zink_shader *zs)
             static bool warned = false;
             if (!screen->info.have_EXT_shader_atomic_float && !screen->is_cpu && !warned) {
                switch (intr->intrinsic) {
-               case nir_intrinsic_image_deref_atomic_add: {
+               case nir_intrinsic_image_deref_atomic: {
                   nir_variable *var = nir_intrinsic_get_var(intr, 0);
-                  if (util_format_is_float(var->data.image.format))
+                  if (nir_intrinsic_atomic_op(intr) == nir_atomic_op_iadd &&
+                      util_format_is_float(var->data.image.format))
                      fprintf(stderr, "zink: Vulkan driver missing VK_EXT_shader_atomic_float but attempting to do atomic ops!\n");
                   break;
                }
@@ -4660,17 +4573,8 @@ type_image(nir_shader *nir, nir_variable *var)
             if (intr->intrinsic == nir_intrinsic_image_deref_load ||
                intr->intrinsic == nir_intrinsic_image_deref_sparse_load ||
                intr->intrinsic == nir_intrinsic_image_deref_store ||
-               intr->intrinsic == nir_intrinsic_image_deref_atomic_add ||
-               intr->intrinsic == nir_intrinsic_image_deref_atomic_imin ||
-               intr->intrinsic == nir_intrinsic_image_deref_atomic_umin ||
-               intr->intrinsic == nir_intrinsic_image_deref_atomic_imax ||
-               intr->intrinsic == nir_intrinsic_image_deref_atomic_umax ||
-               intr->intrinsic == nir_intrinsic_image_deref_atomic_and ||
-               intr->intrinsic == nir_intrinsic_image_deref_atomic_or ||
-               intr->intrinsic == nir_intrinsic_image_deref_atomic_xor ||
-               intr->intrinsic == nir_intrinsic_image_deref_atomic_exchange ||
-               intr->intrinsic == nir_intrinsic_image_deref_atomic_comp_swap ||
-               intr->intrinsic == nir_intrinsic_image_deref_atomic_fadd ||
+               intr->intrinsic == nir_intrinsic_image_deref_atomic ||
+               intr->intrinsic == nir_intrinsic_image_deref_atomic_swap ||
                intr->intrinsic == nir_intrinsic_image_deref_samples ||
                intr->intrinsic == nir_intrinsic_image_deref_format ||
                intr->intrinsic == nir_intrinsic_image_deref_order) {
@@ -4931,7 +4835,6 @@ zink_shader_create(struct zink_screen *screen, struct nir_shader *nir,
       NIR_PASS_V(nir, fixup_io_locations);
 
    NIR_PASS_V(nir, lower_basevertex);
-   NIR_PASS_V(nir, nir_lower_regs_to_ssa);
    NIR_PASS_V(nir, lower_baseinstance);
    NIR_PASS_V(nir, lower_sparse);
    NIR_PASS_V(nir, split_bitfields);
@@ -4970,6 +4873,7 @@ zink_shader_create(struct zink_screen *screen, struct nir_shader *nir,
                                           nir_lower_terminate_if_to_cf));
    NIR_PASS_V(nir, nir_lower_fragcolor,
          nir->info.fs.color_is_dual_source ? 1 : 8);
+
    NIR_PASS_V(nir, lower_64bit_vertex_attribs);
    bool needs_size = analyze_io(ret, nir);
    NIR_PASS_V(nir, unbreak_bos, ret, needs_size);
@@ -5382,7 +5286,6 @@ zink_shader_tcs_create(struct zink_screen *screen, nir_shader *tes, unsigned ver
    nir->info.tess.tcs_vertices_out = vertices_per_patch;
    nir_validate_shader(nir, "created");
 
-   NIR_PASS_V(nir, nir_lower_regs_to_ssa);
    optimize_nir(nir, NULL);
    NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_function_temp, NULL);
    NIR_PASS_V(nir, nir_convert_from_ssa, true);

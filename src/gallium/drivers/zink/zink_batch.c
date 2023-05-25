@@ -48,6 +48,8 @@ reset_obj(struct zink_screen *screen, struct zink_batch_state *bs, struct zink_r
       obj->view_prune_count = 0;
       obj->view_prune_timeline = 0;
       simple_mtx_unlock(&obj->view_lock);
+      if (obj->dt)
+         zink_kopper_prune_batch_usage(obj->dt, &bs->usage);
    } else if (util_dynarray_num_elements(&obj->views, VkBufferView) > MAX_VIEW_COUNT && !zink_bo_has_unflushed_usage(obj->bo)) {
       /* avoid ballooning from too many views on always-used resources: */
       simple_mtx_lock(&obj->view_lock);
@@ -56,8 +58,8 @@ reset_obj(struct zink_screen *screen, struct zink_batch_state *bs, struct zink_r
          /* prune all existing views */
          obj->view_prune_count = util_dynarray_num_elements(&obj->views, VkBufferView);
          /* prune them when the views will definitely not be in use */
-         obj->view_prune_timeline = MAX2(obj->bo->reads ? obj->bo->reads->usage : 0,
-                                         obj->bo->writes ? obj->bo->writes->usage : 0);
+         obj->view_prune_timeline = MAX2(obj->bo->reads.u ? obj->bo->reads.u->usage : 0,
+                                         obj->bo->writes.u ? obj->bo->writes.u->usage : 0);
       }
       simple_mtx_unlock(&obj->view_lock);
    }
@@ -165,7 +167,7 @@ zink_reset_batch_state(struct zink_context *ctx, struct zink_batch_state *bs)
    bs->has_barriers = false;
    if (bs->fence.batch_id)
       zink_screen_update_last_finished(screen, bs->fence.batch_id);
-   bs->submit_count++;
+   bs->usage.submit_count++;
    bs->fence.batch_id = 0;
    bs->usage.usage = 0;
    bs->next = NULL;
@@ -606,7 +608,7 @@ submit_queue(void *data, void *gdata, int thread_index)
       bs->is_device_lost = true;
    }
    simple_mtx_unlock(&screen->queue_lock);
-   bs->submit_count++;
+   bs->usage.submit_count++;
 end:
    cnd_broadcast(&bs->usage.flush);
 

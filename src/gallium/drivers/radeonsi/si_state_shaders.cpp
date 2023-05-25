@@ -1,25 +1,7 @@
 /*
  * Copyright 2012 Advanced Micro Devices, Inc.
- * All Rights Reserved.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "ac_nir.h"
@@ -257,9 +239,14 @@ static uint32_t *read_chunk(uint32_t *ptr, void **data, unsigned *size)
    return read_data(ptr, *data, *size);
 }
 
+struct si_shader_blob_head {
+   uint32_t size;
+   uint32_t type;
+   uint32_t crc32;
+};
+
 /**
- * Return the shader binary in a buffer. The first 4 bytes contain its size
- * as integer.
+ * Return the shader binary in a buffer.
  */
 static uint32_t *si_get_shader_binary(struct si_shader *shader)
 {
@@ -269,53 +256,59 @@ static uint32_t *si_get_shader_binary(struct si_shader *shader)
 
    /* Refuse to allocate overly large buffers and guard against integer
     * overflow. */
-   if (shader->binary.elf_size > UINT_MAX / 4 || llvm_ir_size > UINT_MAX / 4)
+   if (shader->binary.code_size > UINT_MAX / 4 || llvm_ir_size > UINT_MAX / 4 ||
+       shader->binary.num_symbols > UINT_MAX / 32)
       return NULL;
 
-   unsigned size = 4 + /* total size */
-                   4 + /* CRC32 of the data below */
-                   align(sizeof(shader->config), 4) + align(sizeof(shader->info), 4) + 4 +
-                   align(shader->binary.elf_size, 4) + 4 + align(llvm_ir_size, 4);
+   unsigned size = sizeof(struct si_shader_blob_head) +
+                   align(sizeof(shader->config), 4) +
+                   align(sizeof(shader->info), 4) +
+                   4 + align(shader->binary.code_size, 4) +
+                   4 + shader->binary.num_symbols * 8 +
+                   4 + align(llvm_ir_size, 4);
    uint32_t *buffer = (uint32_t*)CALLOC(1, size);
-   uint32_t *ptr = buffer;
-
    if (!buffer)
       return NULL;
 
-   *ptr++ = size;
-   ptr++; /* CRC32 is calculated at the end. */
+   struct si_shader_blob_head *head = (struct si_shader_blob_head *)buffer;
+   head->type = shader->binary.type;
+   head->size = size;
+
+   uint32_t *data = buffer + sizeof(*head) / 4;
+   uint32_t *ptr = data;
 
    ptr = write_data(ptr, &shader->config, sizeof(shader->config));
    ptr = write_data(ptr, &shader->info, sizeof(shader->info));
-   ptr = write_chunk(ptr, shader->binary.elf_buffer, shader->binary.elf_size);
+   ptr = write_chunk(ptr, shader->binary.code_buffer, shader->binary.code_size);
+   ptr = write_chunk(ptr, shader->binary.symbols, shader->binary.num_symbols * 8);
    ptr = write_chunk(ptr, shader->binary.llvm_ir_string, llvm_ir_size);
    assert((char *)ptr - (char *)buffer == (ptrdiff_t)size);
 
    /* Compute CRC32. */
-   ptr = buffer;
-   ptr++;
-   *ptr = util_hash_crc32(ptr + 1, size - 8);
+   head->crc32 = util_hash_crc32(data, size - sizeof(*head));
 
    return buffer;
 }
 
 static bool si_load_shader_binary(struct si_shader *shader, void *binary)
 {
-   uint32_t *ptr = (uint32_t *)binary;
-   uint32_t size = *ptr++;
-   uint32_t crc32 = *ptr++;
+   struct si_shader_blob_head *head = (struct si_shader_blob_head *)binary;
    unsigned chunk_size;
-   unsigned elf_size;
+   unsigned code_size;
 
-   if (util_hash_crc32(ptr, size - 8) != crc32) {
+   uint32_t *ptr = (uint32_t *)binary + sizeof(*head) / 4;
+   if (util_hash_crc32(ptr, head->size - sizeof(*head)) != head->crc32) {
       fprintf(stderr, "radeonsi: binary shader has invalid CRC32\n");
       return false;
    }
 
+   shader->binary.type = (enum si_shader_binary_type)head->type;
    ptr = read_data(ptr, &shader->config, sizeof(shader->config));
    ptr = read_data(ptr, &shader->info, sizeof(shader->info));
-   ptr = read_chunk(ptr, (void **)&shader->binary.elf_buffer, &elf_size);
-   shader->binary.elf_size = elf_size;
+   ptr = read_chunk(ptr, (void **)&shader->binary.code_buffer, &code_size);
+   shader->binary.code_size = code_size;
+   ptr = read_chunk(ptr, (void **)&shader->binary.symbols, &chunk_size);
+   shader->binary.num_symbols = chunk_size / 8;
    ptr = read_chunk(ptr, (void **)&shader->binary.llvm_ir_string, &chunk_size);
 
    if (!shader->is_gs_copy_shader &&
@@ -326,7 +319,7 @@ static bool si_load_shader_binary(struct si_shader *shader, void *binary)
 
       shader->gs_copy_shader->is_gs_copy_shader = true;
 
-      if (!si_load_shader_binary(shader->gs_copy_shader, (uint8_t*)binary + size)) {
+      if (!si_load_shader_binary(shader->gs_copy_shader, (uint8_t*)binary + head->size)) {
          FREE(shader->gs_copy_shader);
          shader->gs_copy_shader = NULL;
          return false;

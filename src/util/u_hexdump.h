@@ -3,11 +3,14 @@
  * SPDX-License-Identifier: MIT
  */
 
-#ifndef __HEXDUMP_H
-#define __HEXDUMP_H
+#ifndef U_HEXDUMP_H
+#define U_HEXDUMP_H
 
-static void
-hexdump(FILE *fp, const uint8_t *hex, size_t cnt, bool with_strings)
+#include <stdio.h>
+#include <stdbool.h>
+
+static inline void
+u_hexdump(FILE *fp, const uint8_t *hex, size_t cnt, bool with_strings)
 {
    for (unsigned i = 0; i < cnt; ++i) {
       if ((i & 0xF) == 0)

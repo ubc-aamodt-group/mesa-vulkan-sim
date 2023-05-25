@@ -294,19 +294,6 @@ struct tnl_program {
 };
 
 static nir_variable *
-find_state_var(nir_shader *s,
-               gl_state_index16 tokens[STATE_LENGTH])
-{
-   nir_foreach_variable_with_modes(var, s, nir_var_uniform) {
-      if (var->num_state_slots == 1 &&
-          !memcmp(var->state_slots[0].tokens, tokens,
-                  sizeof(var->state_slots[0].tokens)))
-         return var;
-   }
-   return NULL;
-}
-
-static nir_variable *
 register_state_var(struct tnl_program *p,
                    gl_state_index s0,
                    gl_state_index s1,
@@ -319,7 +306,7 @@ register_state_var(struct tnl_program *p,
    tokens[1] = s1;
    tokens[2] = s2;
    tokens[3] = s3;
-   nir_variable *var = find_state_var(p->b->shader, tokens);
+   nir_variable *var = nir_find_state_variable(p->b->shader, tokens);
    if (var)
       return var;
 
@@ -375,21 +362,9 @@ load_input(struct tnl_program *p, gl_vert_attrib attr,
            const struct glsl_type *type)
 {
    if (p->state->varying_vp_inputs & VERT_BIT(attr)) {
-      nir_variable *var =
-         nir_find_variable_with_location(p->b->shader,
-                                         nir_var_shader_in,
-                                         attr);
-      if (!var) {
-         var = nir_variable_create(p->b->shader,
-                                   nir_var_shader_in,
-                                   type,
-                                   gl_vert_attrib_name(attr));
-
-         var->data.location = attr;
-         var->data.driver_location = p->b->shader->num_inputs++;
-
-         p->b->shader->info.inputs_read |= (uint64_t)VERT_BIT(attr);
-      }
+      nir_variable *var = nir_get_variable_with_location(p->b->shader, nir_var_shader_in,
+                                                         attr, type);
+      p->b->shader->info.inputs_read |= (uint64_t)VERT_BIT(attr);
       return nir_load_var(p->b, var);
    } else
       return load_state_var(p, STATE_CURRENT_ATTRIB, attr, 0, 0, type);
@@ -405,20 +380,8 @@ static nir_variable *
 register_output(struct tnl_program *p, gl_varying_slot slot,
                 const struct glsl_type *type)
 {
-   nir_variable *var =
-      nir_find_variable_with_location(p->b->shader,
-                                      nir_var_shader_out,
-                                      slot);
-   if (var)
-      return var;
-
-   const char *name =
-      gl_varying_slot_name_for_stage(slot, MESA_SHADER_VERTEX);
-   var = nir_variable_create(p->b->shader, nir_var_shader_out, type, name);
-
-   var->data.location = slot;
-   var->data.driver_location = p->b->shader->num_outputs++;
-
+   nir_variable *var = nir_get_variable_with_location(p->b->shader, nir_var_shader_out,
+                                                      slot, type);
    p->b->shader->info.outputs_written |= BITFIELD64_BIT(slot);
    return var;
 }

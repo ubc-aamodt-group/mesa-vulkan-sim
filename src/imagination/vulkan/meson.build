@@ -103,6 +103,7 @@ if with_imagination_srv
     'winsys/pvrsrvkm/pvr_srv_job_render.c',
     'winsys/pvrsrvkm/pvr_srv_job_transfer.c',
     'winsys/pvrsrvkm/pvr_srv_sync.c',
+    'winsys/pvrsrvkm/pvr_srv_sync_prim.c',
   )
   pvr_flags += '-DPVR_SUPPORT_SERVICES_DRIVER'
 endif
@@ -160,8 +161,7 @@ powervr_mesa_icd = custom_target(
   command : [
     prog_python, '@INPUT0@',
     '--api-version', '1.0', '--xml', '@INPUT1@',
-    '--lib-path', join_paths(get_option('prefix'), get_option('libdir'),
-                             'libvulkan_powervr_mesa.so'),
+    '--lib-path', get_option('prefix') / get_option('libdir') / 'libvulkan_powervr_mesa.so',
     '--out', '@OUTPUT@',
   ],
   build_by_default : true,
@@ -169,11 +169,10 @@ powervr_mesa_icd = custom_target(
   install : true,
 )
 
-_dev_icdname = 'powervr_mesa_devenv_icd.@0@.json'.format(host_machine.cpu())
 _dev_icd = custom_target(
   'powervr_mesa_devenv_icd',
   input : [vk_icd_gen, vk_api_xml],
-  output : _dev_icdname,
+  output : 'powervr_mesa_devenv_icd.@0@.json'.format(host_machine.cpu()),
   command : [
     prog_python, '@INPUT0@',
     '--api-version', '1.0', '--xml', '@INPUT1@',

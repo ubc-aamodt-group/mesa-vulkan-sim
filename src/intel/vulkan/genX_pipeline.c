@@ -791,7 +791,7 @@ emit_rs_state(struct anv_graphics_pipeline *pipeline,
    raster.ScissorRectangleEnable = true;
 
    raster.ConservativeRasterizationEnable =
-      rs->conservative_mode != VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT;
+      rs && rs->conservative_mode != VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT;
    raster.APIMode = DX101;
 
    GENX(3DSTATE_SF_pack)(NULL, pipeline->gfx8.sf, &sf);
@@ -1535,10 +1535,8 @@ emit_3dstate_ps(struct anv_graphics_pipeline *pipeline,
       ps.PushConstantEnable         = wm_prog_data->base.nr_params > 0 ||
                                       wm_prog_data->base.ubo_ranges[0].length;
       ps.PositionXYOffsetSelect     =
-         !brw_wm_prog_data_uses_position_xy_offset(wm_prog_data,
-                                                   pipeline->fs_msaa_flags) ?
-         POSOFFSET_NONE :
-         (persample ? POSOFFSET_SAMPLE : POSOFFSET_CENTROID);
+           !wm_prog_data->uses_pos_offset ? POSOFFSET_NONE :
+           persample ? POSOFFSET_SAMPLE : POSOFFSET_CENTROID;
 
       ps.MaximumNumberofThreadsPerPSD = devinfo->max_threads_per_psd - 1;
 
@@ -1849,7 +1847,6 @@ genX(graphics_pipeline_emit)(struct anv_graphics_pipeline *pipeline,
    enum intel_urb_deref_block_size urb_deref_block_size;
    emit_urb_setup(pipeline, &urb_deref_block_size);
 
-   assert(state->rs != NULL);
    emit_rs_state(pipeline, state->ia, state->rs, state->ms, state->rp,
                  urb_deref_block_size);
    emit_ms_state(pipeline, state->ms);

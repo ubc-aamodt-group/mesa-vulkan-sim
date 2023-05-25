@@ -173,8 +173,7 @@ lower_system_value_instr(nir_builder *b, nir_instr *instr, void *_state)
          nir_intrinsic_op op =
             nir_intrinsic_from_system_value(var->data.location);
          nir_intrinsic_instr *load = nir_intrinsic_instr_create(b->shader, op);
-         nir_ssa_dest_init_for_type(&load->instr, &load->dest,
-                                    var->type, NULL);
+         nir_ssa_dest_init_for_type(&load->instr, &load->dest, var->type);
          load->num_components = load->dest.ssa.num_components;
          nir_builder_instr_insert(b, &load->instr);
          return &load->dest.ssa;
@@ -253,7 +252,7 @@ lower_system_value_instr(nir_builder *b, nir_instr *instr, void *_state)
          return nir_select_from_ssa_def_array(b, cols, num_cols, column);
       } else if (glsl_type_is_array(var->type)) {
          unsigned num_elems = glsl_get_length(var->type);
-         const struct glsl_type *elem_type = glsl_get_array_element(var->type);
+         ASSERTED const struct glsl_type *elem_type = glsl_get_array_element(var->type);
          assert(glsl_get_components(elem_type) == intrin->dest.ssa.num_components);
 
          nir_ssa_def *elems[4];

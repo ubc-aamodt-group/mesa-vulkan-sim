@@ -122,7 +122,7 @@ dzn_nir_indirect_draw_shader(enum dzn_indirect_draw_type type)
                        type == DZN_INDIRECT_INDEXED_DRAW_COUNT_TRIANGLE_FAN_PRIM_RESTART;
    nir_builder b =
       nir_builder_init_simple_shader(MESA_SHADER_COMPUTE,
-                                     dxil_get_nir_compiler_options(),
+                                     dxil_get_base_nir_compiler_options(),
                                      "dzn_meta_indirect_%s()",
                                      type_str[type]);
    b.shader->info.internal = true;
@@ -312,7 +312,7 @@ dzn_nir_triangle_fan_prim_restart_rewrite_index_shader(uint8_t old_index_size)
 
    nir_builder b =
       nir_builder_init_simple_shader(MESA_SHADER_COMPUTE,
-                                     dxil_get_nir_compiler_options(),
+                                     dxil_get_base_nir_compiler_options(),
                                      "dzn_meta_triangle_prim_rewrite_index(old_index_size=%d)",
                                      old_index_size);
    b.shader->info.internal = true;
@@ -475,7 +475,7 @@ dzn_nir_triangle_fan_rewrite_index_shader(uint8_t old_index_size)
 
    nir_builder b =
       nir_builder_init_simple_shader(MESA_SHADER_COMPUTE,
-                                     dxil_get_nir_compiler_options(),
+                                     dxil_get_base_nir_compiler_options(),
                                      "dzn_meta_triangle_rewrite_index(old_index_size=%d)",
                                      old_index_size);
    b.shader->info.internal = true;
@@ -563,7 +563,7 @@ dzn_nir_blit_vs(void)
 {
    nir_builder b =
       nir_builder_init_simple_shader(MESA_SHADER_VERTEX,
-                                     dxil_get_nir_compiler_options(),
+                                     dxil_get_base_nir_compiler_options(),
                                      "dzn_meta_blit_vs()");
    b.shader->info.internal = true;
 
@@ -622,7 +622,7 @@ dzn_nir_blit_fs(const struct dzn_nir_blit_info *info)
 
    nir_builder b =
       nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT,
-                                     dxil_get_nir_compiler_options(),
+                                     dxil_get_base_nir_compiler_options(),
                                      "dzn_meta_blit_fs()");
    b.shader->info.internal = true;
 
@@ -717,16 +717,14 @@ dzn_nir_blit_fs(const struct dzn_nir_blit_info *info)
          tex->src[3].src_type = nir_tex_src_texture_deref;
          tex->src[3].src = nir_src_for_ssa(&tex_deref->dest.ssa);
 
-         nir_ssa_dest_init(&tex->instr, &tex->dest, 4, 32, NULL);
+         nir_ssa_dest_init(&tex->instr, &tex->dest, 4, 32);
 
          nir_builder_instr_insert(&b, &tex->instr);
          res = res ? nir_build_alu2(&b, resolve_op, res, &tex->dest.ssa) : &tex->dest.ssa;
       }
 
-      if (resolve_mode == dzn_blit_resolve_average) {
-         unsigned type_sz = nir_alu_type_get_type_size(nir_out_type);
-         res = nir_fmul(&b, res, nir_imm_floatN_t(&b, 1.0f / nsamples, type_sz));
-      }
+      if (resolve_mode == dzn_blit_resolve_average)
+         res = nir_fmul_imm(&b, res, 1.0f / nsamples);
    } else {
       nir_tex_instr *tex =
          nir_tex_instr_create(b.shader, ms ? 4 : 3);
@@ -769,7 +767,7 @@ dzn_nir_blit_fs(const struct dzn_nir_blit_info *info)
          tex->src[2].src = nir_src_for_ssa(&sampler_deref->dest.ssa);
       }
 
-      nir_ssa_dest_init(&tex->instr, &tex->dest, 4, 32, NULL);
+      nir_ssa_dest_init(&tex->instr, &tex->dest, 4, 32);
       nir_builder_instr_insert(&b, &tex->instr);
       res = &tex->dest.ssa;
    }
@@ -851,7 +849,7 @@ dzn_nir_polygon_point_mode_gs(const nir_shader *previous_shader, struct dzn_nir_
 
 
    builder = nir_builder_init_simple_shader(MESA_SHADER_GEOMETRY,
-                                            dxil_get_nir_compiler_options(),
+                                            dxil_get_base_nir_compiler_options(),
                                             "implicit_gs");
 
    nir_shader *nir = b->shader;
