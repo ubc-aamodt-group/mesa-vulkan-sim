@@ -217,23 +217,33 @@ lvp_ray_tracing_pipeline_create(
       switch (group_info->type) {
       // TODO: AMD adds 2 to each index (not sure why...)
       case VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR:
-         if (group_info->generalShader != VK_SHADER_UNUSED_KHR)
+         printf("LVP: Adding group handle for general group: \n");
+         if (group_info->generalShader != VK_SHADER_UNUSED_KHR) {
             pipeline->group_handles[i].general_index = group_info->generalShader;
-         printf("LVP: Adding group handle for general group.\n");
+            printf("\tgeneral_index %d\n", group_info->generalShader);
+         }
          break;
       case VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR:
-         if (group_info->closestHitShader != VK_SHADER_UNUSED_KHR)
+         printf("LVP: Adding group handle for procedural hit group: \n");
+         if (group_info->closestHitShader != VK_SHADER_UNUSED_KHR) {
             pipeline->group_handles[i].closest_hit_index = group_info->closestHitShader;
-         if (group_info->intersectionShader != VK_SHADER_UNUSED_KHR)
-            pipeline->group_handles[i].intersection_index = i;
-         printf("LVP: Adding group handle for procedural hit group.\n");
+            printf("\tclosest_hit_index %d\n", group_info->closestHitShader);
+         }
+         if (group_info->intersectionShader != VK_SHADER_UNUSED_KHR) {
+            pipeline->group_handles[i].intersection_index = group_info->intersectionShader;
+            printf("\tintersection_index %d\n", group_info->intersectionShader);
+         }
          break;
       case VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR:
-         if (group_info->closestHitShader != VK_SHADER_UNUSED_KHR)
+         printf("LVP: Adding group handle for triangle hit group: \n");
+         if (group_info->closestHitShader != VK_SHADER_UNUSED_KHR) {
             pipeline->group_handles[i].closest_hit_index = group_info->closestHitShader;
-         if (group_info->anyHitShader != VK_SHADER_UNUSED_KHR)
-            pipeline->group_handles[i].any_hit_index = i;
-         printf("LVP: Adding group handle for triangle hit group.\n");
+            printf("\tclosest_hit_index %d\n", group_info->closestHitShader);
+         }
+         if (group_info->anyHitShader != VK_SHADER_UNUSED_KHR) {
+            pipeline->group_handles[i].any_hit_index = group_info->anyHitShader;
+            printf("\tany_hit_index %d\n", group_info->anyHitShader);
+         }
          break;
       case VK_SHADER_GROUP_SHADER_MAX_ENUM_KHR:
          unreachable("VK_SHADER_GROUP_SHADER_MAX_ENUM_KHR");
