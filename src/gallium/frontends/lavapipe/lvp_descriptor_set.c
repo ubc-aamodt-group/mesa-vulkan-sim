@@ -98,6 +98,8 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_CreateDescriptorSetLayout(
       const VkDescriptorSetLayoutBinding *binding = bindings + j;
       uint32_t b = binding->binding;
 
+      printf("DESCRIPTOR TYPE SET: %d\n", binding->descriptorType);
+
       printf("LVP: Set Layout: type %s; stage flag 0x%3x\n", 
          vk_DescriptorType_to_str(binding->descriptorType),
          binding->stageFlags);
@@ -182,6 +184,14 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_CreateDescriptorSetLayout(
          }
          break;
       case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+         // printf("YYYY IN COMBINED IMAGE SAMPLER LAYOUT\n");
+         // lvp_foreach_stage(s, binding->stageFlags) {
+         //    set_layout->binding[b].stage[s].image_index = set_layout->stage[s].image_count;
+         //    set_layout->binding[b].stage[s].sampler_view_index = set_layout->stage[s].sampler_view_count;
+         //    set_layout->stage[s].image_count += binding->descriptorCount;
+         //    set_layout->stage[s].sampler_view_count += binding->descriptorCount;
+         // }
+         // break;
       case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
       case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
          lvp_foreach_stage(s, binding->stageFlags) {
@@ -463,6 +473,9 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
          continue;
       }
       desc += write->dstArrayElement;
+      for (uint32_t j = 0; j < write->descriptorCount; j++) {
+         printf("DESC AT: %p with type %d\n", desc+j, write->descriptorType);
+      }
 
       switch (write->descriptorType) {
       case VK_DESCRIPTOR_TYPE_SAMPLER:
@@ -498,6 +511,11 @@ VKAPI_ATTR void VKAPI_CALL lvp_UpdateDescriptorSets(
 
                desc[j].info.sampler = &sampler->state;
             }
+
+            desc[j].info.sampler_view->image = iview->image;
+
+            // desc[j].info.image_view = iview ? iview->iv : ((struct pipe_image_view){0});
+            // desc[j].info.image_view.image = iview ? iview->image : NULL;
          }
          break;
 

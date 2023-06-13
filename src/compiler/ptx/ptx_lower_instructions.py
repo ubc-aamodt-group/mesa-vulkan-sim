@@ -224,7 +224,8 @@ def translate_deref_instructions(ptx_shader):
             dst, need_deref, src, arrayIndex, arrayStride, baseType, type = line.args
 
             if baseType == 'descriptor':
-                arrayStride = str(32)
+                # FIX: HARDCODED STRIDE SIZE OF LVP_DESCRIPTOR
+                arrayStride = str(48)
 
             assert int(arrayStride) != 0
 
@@ -710,7 +711,8 @@ def translate_decl_var(ptx_shader):
             allocation_size = int(size)
 
 
-        if int(storage_qualifier_type) == 16: ## uniform type
+        # FIX: HARDCODED NUMBER
+        if int(storage_qualifier_type) == 2 or int(storage_qualifier_type) == 16: ## uniform type
             newLine = PTXFunctionalLine()
             newLine.leadingWhiteSpace = '\t'
             newLine.comment = line.comment

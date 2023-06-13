@@ -497,6 +497,7 @@ struct pipe_sampler_view
    /* Put the refcount on its own cache line to prevent "False sharing". */
    EXCLUSIVE_CACHELINE(struct pipe_reference reference);
 
+   const struct lvp_image *image;
    enum pipe_format format:14;      /**< typed PIPE_FORMAT_x */
    bool is_tex2d_from_buf:1;       /**< true if union is tex2d_from_buf */
    enum pipe_texture_target target:5; /**< PIPE_TEXTURE_x */
