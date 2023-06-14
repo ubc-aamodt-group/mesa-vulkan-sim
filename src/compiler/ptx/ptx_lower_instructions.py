@@ -428,9 +428,9 @@ def translate_trace_ray(ptx_shader, shaderIDs):
         anyhit_lines = []
 
         if ShaderType.Intersection in shaderIDs and ShaderType.Any_hit in shaderIDs:
-            print("Combined intersection and anyhit shader currently unimplemented!")
+            print("Combined intersection and anyhit shader currently unimplemented! Results may be incorrect!")
 
-        elif ShaderType.Intersection in shaderIDs:
+        if ShaderType.Intersection in shaderIDs:
 
             intersection_counter_reg = '%intersection_counter_' + str(trace_ray_ID)
             intersection_counter_declaration = PTXDecleration()
@@ -582,7 +582,7 @@ def translate_trace_ray(ptx_shader, shaderIDs):
             exit_intersection_label.fullLine = line.leadingWhiteSpace + exit_intersection_label_str + ':\n'
             intersection_lines.append(exit_intersection_label)
 
-        elif ShaderType.Any_hit in shaderIDs:
+        if ShaderType.Any_hit in shaderIDs:
             print("NIR-PTX Translator: Anyhit shader identified!")
             '''
             https://registry.khronos.org/vulkan/specs/1.3-extensions/html/chap9.html#shaders-any-hit
@@ -636,7 +636,7 @@ def translate_trace_ray(ptx_shader, shaderIDs):
             anyhit_lines.append(exit_anyhit_bra)
 
             # function* anyhit_shader
-            shader_data_address_reg = '%shader_data_address_' + str(trace_ray_ID)
+            shader_data_address_reg = '%shader_data_address_any_' + str(trace_ray_ID)
             shader_data_address_declaration = PTXDecleration()
             shader_data_address_declaration.leadingWhiteSpace = line.leadingWhiteSpace
             shader_data_address_declaration.buildString(DeclarationType.Register, None, '.b64', shader_data_address_reg)
