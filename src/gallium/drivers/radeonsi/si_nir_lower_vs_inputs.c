@@ -32,8 +32,7 @@ fast_udiv_nuw(nir_builder *b, nir_ssa_def *num, nir_ssa_def *divisor)
 
    num = nir_ushr(b, num, pre_shift);
    num = nir_iadd_nuw(b, num, increment);
-   num = nir_imul(b, nir_u2u64(b, num), nir_u2u64(b, multiplier));
-   num = nir_unpack_64_2x32_split_y(b, num);
+   num = nir_umul_high(b, num, multiplier);
    return nir_ushr(b, num, post_shift);
 }
 
@@ -117,7 +116,7 @@ load_vs_input_from_blit_sgpr(nir_builder *b, unsigned input_index,
                              nir_ssa_def *out[4])
 {
    nir_ssa_def *vertex_id = nir_load_vertex_id_zero_base(b);
-   nir_ssa_def *sel_x1 = nir_uge(b, nir_imm_int(b, 1), vertex_id);
+   nir_ssa_def *sel_x1 = nir_ule_imm(b, vertex_id, 1);
    /* Use nir_ine, because we have 3 vertices and only
     * the middle one should use y2.
     */
@@ -199,10 +198,10 @@ ufN_to_float(nir_builder *b, nir_ssa_def *src, unsigned exp_bits, unsigned mant_
    denormal = nir_iadd(b, denormal, nir_ishl_imm(b, tmp, 23));
 
    /* Select the final result. */
-   nir_ssa_def *cond = nir_uge(b, src, nir_imm_int(b, ((1ULL << exp_bits) - 1) << mant_bits));
+   nir_ssa_def *cond = nir_uge_imm(b, src, ((1ULL << exp_bits) - 1) << mant_bits);
    nir_ssa_def *result = nir_bcsel(b, cond, naninf, normal);
 
-   cond = nir_uge(b, src, nir_imm_int(b, 1ULL << mant_bits));
+   cond = nir_uge_imm(b, src, 1ULL << mant_bits);
    result = nir_bcsel(b, cond, result, denormal);
 
    cond = nir_ine_imm(b, src, 0);

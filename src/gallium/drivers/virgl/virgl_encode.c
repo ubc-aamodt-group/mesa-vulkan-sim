@@ -786,7 +786,7 @@ int virgl_encoder_draw_vbo(struct virgl_context *ctx,
                            const struct pipe_draw_start_count_bias *draw)
 {
    uint32_t length = VIRGL_DRAW_VBO_SIZE;
-   if (info->mode == PIPE_PRIM_PATCHES)
+   if (info->mode == MESA_PRIM_PATCHES || drawid_offset > 0)
       length = VIRGL_DRAW_VBO_SIZE_TESS;
    if (indirect && indirect->buffer)
       length = VIRGL_DRAW_VBO_SIZE_INDIRECT;
@@ -891,7 +891,7 @@ static void virgl_encoder_transfer3d_common(struct virgl_screen *vs,
 {
    struct pipe_transfer *transfer = &xfer->base;
    unsigned stride;
-   unsigned layer_stride;
+   uintptr_t layer_stride;
 
    if (encode_stride == virgl_transfer3d_explicit_stride) {
       stride = transfer->stride;

@@ -29,7 +29,6 @@ struct ac_shader_abi {
    LLVMValueRef vertex_id;
    LLVMValueRef vs_rel_patch_id;
    LLVMValueRef instance_id;
-   LLVMValueRef user_data;
 
    /* replaced registers when culling enabled */
    LLVMValueRef vertex_id_replaced;
@@ -95,9 +94,6 @@ struct ac_shader_abi {
 
    /* Whether to disable anisotropic filtering. */
    bool disable_aniso_single_level;
-
-   /* Equal to radeon_info::conformant_trunc_coord. */
-   bool conformant_trunc_coord;
 };
 
 #endif /* AC_SHADER_ABI_H */

@@ -8,6 +8,7 @@
 #include "util/mesa-sha1.h"
 #include "util/u_prim.h"
 #include "sid.h"
+#include "nir.h"
 
 
 struct si_shader_profile {
@@ -21,11 +22,6 @@ static struct si_shader_profile profiles[] =
       /* Plot3D */
       {0x485320cd, 0x87a9ba05, 0x24a60e4f, 0x25aa19f7, 0xf5287451},
       SI_PROFILE_VS_NO_BINNING,
-   },
-   {
-      /* Viewperf/Energy isn't affected by the discard bug. */
-      {0x17118671, 0xd0102e0c, 0x947f3592, 0xb2057e7b, 0x4da5d9b0},
-      SI_PROFILE_IGNORE_LLVM13_DISCARD_BUG,
    },
    {
       /* Viewperf/Medical */
@@ -74,7 +70,8 @@ static void scan_tess_ctrl(nir_cf_node *cf_node, unsigned *upper_block_tf_writem
             continue;
 
          nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
-         if (intrin->intrinsic == nir_intrinsic_control_barrier) {
+         if (intrin->intrinsic == nir_intrinsic_scoped_barrier &&
+             nir_intrinsic_execution_scope(intrin) >= SCOPE_WORKGROUP) {
 
             /* If we find a barrier in nested control flow put this in the
              * too hard basket. In GLSL this is not possible but it is in
@@ -748,14 +745,14 @@ void si_nir_scan_shader(struct si_screen *sscreen, const struct nir_shader *nir,
             info->patch_outputs_written |= 1ull << si_shader_io_get_unique_index_patch(semantic);
          } else if ((semantic <= VARYING_SLOT_VAR31 || semantic >= VARYING_SLOT_VAR0_16BIT) &&
                     semantic != VARYING_SLOT_EDGE) {
-            info->outputs_written |= 1ull << si_shader_io_get_unique_index(semantic, false);
+            info->outputs_written |= 1ull << si_shader_io_get_unique_index(semantic);
 
             /* Ignore outputs that are not passed from VS to PS. */
             if (semantic != VARYING_SLOT_POS &&
                 semantic != VARYING_SLOT_PSIZ &&
                 semantic != VARYING_SLOT_CLIP_VERTEX) {
                info->outputs_written_before_ps |= 1ull
-                                                  << si_shader_io_get_unique_index(semantic, true);
+                                                  << si_shader_io_get_unique_index(semantic);
             }
          }
       }
@@ -799,7 +796,7 @@ void si_nir_scan_shader(struct si_screen *sscreen, const struct nir_shader *nir,
       info->gsvs_vertex_size = info->num_outputs * 16;
       info->max_gsvs_emit_size = info->gsvs_vertex_size * info->base.gs.vertices_out;
       info->gs_input_verts_per_prim =
-         u_vertices_per_prim((enum pipe_prim_type)info->base.gs.input_primitive);
+         u_vertices_per_prim((enum mesa_prim)info->base.gs.input_primitive);
    }
 
    info->clipdist_mask = info->writes_clipvertex ? SI_USER_CLIP_PLANE_MASK :
@@ -813,7 +810,7 @@ void si_nir_scan_shader(struct si_screen *sscreen, const struct nir_shader *nir,
 
          if ((semantic <= VARYING_SLOT_VAR31 || semantic >= VARYING_SLOT_VAR0_16BIT) &&
              semantic != VARYING_SLOT_PNTC) {
-            info->inputs_read |= 1ull << si_shader_io_get_unique_index(semantic, true);
+            info->inputs_read |= 1ull << si_shader_io_get_unique_index(semantic);
          }
       }
 

@@ -44,6 +44,10 @@ libmesa_rust_files = files(
   'mesa/pipe/transfer.rs',
 )
 
+rusticl_proc_macros_files = files(
+  'proc/lib.rs',
+)
+
 rusticl_files = files(
   'lib.rs',
   'api.rs',
@@ -72,6 +76,8 @@ rusticl_files = files(
 )
 
 rusticl_args = [
+  # we want unsafe blocks inside unsafe functions
+  '-Dunsafe_op_in_unsafe_fn',
   # we error on all clippy warnings unless they are disabled
   '-Dclippy::all',
   # we want to add asserts in control flow
@@ -249,6 +255,7 @@ rusticl_mesa_bindings_rs = rust.bindgen(
     '--bitfield-enum', 'nir_opt_if_options',
     '--bitfield-enum', 'nir_variable_mode',
     '--allowlist-type', 'float_controls',
+    '--allowlist-var', 'OS_.*',
     '--allowlist-var', 'PIPE_.*',
     '--bitfield-enum', 'pipe_map_flags',
     '--allowlist-function', 'std(err|out)_ptr',
@@ -278,7 +285,7 @@ libmesa_rust_gen = static_library(
     libgallium,
   ],
   dependencies: [
-    idep_clc,
+    idep_mesaclc,
   ],
   rust_crate_type : 'rlib',
   rust_args : [
@@ -315,6 +322,15 @@ libmesa_rust = static_library(
   ]
 )
 
+rusticl_proc_macros = shared_library(
+  'rusticl_proc_macros',
+  [rusticl_proc_macros_files],
+  rust_crate_type : 'proc-macro',
+  rust_args : [
+    rusticl_args,
+  ],
+)
+
 librusticl = static_library(
   'rusticl',
   [rusticl_files],
@@ -328,6 +344,7 @@ librusticl = static_library(
     libmesa_rust_gen,
     libmesa_rust_util,
     rusticl_opencl_gen,
+    rusticl_proc_macros,
   ],
   dependencies : [
     idep_rusticl_gen,

@@ -46,12 +46,13 @@ struct asm_context {
    enum amd_gfx_level gfx_level;
    std::vector<std::pair<int, SOPP_instruction*>> branches;
    std::map<unsigned, constaddr_info> constaddrs;
+   std::map<unsigned, constaddr_info> resumeaddrs;
    std::vector<struct aco_symbol>* symbols;
    const int16_t* opcode;
    // TODO: keep track of branch instructions referring blocks
    // and, when emitting the block, correct the offset in instr
    asm_context(Program* program_, std::vector<struct aco_symbol>* symbols_)
-      : program(program_), gfx_level(program->gfx_level), symbols(symbols_)
+       : program(program_), gfx_level(program->gfx_level), symbols(symbols_)
    {
       if (gfx_level <= GFX7)
          opcode = &instr_info.opcode_gfx7[0];
@@ -132,6 +133,19 @@ emit_instruction(asm_context& ctx, std::vector<uint32_t>& out, Instruction* inst
       instr->operands.pop_back();
    } else if (instr->opcode == aco_opcode::p_constaddr_addlo) {
       ctx.constaddrs[instr->operands[2].constantValue()].add_literal = out.size() + 1;
+
+      instr->opcode = aco_opcode::s_add_u32;
+      instr->operands.pop_back();
+      assert(instr->operands[1].isConstant());
+      /* in case it's an inline constant, make it a literal */
+      instr->operands[1] = Operand::literal32(instr->operands[1].constantValue());
+   } else if (instr->opcode == aco_opcode::p_resumeaddr_getpc) {
+      ctx.resumeaddrs[instr->operands[0].constantValue()].getpc_end = out.size() + 1;
+
+      instr->opcode = aco_opcode::s_getpc_b64;
+      instr->operands.pop_back();
+   } else if (instr->opcode == aco_opcode::p_resumeaddr_addlo) {
+      ctx.resumeaddrs[instr->operands[2].constantValue()].add_literal = out.size() + 1;
 
       instr->opcode = aco_opcode::s_add_u32;
       instr->operands.pop_back();
@@ -473,7 +487,8 @@ emit_instruction(asm_context& ctx, std::vector<uint32_t>& out, Instruction* inst
          encoding |= reg(ctx, instr->operands[2], 8) << 16;
       if (instr->operands.size() >= 2 && instr->operands[1].physReg() != m0)
          encoding |= reg(ctx, instr->operands[1], 8) << 8;
-      encoding |= reg(ctx, instr->operands[0], 8);
+      if (!instr->operands[0].isUndefined())
+         encoding |= reg(ctx, instr->operands[0], 8);
       out.push_back(encoding);
       break;
    }
@@ -1048,6 +1063,13 @@ insert_code(asm_context& ctx, std::vector<uint32_t>& out, unsigned insert_before
       if (info.add_literal >= insert_before)
          info.add_literal += insert_count;
    }
+   for (auto& constaddr : ctx.resumeaddrs) {
+      constaddr_info& info = constaddr.second;
+      if (info.getpc_end >= insert_before)
+         info.getpc_end += insert_count;
+      if (info.add_literal >= insert_before)
+         info.add_literal += insert_count;
+   }
 
    if (ctx.symbols) {
       for (auto& symbol : *ctx.symbols) {
@@ -1138,8 +1160,7 @@ emit_long_jump(asm_context& ctx, SOPP_instruction* branch, bool backwards,
    emit_instruction(ctx, out, instr.get());
 
    /* create the s_setpc_b64 to jump */
-   instr.reset(
-      bld.sop1(aco_opcode::s_setpc_b64, Operand(def.physReg(), s2)).instr);
+   instr.reset(bld.sop1(aco_opcode::s_setpc_b64, Operand(def.physReg(), s2)).instr);
    emit_instruction(ctx, out, instr.get());
 }
 
@@ -1187,11 +1208,16 @@ fix_constaddrs(asm_context& ctx, std::vector<uint32_t>& out)
       constaddr_info& info = constaddr.second;
       out[info.add_literal] += (out.size() - info.getpc_end) * 4u;
    }
+   for (auto& addr : ctx.resumeaddrs) {
+      constaddr_info& info = addr.second;
+      const Block& block = ctx.program->blocks[out[info.add_literal]];
+      assert(block.kind & block_kind_resume);
+      out[info.add_literal] = (block.offset - info.getpc_end) * 4u;
+   }
 }
 
 unsigned
-emit_program(Program* program, std::vector<uint32_t>& code,
-             std::vector<struct aco_symbol>* symbols)
+emit_program(Program* program, std::vector<uint32_t>& code, std::vector<struct aco_symbol>* symbols)
 {
    asm_context ctx(program, symbols);
 
@@ -1224,8 +1250,8 @@ emit_program(Program* program, std::vector<uint32_t>& code,
    code.insert(code.end(), (uint32_t*)program->constant_data.data(),
                (uint32_t*)(program->constant_data.data() + program->constant_data.size()));
 
-   program->config->scratch_bytes_per_wave = align(
-      program->config->scratch_bytes_per_wave, program->dev.scratch_alloc_granule);
+   program->config->scratch_bytes_per_wave =
+      align(program->config->scratch_bytes_per_wave, program->dev.scratch_alloc_granule);
 
    return exec_size;
 }

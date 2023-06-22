@@ -38,6 +38,7 @@
 
 #include "compiler/shader_enums.h"
 #include "hwdef/rogue_hw_defs.h"
+#include "pvr_border.h"
 #include "pvr_clear.h"
 #include "pvr_common.h"
 #include "pvr_csb.h"
@@ -277,6 +278,8 @@ struct pvr_device {
    struct pvr_bo *robustness_buffer;
 
    struct vk_sync *presignaled_sync;
+
+   struct pvr_border_color_table border_color_table;
 };
 
 struct pvr_device_memory {
@@ -433,6 +436,11 @@ struct pvr_transfer_cmd {
     * cmd_buffer::bo_list head.
     */
    struct pvr_cmd_buffer *cmd_buffer;
+
+   /* Deferred RTA clears are allocated from pvr_cmd_buffer->deferred_clears and
+    * cannot be freed directly.
+    */
+   bool is_deferred_clear;
 };
 
 struct pvr_sub_cmd_gfx {
@@ -492,6 +500,8 @@ struct pvr_sub_cmd_gfx {
    bool frag_uses_texture_rw;
 
    bool has_occlusion_query;
+
+   bool wait_on_previous_transfer;
 };
 
 struct pvr_sub_cmd_compute {
@@ -521,19 +531,13 @@ struct pvr_sub_cmd_event {
    enum pvr_event_type type;
 
    union {
-      struct {
+      struct pvr_sub_cmd_event_set_reset {
          struct pvr_event *event;
-         /* Stages to wait for until the event is set. */
+         /* Stages to wait for until the event is set or reset. */
          uint32_t wait_for_stage_mask;
-      } set;
+      } set_reset;
 
-      struct {
-         struct pvr_event *event;
-         /* Stages to wait for until the event is reset. */
-         uint32_t wait_for_stage_mask;
-      } reset;
-
-      struct {
+      struct pvr_sub_cmd_event_wait {
          uint32_t count;
          /* Events to wait for before resuming. */
          struct pvr_event **events;
@@ -541,7 +545,7 @@ struct pvr_sub_cmd_event {
          uint32_t *wait_at_stage_masks;
       } wait;
 
-      struct {
+      struct pvr_sub_cmd_event_barrier {
          bool in_render_pass;
 
          /* Stages to wait for. */
@@ -709,7 +713,7 @@ struct pvr_cmd_buffer_state {
    /* Array size of barriers_needed is based on number of sync pipeline
     * stages.
     */
-   uint32_t barriers_needed[4];
+   uint32_t barriers_needed[PVR_NUM_SYNC_PIPELINE_STAGES];
 
    struct pvr_descriptor_state gfx_desc_state;
    struct pvr_descriptor_state compute_desc_state;
@@ -847,7 +851,7 @@ struct pvr_pds_attrib_program {
 struct pvr_pipeline_stage_state {
    uint32_t const_shared_reg_count;
    uint32_t const_shared_reg_offset;
-   uint32_t temps_count;
+   uint32_t pds_temps_count;
 
    uint32_t coefficient_size;
 
@@ -1245,7 +1249,6 @@ VkResult pvr_cmd_buffer_add_transfer_cmd(struct pvr_cmd_buffer *cmd_buffer,
 VkResult pvr_cmd_buffer_alloc_mem(struct pvr_cmd_buffer *cmd_buffer,
                                   struct pvr_winsys_heap *heap,
                                   uint64_t size,
-                                  uint32_t flags,
                                   struct pvr_suballoc_bo **const pvr_bo_out);
 
 void pvr_calculate_vertex_cam_size(const struct pvr_device_info *dev_info,
@@ -1253,12 +1256,6 @@ void pvr_calculate_vertex_cam_size(const struct pvr_device_info *dev_info,
                                    const bool raster_enable,
                                    uint32_t *const cam_size_out,
                                    uint32_t *const vs_max_instances_out);
-
-VkResult
-pvr_copy_or_resolve_color_image_region(struct pvr_cmd_buffer *cmd_buffer,
-                                       const struct pvr_image *src,
-                                       const struct pvr_image *dst,
-                                       const VkImageCopy2 *region);
 
 void pvr_get_image_subresource_layout(const struct pvr_image *image,
                                       const VkImageSubresource *subresource,
@@ -1282,6 +1279,12 @@ static inline const struct pvr_image *
 vk_to_pvr_image(const struct vk_image *image)
 {
    return container_of(image, const struct pvr_image, vk);
+}
+
+static inline const struct pvr_image *
+pvr_image_view_get_image(const struct pvr_image_view *const iview)
+{
+   return vk_to_pvr_image(iview->vk.image);
 }
 
 static enum pvr_pipeline_stage_bits

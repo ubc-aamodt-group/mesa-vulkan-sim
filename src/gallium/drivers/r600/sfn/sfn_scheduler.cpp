@@ -280,7 +280,8 @@ BlockScheduler::BlockScheduler(r600_chip_class chip_class,
     m_last_pixel(nullptr),
     m_last_param(nullptr),
     m_current_block(nullptr),
-    m_chip_class(chip_class)
+    m_chip_class(chip_class),
+    m_chip_family(chip_family)
 {
    m_nop_after_rel_dest = chip_family == CHIP_RV770;
 
@@ -1103,6 +1104,7 @@ BlockScheduler::collect_ready_type(std::list<T *>& ready, std::list<T *>& availa
 
 class CheckArrayAccessVisitor : public  ConstRegisterVisitor {
 public:
+   using ConstRegisterVisitor::visit;
    void visit(const Register& value) override {(void)value;}
    void visit(const LocalArray& value) override {(void)value;}
    void visit(const UniformValue& value) override {(void)value;}
@@ -1205,6 +1207,8 @@ bool BlockScheduler::check_array_reads(const AluGroup& group)
                              m_last_direct_array_write);
 
       for (auto alu : group) {
+         if (!alu)
+            continue;
          for (auto& s : alu->sources()) {
             s->accept(visitor);
          }

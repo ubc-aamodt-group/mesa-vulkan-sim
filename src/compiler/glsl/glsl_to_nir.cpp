@@ -1121,9 +1121,12 @@ nir_visitor::visit(ir_call *ir)
          atomic_op = nir_atomic_op_dec_wrap;
          break;
       case ir_intrinsic_memory_barrier:
-         op = shader->options->use_scoped_barrier
-            ? nir_intrinsic_scoped_barrier
-            : nir_intrinsic_memory_barrier;
+      case ir_intrinsic_memory_barrier_buffer:
+      case ir_intrinsic_memory_barrier_image:
+      case ir_intrinsic_memory_barrier_shared:
+      case ir_intrinsic_memory_barrier_atomic_counter:
+      case ir_intrinsic_group_memory_barrier:
+         op = nir_intrinsic_scoped_barrier;
          break;
       case ir_intrinsic_image_size:
          op = nir_intrinsic_image_deref_size;
@@ -1142,31 +1145,6 @@ nir_visitor::visit(ir_call *ir)
          break;
       case ir_intrinsic_end_invocation_interlock:
          op = nir_intrinsic_end_invocation_interlock;
-         break;
-      case ir_intrinsic_group_memory_barrier:
-         op = shader->options->use_scoped_barrier
-            ? nir_intrinsic_scoped_barrier
-            : nir_intrinsic_group_memory_barrier;
-         break;
-      case ir_intrinsic_memory_barrier_atomic_counter:
-         op = shader->options->use_scoped_barrier
-            ? nir_intrinsic_scoped_barrier
-            : nir_intrinsic_memory_barrier_atomic_counter;
-         break;
-      case ir_intrinsic_memory_barrier_buffer:
-         op = shader->options->use_scoped_barrier
-            ? nir_intrinsic_scoped_barrier
-            : nir_intrinsic_memory_barrier_buffer;
-         break;
-      case ir_intrinsic_memory_barrier_image:
-         op = shader->options->use_scoped_barrier
-            ? nir_intrinsic_scoped_barrier
-            : nir_intrinsic_memory_barrier_image;
-         break;
-      case ir_intrinsic_memory_barrier_shared:
-         op = shader->options->use_scoped_barrier
-            ? nir_intrinsic_scoped_barrier
-            : nir_intrinsic_memory_barrier_shared;
          break;
       case ir_intrinsic_vote_any:
          op = nir_intrinsic_vote_any;
@@ -1404,14 +1382,6 @@ nir_visitor::visit(ir_call *ir)
          nir_builder_instr_insert(&b, &instr->instr);
          break;
       }
-      case nir_intrinsic_memory_barrier:
-      case nir_intrinsic_group_memory_barrier:
-      case nir_intrinsic_memory_barrier_atomic_counter:
-      case nir_intrinsic_memory_barrier_buffer:
-      case nir_intrinsic_memory_barrier_image:
-      case nir_intrinsic_memory_barrier_shared:
-         nir_builder_instr_insert(&b, &instr->instr);
-         break;
       case nir_intrinsic_scoped_barrier: {
          /* The nir_intrinsic_scoped_barrier follows the general
           * semantics of SPIR-V memory barriers, so this and other memory
@@ -1419,23 +1389,23 @@ nir_visitor::visit(ir_call *ir)
           *
           *   https://www.khronos.org/registry/OpenGL/extensions/ARB/ARB_gl_spirv.txt
           */
-         nir_scope scope;
+         mesa_scope scope;
          unsigned modes;
          switch (ir->callee->intrinsic_id) {
          case ir_intrinsic_memory_barrier:
-            scope = NIR_SCOPE_DEVICE;
+            scope = SCOPE_DEVICE;
             modes = nir_var_image |
                     nir_var_mem_ssbo |
                     nir_var_mem_shared |
                     nir_var_mem_global;
             break;
          case ir_intrinsic_memory_barrier_buffer:
-            scope = NIR_SCOPE_DEVICE;
+            scope = SCOPE_DEVICE;
             modes = nir_var_mem_ssbo |
                     nir_var_mem_global;
             break;
          case ir_intrinsic_memory_barrier_image:
-            scope = NIR_SCOPE_DEVICE;
+            scope = SCOPE_DEVICE;
             modes = nir_var_image;
             break;
          case ir_intrinsic_memory_barrier_shared:
@@ -1443,11 +1413,11 @@ nir_visitor::visit(ir_call *ir)
              * follow their lead.  Note GL_KHR_vulkan_glsl also does
              * something similar.
              */
-            scope = NIR_SCOPE_DEVICE;
+            scope = SCOPE_DEVICE;
             modes = nir_var_mem_shared;
             break;
          case ir_intrinsic_group_memory_barrier:
-            scope = NIR_SCOPE_WORKGROUP;
+            scope = SCOPE_WORKGROUP;
             modes = nir_var_image |
                     nir_var_mem_ssbo |
                     nir_var_mem_shared |
@@ -1457,7 +1427,7 @@ nir_visitor::visit(ir_call *ir)
             /* There's no nir_var_atomic_counter, but since atomic counters are lowered
              * to SSBOs, we use nir_var_mem_ssbo instead.
              */
-            scope = NIR_SCOPE_DEVICE;
+            scope = SCOPE_DEVICE;
             modes = nir_var_mem_ssbo;
             break;
          default:
@@ -1470,7 +1440,7 @@ nir_visitor::visit(ir_call *ir)
       }
       case nir_intrinsic_shader_clock:
          nir_ssa_dest_init(&instr->instr, &instr->dest, 2, 32);
-         nir_intrinsic_set_memory_scope(instr, NIR_SCOPE_SUBGROUP);
+         nir_intrinsic_set_memory_scope(instr, SCOPE_SUBGROUP);
          nir_builder_instr_insert(&b, &instr->instr);
          break;
       case nir_intrinsic_begin_invocation_interlock:
@@ -2484,38 +2454,33 @@ nir_visitor::visit(ir_texture *ir)
    if (!nir_deref_mode_is(sampler_deref, nir_var_uniform) ||
        nir_deref_instr_get_variable(sampler_deref)->data.bindless) {
       nir_ssa_def *load = nir_load_deref(&b, sampler_deref);
-      instr->src[0].src = nir_src_for_ssa(load);
-      instr->src[0].src_type = nir_tex_src_texture_handle;
-      instr->src[1].src = nir_src_for_ssa(load);
-      instr->src[1].src_type = nir_tex_src_sampler_handle;
+      instr->src[0] = nir_tex_src_for_ssa(nir_tex_src_texture_handle, load);
+      instr->src[1] = nir_tex_src_for_ssa(nir_tex_src_sampler_handle, load);
    } else {
-      instr->src[0].src = nir_src_for_ssa(&sampler_deref->dest.ssa);
-      instr->src[0].src_type = nir_tex_src_texture_deref;
-      instr->src[1].src = nir_src_for_ssa(&sampler_deref->dest.ssa);
-      instr->src[1].src_type = nir_tex_src_sampler_deref;
+      instr->src[0] = nir_tex_src_for_ssa(nir_tex_src_texture_deref,
+                                          &sampler_deref->dest.ssa);
+      instr->src[1] = nir_tex_src_for_ssa(nir_tex_src_sampler_deref,
+                                          &sampler_deref->dest.ssa);
    }
 
    unsigned src_number = 2;
 
    if (ir->coordinate != NULL) {
       instr->coord_components = ir->coordinate->type->vector_elements;
-      instr->src[src_number].src =
-         nir_src_for_ssa(evaluate_rvalue(ir->coordinate));
-      instr->src[src_number].src_type = nir_tex_src_coord;
+      instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_coord,
+                                                   evaluate_rvalue(ir->coordinate));
       src_number++;
    }
 
    if (ir->projector != NULL) {
-      instr->src[src_number].src =
-         nir_src_for_ssa(evaluate_rvalue(ir->projector));
-      instr->src[src_number].src_type = nir_tex_src_projector;
+      instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_projector,
+                                                   evaluate_rvalue(ir->projector));
       src_number++;
    }
 
    if (ir->shadow_comparator != NULL) {
-      instr->src[src_number].src =
-         nir_src_for_ssa(evaluate_rvalue(ir->shadow_comparator));
-      instr->src[src_number].src_type = nir_tex_src_comparator;
+      instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_comparator,
+                                                   evaluate_rvalue(ir->shadow_comparator));
       src_number++;
    }
 
@@ -2533,25 +2498,22 @@ nir_visitor::visit(ir_texture *ir)
       } else {
          assert(ir->offset->type->is_vector() || ir->offset->type->is_scalar());
 
-         instr->src[src_number].src =
-            nir_src_for_ssa(evaluate_rvalue(ir->offset));
-         instr->src[src_number].src_type = nir_tex_src_offset;
+         instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_offset,
+                                                      evaluate_rvalue(ir->offset));
          src_number++;
       }
    }
 
    if (ir->clamp) {
-      instr->src[src_number].src =
-         nir_src_for_ssa(evaluate_rvalue(ir->clamp));
-      instr->src[src_number].src_type = nir_tex_src_min_lod;
+      instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_min_lod,
+                                                   evaluate_rvalue(ir->clamp));
       src_number++;
    }
 
    switch (ir->op) {
    case ir_txb:
-      instr->src[src_number].src =
-         nir_src_for_ssa(evaluate_rvalue(ir->lod_info.bias));
-      instr->src[src_number].src_type = nir_tex_src_bias;
+      instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_bias,
+                                                   evaluate_rvalue(ir->lod_info.bias));
       src_number++;
       break;
 
@@ -2559,28 +2521,24 @@ nir_visitor::visit(ir_texture *ir)
    case ir_txf:
    case ir_txs:
       if (ir->lod_info.lod != NULL) {
-         instr->src[src_number].src =
-            nir_src_for_ssa(evaluate_rvalue(ir->lod_info.lod));
-         instr->src[src_number].src_type = nir_tex_src_lod;
+         instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_lod,
+                                                      evaluate_rvalue(ir->lod_info.lod));
          src_number++;
       }
       break;
 
    case ir_txd:
-      instr->src[src_number].src =
-         nir_src_for_ssa(evaluate_rvalue(ir->lod_info.grad.dPdx));
-      instr->src[src_number].src_type = nir_tex_src_ddx;
+      instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_ddx,
+                                                   evaluate_rvalue(ir->lod_info.grad.dPdx));
       src_number++;
-      instr->src[src_number].src =
-         nir_src_for_ssa(evaluate_rvalue(ir->lod_info.grad.dPdy));
-      instr->src[src_number].src_type = nir_tex_src_ddy;
+      instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_ddy,
+                                                   evaluate_rvalue(ir->lod_info.grad.dPdy));
       src_number++;
       break;
 
    case ir_txf_ms:
-      instr->src[src_number].src =
-         nir_src_for_ssa(evaluate_rvalue(ir->lod_info.sample_index));
-      instr->src[src_number].src_type = nir_tex_src_ms_index;
+      instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_ms_index,
+                                                   evaluate_rvalue(ir->lod_info.sample_index));
       src_number++;
       break;
 
@@ -2693,21 +2651,12 @@ nir_visitor::visit(ir_dereference_array *ir)
 void
 nir_visitor::visit(ir_barrier *)
 {
-   if (shader->options->use_scoped_barrier) {
-      if (shader->info.stage == MESA_SHADER_COMPUTE) {
-         nir_scoped_barrier(&b, NIR_SCOPE_WORKGROUP, NIR_SCOPE_WORKGROUP,
-                            NIR_MEMORY_ACQ_REL, nir_var_mem_shared);
-      } else if (shader->info.stage == MESA_SHADER_TESS_CTRL) {
-         nir_scoped_barrier(&b, NIR_SCOPE_WORKGROUP, NIR_SCOPE_WORKGROUP,
-                            NIR_MEMORY_ACQ_REL, nir_var_shader_out);
-      }
-   } else {
-      if (shader->info.stage == MESA_SHADER_COMPUTE)
-         nir_memory_barrier_shared(&b);
-      else if (shader->info.stage == MESA_SHADER_TESS_CTRL)
-         nir_memory_barrier_tcs_patch(&b);
-
-      nir_control_barrier(&b);
+   if (shader->info.stage == MESA_SHADER_COMPUTE) {
+      nir_scoped_barrier(&b, SCOPE_WORKGROUP, SCOPE_WORKGROUP,
+                         NIR_MEMORY_ACQ_REL, nir_var_mem_shared);
+   } else if (shader->info.stage == MESA_SHADER_TESS_CTRL) {
+      nir_scoped_barrier(&b, SCOPE_WORKGROUP, SCOPE_WORKGROUP,
+                         NIR_MEMORY_ACQ_REL, nir_var_shader_out);
    }
 }
 

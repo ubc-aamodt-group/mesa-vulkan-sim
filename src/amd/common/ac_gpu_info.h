@@ -7,14 +7,9 @@
 #ifndef AC_GPU_INFO_H
 #define AC_GPU_INFO_H
 
-#include "amd_family.h"
-
 #include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <stdio.h>
-
 #include "util/macros.h"
+#include "amd_family.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -94,7 +89,7 @@ struct radeon_info {
    bool cpdma_prefetch_writes_memory;
    bool has_gfx9_scissor_bug;
    bool has_tc_compat_zrange_bug;
-   bool has_msaa_sample_loc_bug;
+   bool has_small_prim_filter_sample_loc_bug;
    bool has_ls_vgpr_init_bug;
    bool has_zero_index_buffer_bug;
    bool has_image_load_dcc_bug;
@@ -167,8 +162,6 @@ struct radeon_info {
    uint32_t mec_fw_feature;
    uint32_t pfp_fw_version;
    uint32_t pfp_fw_feature;
-   bool has_set_reg_pairs;
-   bool has_set_sh_reg_pairs_n;
 
    /* Multimedia info. */
    uint32_t uvd_fw_version;
@@ -206,9 +199,24 @@ struct radeon_info {
    bool has_pcie_bandwidth_info;
    bool has_stable_pstate;
    /* Whether SR-IOV is enabled or amdgpu.mcbp=1 was set on the kernel command line. */
-   bool mid_command_buffer_preemption_enabled;
+   bool register_shadowing_required;
    bool has_tmz_support;
    bool kernel_has_modifiers;
+
+   /* If the kernel driver uses CU reservation for high priority compute on gfx10+, it programs
+    * a global CU mask in the hw that is AND'ed with CU_EN register fields set by userspace.
+    * The packet that does the AND'ing is SET_SH_REG_INDEX(index = 3). If you don't use
+    * SET_SH_REG_INDEX, the global CU mask will not be applied.
+    *
+    * If uses_kernel_cu_mask is true, use SET_SH_REG_INDEX.
+    *
+    * If uses_kernel_cu_mask is false, SET_SH_REG_INDEX shouldn't be used because it only
+    * increases CP overhead and doesn't have any other effect.
+    *
+    * The alternative to this is to set the AMD_CU_MASK environment variable that has the same
+    * effect on radeonsi and RADV and doesn't need SET_SH_REG_INDEX.
+    */
+   bool uses_kernel_cu_mask;
 
    /* Shader cores. */
    uint16_t cu_mask[AMD_MAX_SE][AMD_MAX_SA_PER_SE];

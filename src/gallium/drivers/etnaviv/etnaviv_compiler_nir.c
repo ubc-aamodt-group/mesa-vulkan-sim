@@ -763,7 +763,8 @@ lower_alu(struct etna_compile *c, nir_alu_instr *alu)
 
       nir_const_value value[4] = {};
       uint8_t swizzle[4][4] = {};
-      unsigned swiz_max = 0, num_const = 0;
+      unsigned swiz_max = 0, num_different_const_srcs = 0;
+      int first_const = -1;
 
       for (unsigned i = 0; i < info->num_inputs; i++) {
          nir_const_value *cv = nir_src_as_const_value(alu->src[i].src);
@@ -776,11 +777,16 @@ lower_alu(struct etna_compile *c, nir_alu_instr *alu)
             swizzle[i][j] = idx;
             swiz_max = MAX2(swiz_max, (unsigned) idx);
          }
-         num_const++;
+
+         if (first_const == -1)
+            first_const = i;
+
+         if (!nir_srcs_equal(alu->src[first_const].src, alu->src[i].src))
+            num_different_const_srcs++;
       }
 
       /* nothing to do */
-      if (num_const <= 1)
+      if (num_different_const_srcs == 0)
          return;
 
       /* resolve with single combined const src */
@@ -801,7 +807,7 @@ lower_alu(struct etna_compile *c, nir_alu_instr *alu)
       }
 
       /* resolve with movs */
-      num_const = 0;
+      unsigned num_const = 0;
       for (unsigned i = 0; i < info->num_inputs; i++) {
          nir_const_value *cv = nir_src_as_const_value(alu->src[i].src);
          if (!cv)
@@ -1133,10 +1139,12 @@ etna_compile_shader(struct etna_shader_variant *v)
                                           v->key.tex_swizzle);
 
    NIR_PASS_V(s, nir_lower_alu_to_scalar, etna_alu_to_scalar_filter_cb, specs);
-   nir_lower_idiv_options idiv_options = {
-      .allow_fp16 = true,
-   };
-   NIR_PASS_V(s, nir_lower_idiv, &idiv_options);
+   if (c->specs->halti >= 2) {
+      nir_lower_idiv_options idiv_options = {
+         .allow_fp16 = true,
+      };
+      NIR_PASS_V(s, nir_lower_idiv, &idiv_options);
+   }
    NIR_PASS_V(s, nir_lower_alu);
 
    etna_optimize_loop(s);
@@ -1172,8 +1180,7 @@ etna_compile_shader(struct etna_shader_variant *v)
 
    NIR_PASS_V(s, nir_move_vec_src_uses_to_dest);
    NIR_PASS_V(s, nir_copy_prop);
-   /* only HW supported integer source mod is ineg for iadd instruction (?) */
-   NIR_PASS_V(s, nir_lower_to_source_mods, ~nir_lower_int_source_mods);
+   NIR_PASS_V(s, nir_lower_to_source_mods, nir_lower_all_source_mods);
    /* need copy prop after uses_to_dest, and before src mods: see
     * dEQP-GLES2.functional.shaders.random.all_features.fragment.95
     */

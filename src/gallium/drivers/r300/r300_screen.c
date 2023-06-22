@@ -36,6 +36,7 @@
 #include "r300_screen_buffer.h"
 #include "r300_state_inlines.h"
 #include "r300_public.h"
+#include "compiler/r300_nir.h"
 
 #include "draw/draw_context.h"
 
@@ -144,6 +145,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_CLIP_HALFZ:
         case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
         case PIPE_CAP_LEGACY_MATH_RULES:
+        case PIPE_CAP_TGSI_TEXCOORD:
             return 1;
 
         case PIPE_CAP_TEXTURE_TRANSFER_MODES:
@@ -254,8 +256,6 @@ static int r300_get_shader_param(struct pipe_screen *pscreen,
    boolean is_r500 = r300screen->caps.is_r500;
 
    switch (param) {
-    case PIPE_SHADER_CAP_PREFERRED_IR:
-        return (r300screen->debug & DBG_USE_TGSI) ? PIPE_SHADER_IR_TGSI : PIPE_SHADER_IR_NIR;
     case PIPE_SHADER_CAP_SUPPORTED_IRS:
         return (1 << PIPE_SHADER_IR_NIR) | (1 << PIPE_SHADER_IR_TGSI);
     default:
@@ -493,13 +493,13 @@ static int r300_get_video_param(struct pipe_screen *screen,
    .lower_bitops = true,                      \
    .lower_extract_byte = true,                \
    .lower_extract_word = true,                \
+   .lower_fceil = true,                       \
    .lower_fdiv = true,                        \
    .lower_fdph = true,                        \
    .lower_ffloor = true,                      \
    .lower_flrp32 = true,                      \
    .lower_flrp64 = true,                      \
    .lower_fmod = true,                        \
-   .lower_fround_even = true,                 \
    .lower_fsign = true,                       \
    .lower_ftrunc = true,                      \
    .lower_insert_byte = true,                 \
@@ -512,6 +512,7 @@ static int r300_get_video_param(struct pipe_screen *screen,
 
 static const nir_shader_compiler_options r500_vs_compiler_options = {
    COMMON_NIR_OPTIONS,
+   .has_fused_comp_and_csel = true,
 
    /* Have HW loops support and 1024 max instr count, but don't unroll *too*
     * hard.
@@ -843,6 +844,7 @@ struct pipe_screen* r300_screen_create(struct radeon_winsys *rws,
     r300screen->screen.get_name = r300_get_name;
     r300screen->screen.get_vendor = r300_get_vendor;
     r300screen->screen.get_compiler_options = r300_get_compiler_options;
+    r300screen->screen.finalize_nir = r300_finalize_nir;
     r300screen->screen.get_device_vendor = r300_get_device_vendor;
     r300screen->screen.get_disk_shader_cache = r300_get_disk_shader_cache;
     r300screen->screen.get_screen_fd = r300_screen_get_fd;

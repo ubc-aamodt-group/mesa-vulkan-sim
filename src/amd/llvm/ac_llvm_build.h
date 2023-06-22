@@ -37,6 +37,7 @@ enum
 
 struct ac_llvm_flow;
 struct ac_llvm_compiler;
+struct radeon_info;
 
 struct ac_llvm_flow_state {
    struct ac_llvm_flow *stack;
@@ -111,13 +112,6 @@ struct ac_llvm_context {
    LLVMValueRef i1true;
    LLVMValueRef i1false;
 
-   /* Temporary helper to implement demote_to_helper:
-    * True = live lanes
-    * False = demoted lanes
-    */
-   LLVMValueRef postponed_kill;
-   bool conditional_demote_seen;
-
    /* Since ac_nir_translate makes a local copy of ac_llvm_context, there
     * are two ac_llvm_contexts. Declare a pointer here, so that the control
     * flow stack is shared by both ac_llvm_contexts.
@@ -129,9 +123,8 @@ struct ac_llvm_context {
    unsigned uniform_md_kind;
    LLVMValueRef empty_md;
 
+   const struct radeon_info *info;
    enum amd_gfx_level gfx_level;
-   enum radeon_family family;
-   bool has_3d_cube_border_color_mipmap;
 
    unsigned wave_size;
    unsigned ballot_mask_bits;
@@ -148,10 +141,9 @@ struct ac_llvm_context {
 };
 
 void ac_llvm_context_init(struct ac_llvm_context *ctx, struct ac_llvm_compiler *compiler,
-                          enum amd_gfx_level gfx_level, enum radeon_family family,
-                          bool has_3d_cube_border_color_mipmap,
-                          enum ac_float_mode float_mode, unsigned wave_size,
-                          unsigned ballot_mask_bits, bool exports_color_null, bool exports_mrtz);
+                          const struct radeon_info *info, enum ac_float_mode float_mode,
+                          unsigned wave_size, unsigned ballot_mask_bits, bool exports_color_null,
+                          bool exports_mrtz);
 
 void ac_llvm_context_dispose(struct ac_llvm_context *ctx);
 
@@ -181,7 +173,7 @@ LLVMValueRef ac_build_phi(struct ac_llvm_context *ctx, LLVMTypeRef type, unsigne
 void ac_build_s_barrier(struct ac_llvm_context *ctx, gl_shader_stage stage);
 void ac_build_optimization_barrier(struct ac_llvm_context *ctx, LLVMValueRef *pgpr, bool sgpr);
 
-LLVMValueRef ac_build_shader_clock(struct ac_llvm_context *ctx, nir_scope scope);
+LLVMValueRef ac_build_shader_clock(struct ac_llvm_context *ctx, mesa_scope scope);
 
 LLVMValueRef ac_build_ballot(struct ac_llvm_context *ctx, LLVMValueRef value);
 LLVMValueRef ac_get_i1_sgpr_mask(struct ac_llvm_context *ctx, LLVMValueRef value);
@@ -497,8 +489,6 @@ LLVMValueRef ac_build_ddxy_interp(struct ac_llvm_context *ctx, LLVMValueRef inte
 
 LLVMValueRef ac_build_load_helper_invocation(struct ac_llvm_context *ctx);
 
-LLVMValueRef ac_build_is_helper_invocation(struct ac_llvm_context *ctx);
-
 LLVMValueRef ac_build_call(struct ac_llvm_context *ctx, LLVMTypeRef fn_type, LLVMValueRef func,
                            LLVMValueRef *args, unsigned num_args);
 
@@ -519,9 +509,6 @@ struct ac_ngg_prim {
    LLVMValueRef edgeflags;
    LLVMValueRef passthrough;
 };
-
-LLVMValueRef ac_pack_edgeflags_for_export(struct ac_llvm_context *ctx,
-                                          const struct ac_shader_args *args);
 
 LLVMTypeRef ac_arg_type_to_pointee_type(struct ac_llvm_context *ctx, enum ac_arg_type type);
 

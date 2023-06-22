@@ -168,7 +168,8 @@ fs_inst::resize_sources(uint8_t num_sources)
 void
 fs_visitor::VARYING_PULL_CONSTANT_LOAD(const fs_builder &bld,
                                        const fs_reg &dst,
-                                       const fs_reg &surf_index,
+                                       const fs_reg &surface,
+                                       const fs_reg &surface_handle,
                                        const fs_reg &varying_offset,
                                        uint32_t const_offset,
                                        uint8_t alignment)
@@ -194,9 +195,15 @@ fs_visitor::VARYING_PULL_CONSTANT_LOAD(const fs_builder &bld,
     * result.
     */
    fs_reg vec4_result = bld.vgrf(BRW_REGISTER_TYPE_F, 4);
+
+   fs_reg srcs[PULL_VARYING_CONSTANT_SRCS];
+   srcs[PULL_VARYING_CONSTANT_SRC_SURFACE]        = surface;
+   srcs[PULL_VARYING_CONSTANT_SRC_SURFACE_HANDLE] = surface_handle;
+   srcs[PULL_VARYING_CONSTANT_SRC_OFFSET]         = vec4_offset;
+   srcs[PULL_VARYING_CONSTANT_SRC_ALIGNMENT]      = brw_imm_ud(alignment);
+
    fs_inst *inst = bld.emit(FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_LOGICAL,
-                            vec4_result, surf_index, vec4_offset,
-                            brw_imm_ud(alignment));
+                            vec4_result, srcs, PULL_VARYING_CONSTANT_SRCS);
    inst->size_written = 4 * vec4_result.component_size(inst->exec_size);
 
    shuffle_from_32bit_read(bld, dst, vec4_result,
@@ -258,7 +265,6 @@ fs_inst::is_control_source(unsigned arg) const
    case FS_OPCODE_INTERPOLATE_AT_SAMPLE:
    case FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET:
    case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
-   case SHADER_OPCODE_GET_BUFFER_SIZE:
       return arg == 1;
 
    case SHADER_OPCODE_MOV_INDIRECT:
@@ -819,6 +825,8 @@ fs_inst::components_read(unsigned i) const
       /* Surface operation source. */
       else if (i == SURFACE_LOGICAL_SRC_DATA)
          return lsc_op_num_data_values(op);
+      else
+         return 1;
    }
    case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
       return (i == 0 ? 2 : 1);
@@ -2514,6 +2522,7 @@ fs_visitor::lower_constant_loads()
 
          VARYING_PULL_CONSTANT_LOAD(ibld, inst->dst,
                                     brw_imm_ud(index),
+                                    fs_reg() /* surface_handle */,
                                     inst->src[1],
                                     pull_index * 4, 4);
          inst->remove(block);
@@ -2819,8 +2828,13 @@ fs_visitor::opt_algebraic()
 	 break;
       }
 
-      /* Swap if src[0] is immediate. */
-      if (progress && inst->is_commutative()) {
+      /* Ensure that the correct source has the immediate value. 2-source
+       * instructions must have the immediate in src[1]. On Gfx12 and later,
+       * some 3-source instructions can have the immediate in src[0] or
+       * src[2]. It's complicated, so don't mess with 3-source instructions
+       * here.
+       */
+      if (progress && inst->sources == 2 && inst->is_commutative()) {
          if (inst->src[0].file == IMM) {
             fs_reg tmp = inst->src[1];
             inst->src[1] = inst->src[0];
@@ -4998,7 +5012,6 @@ get_lowered_simd_width(const struct brw_compiler *compiler,
       return MIN2(8, inst->exec_size);
 
    case FS_OPCODE_LINTERP:
-   case SHADER_OPCODE_GET_BUFFER_SIZE:
    case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
    case FS_OPCODE_PACK_HALF_2x16_SPLIT:
    case FS_OPCODE_INTERPOLATE_AT_SAMPLE:
@@ -5680,29 +5693,25 @@ fs_visitor::lower_find_live_channel()
 }
 
 void
-fs_visitor::dump_instructions() const
+fs_visitor::dump_instructions_to_file(FILE *file) const
 {
-   dump_instructions(NULL);
-}
-
-void
-fs_visitor::dump_instructions(const char *name) const
-{
-   FILE *file = stderr;
-   if (name && geteuid() != 0) {
-      file = fopen(name, "w");
-      if (!file)
-         file = stderr;
-   }
-
    if (cfg) {
       const register_pressure &rp = regpressure_analysis.require();
       unsigned ip = 0, max_pressure = 0;
+      unsigned cf_count = 0;
       foreach_block_and_inst(block, backend_instruction, inst, cfg) {
+         if (inst->is_control_flow_end())
+            cf_count -= 1;
+
          max_pressure = MAX2(max_pressure, rp.regs_live_at_ip[ip]);
          fprintf(file, "{%3d} %4d: ", rp.regs_live_at_ip[ip], ip);
+         for (unsigned i = 0; i < cf_count; i++)
+            fprintf(file, "  ");
          dump_instruction(inst, file);
          ip++;
+
+         if (inst->is_control_flow_begin())
+            cf_count += 1;
       }
       fprintf(file, "Maximum %3d registers live at once.\n", max_pressure);
    } else {
@@ -5712,20 +5721,10 @@ fs_visitor::dump_instructions(const char *name) const
          dump_instruction(inst, file);
       }
    }
-
-   if (file != stderr) {
-      fclose(file);
-   }
 }
 
 void
-fs_visitor::dump_instruction(const backend_instruction *be_inst) const
-{
-   dump_instruction(be_inst, stderr);
-}
-
-void
-fs_visitor::dump_instruction(const backend_instruction *be_inst, FILE *file) const
+fs_visitor::dump_instruction_to_file(const backend_instruction *be_inst, FILE *file) const
 {
    const fs_inst *inst = (const fs_inst *)be_inst;
 
@@ -7399,8 +7398,15 @@ brw_nir_populate_wm_prog_data(const nir_shader *shader,
       (prog_data->barycentric_interp_modes &
       BRW_BARYCENTRIC_NONPERSPECTIVE_BITS) != 0;
 
-   /* You can't be coarse and per-sample */
-   assert(!key->coarse_pixel || !key->persample_interp);
+   /* The current VK_EXT_graphics_pipeline_library specification requires
+    * coarse to specified at compile time. But per sample interpolation can be
+    * dynamic. So we should never be in a situation where coarse &
+    * persample_interp are both respectively true & BRW_ALWAYS.
+    *
+    * Coarse will dynamically turned off when persample_interp is active.
+    */
+   assert(!key->coarse_pixel || key->persample_interp != BRW_ALWAYS);
+
    prog_data->coarse_pixel_dispatch =
       brw_sometimes_invert(prog_data->persample_dispatch);
    if (!key->coarse_pixel ||
@@ -7454,7 +7460,7 @@ brw_compile_fs(const struct brw_compiler *compiler,
    struct brw_wm_prog_data *prog_data = params->prog_data;
    bool allow_spilling = params->allow_spilling;
    const bool debug_enabled =
-      INTEL_DEBUG(params->debug_flag ? params->debug_flag : DEBUG_WM);
+      brw_should_print_shader(nir, params->debug_flag ? params->debug_flag : DEBUG_WM);
 
    prog_data->base.stage = MESA_SHADER_FRAGMENT;
    prog_data->base.ray_queries = nir->info.ray_queries;
@@ -7811,7 +7817,7 @@ brw_compile_cs(const struct brw_compiler *compiler,
    struct brw_cs_prog_data *prog_data = params->prog_data;
 
    const bool debug_enabled =
-      INTEL_DEBUG(params->debug_flag ? params->debug_flag : DEBUG_CS);
+      brw_should_print_shader(nir, params->debug_flag ? params->debug_flag : DEBUG_CS);
 
    prog_data->base.stage = MESA_SHADER_COMPUTE;
    prog_data->base.total_shared = nir->info.shared_size;
@@ -7960,7 +7966,7 @@ compile_single_bs(const struct brw_compiler *compiler, void *log_data,
                   int *prog_offset,
                   char **error_str)
 {
-   const bool debug_enabled = INTEL_DEBUG(DEBUG_RT);
+   const bool debug_enabled = brw_should_print_shader(shader, DEBUG_RT);
 
    prog_data->base.stage = shader->info.stage;
    prog_data->max_stack_size = MAX2(prog_data->max_stack_size,
@@ -8054,7 +8060,7 @@ brw_compile_bs(const struct brw_compiler *compiler,
    struct brw_bs_prog_data *prog_data = params->prog_data;
    unsigned num_resume_shaders = params->num_resume_shaders;
    nir_shader **resume_shaders = params->resume_shaders;
-   const bool debug_enabled = INTEL_DEBUG(DEBUG_RT);
+   const bool debug_enabled = brw_should_print_shader(shader, DEBUG_RT);
 
    prog_data->base.stage = shader->info.stage;
    prog_data->base.ray_queries = shader->info.ray_queries;
@@ -8160,4 +8166,9 @@ fs_visitor::workgroup_size() const
    assert(gl_shader_stage_uses_workgroup(stage));
    const struct brw_cs_prog_data *cs = brw_cs_prog_data(prog_data);
    return cs->local_size[0] * cs->local_size[1] * cs->local_size[2];
+}
+
+bool brw_should_print_shader(const nir_shader *shader, uint64_t debug_flag)
+{
+   return INTEL_DEBUG(debug_flag) && (!shader->info.internal || NIR_DEBUG(PRINT_INTERNAL));
 }

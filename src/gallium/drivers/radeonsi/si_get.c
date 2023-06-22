@@ -9,6 +9,7 @@
 #include "radeon_vce.h"
 #include "radeon_video.h"
 #include "si_pipe.h"
+#include "ac_llvm_util.h"
 #include "util/u_cpu_detect.h"
 #include "util/u_screen.h"
 #include "util/u_video.h"
@@ -390,6 +391,10 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_PCI_FUNCTION:
       return sscreen->info.pci.func;
 
+   case PIPE_CAP_TIMER_RESOLUTION:
+      /* Conversion to nanos from cycles per millisecond */
+      return DIV_ROUND_UP(1000000, sscreen->info.clock_crystal_freq);
+
    default:
       return u_pipe_screen_get_param_defaults(pscreen, param);
    }
@@ -434,6 +439,10 @@ static int si_get_shader_param(struct pipe_screen *pscreen, enum pipe_shader_typ
 {
    struct si_screen *sscreen = (struct si_screen *)pscreen;
 
+   if (shader == PIPE_SHADER_MESH ||
+       shader == PIPE_SHADER_TASK)
+      return 0;
+
    switch (param) {
    /* Shader limits. */
    case PIPE_SHADER_CAP_MAX_INSTRUCTIONS:
@@ -459,8 +468,6 @@ static int si_get_shader_param(struct pipe_screen *pscreen, enum pipe_shader_typ
       return SI_NUM_SHADER_BUFFERS;
    case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
       return SI_NUM_IMAGES;
-   case PIPE_SHADER_CAP_PREFERRED_IR:
-      return PIPE_SHADER_IR_NIR;
 
    case PIPE_SHADER_CAP_SUPPORTED_IRS:
       if (shader == PIPE_SHADER_COMPUTE) {
@@ -510,7 +517,7 @@ static const void *si_get_compiler_options(struct pipe_screen *screen, enum pipe
    struct si_screen *sscreen = (struct si_screen *)screen;
 
    assert(ir == PIPE_SHADER_IR_NIR);
-   return &sscreen->nir_options;
+   return sscreen->nir_options;
 }
 
 static void si_get_driver_uuid(struct pipe_screen *pscreen, char *uuid)
@@ -754,10 +761,7 @@ static int si_get_video_param(struct pipe_screen *screen, enum pipe_video_profil
 	      sscreen->info.ip[AMD_IP_VCN_DEC].num_queues)))
          return false;
       if (QUERYABLE_KERNEL &&
-          codec != PIPE_VIDEO_FORMAT_JPEG &&
-          codec != PIPE_VIDEO_FORMAT_HEVC &&
-          !(sscreen->info.family == CHIP_POLARIS10 ||
-            sscreen->info.family == CHIP_POLARIS11))
+          sscreen->info.vcn_ip_version >= VCN_1_0_0)
          return KERNEL_DEC_CAP(codec, valid);
       if (codec < PIPE_VIDEO_FORMAT_MPEG4_AVC &&
           sscreen->info.vcn_ip_version >= VCN_3_0_33)
@@ -994,9 +998,10 @@ static int si_get_compute_param(struct pipe_screen *screen, enum pipe_shader_ir 
    case PIPE_COMPUTE_CAP_MAX_GRID_SIZE:
       if (ret) {
          uint64_t *grid_size = ret;
+         /* Use this size, so that internal counters don't overflow 64 bits. */
          grid_size[0] = UINT32_MAX;
-         grid_size[1] = UINT32_MAX;
-         grid_size[2] = UINT32_MAX;
+         grid_size[1] = UINT16_MAX;
+         grid_size[2] = UINT16_MAX;
       }
       return 3 * sizeof(uint64_t);
 
@@ -1284,14 +1289,16 @@ void si_init_screen_get_functions(struct si_screen *sscreen)
       .lower_fisnormal = true,
       .lower_rotate = true,
       .lower_to_scalar = true,
+      .lower_to_scalar_filter = sscreen->info.has_packed_math_16bit ?
+                                   si_alu_to_scalar_packed_math_filter : NULL,
       .lower_int64_options = nir_lower_imul_2x32_64 | nir_lower_imul_high64,
       .has_sdot_4x8 = sscreen->info.has_accelerated_dot_product,
       .has_sudot_4x8 = sscreen->info.has_accelerated_dot_product && sscreen->info.gfx_level >= GFX11,
       .has_udot_4x8 = sscreen->info.has_accelerated_dot_product,
       .has_dot_2x16 = sscreen->info.has_accelerated_dot_product && sscreen->info.gfx_level < GFX11,
       .optimize_sample_mask_in = true,
-      .max_unroll_iterations = LLVM_VERSION_MAJOR >= 13 ? 128 : 32,
-      .max_unroll_iterations_aggressive = LLVM_VERSION_MAJOR >= 13 ? 128 : 32,
+      .max_unroll_iterations = 128,
+      .max_unroll_iterations_aggressive = 128,
       .use_interpolated_input_intrinsics = true,
       .lower_uniforms_to_ubo = true,
       .support_16bit_alu = sscreen->info.gfx_level >= GFX8,
@@ -1322,5 +1329,5 @@ void si_init_screen_get_functions(struct si_screen *sscreen)
          nir_lower_divmod64 | nir_lower_minmax64 | nir_lower_iabs64 |
          nir_lower_iadd_sat64,
    };
-   sscreen->nir_options = nir_options;
+   *sscreen->nir_options = nir_options;
 }

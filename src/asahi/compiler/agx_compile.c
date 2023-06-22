@@ -365,6 +365,25 @@ agx_emit_load_vary_flat(agx_builder *b, agx_index dest,
    agx_emit_collect_to(b, dest, components, dests);
 }
 
+static enum agx_interpolation
+agx_interp_for_bary(nir_intrinsic_instr *bary, agx_index *sample_index)
+{
+   switch (bary->intrinsic) {
+   case nir_intrinsic_load_barycentric_pixel:
+      return AGX_INTERPOLATION_CENTER;
+
+   case nir_intrinsic_load_barycentric_centroid:
+      return AGX_INTERPOLATION_CENTROID;
+
+   case nir_intrinsic_load_barycentric_at_sample:
+      *sample_index = agx_src_index(&bary->src[0]);
+      return AGX_INTERPOLATION_SAMPLE;
+
+   default:
+      unreachable("should have been lowered");
+   }
+}
+
 static void
 agx_emit_load_vary(agx_builder *b, agx_index dest, nir_intrinsic_instr *instr)
 {
@@ -373,9 +392,8 @@ agx_emit_load_vary(agx_builder *b, agx_index dest, nir_intrinsic_instr *instr)
 
    assert(components >= 1 && components <= 4);
 
-   /* TODO: Interpolation modes */
-   assert(bary != NULL);
-   assert(bary->intrinsic == nir_intrinsic_load_barycentric_pixel);
+   agx_index sample_index = agx_zero();
+   enum agx_interpolation interp = agx_interp_for_bary(bary, &sample_index);
 
    bool perspective =
       nir_intrinsic_interp_mode(bary) != INTERP_MODE_NOPERSPECTIVE;
@@ -388,16 +406,18 @@ agx_emit_load_vary(agx_builder *b, agx_index dest, nir_intrinsic_instr *instr)
              nir_component_mask(components) &&
           "iter does not handle write-after-write hazards");
 
-   /* For perspective interpolation, we need W */
-   agx_index J =
-      !perspective ? agx_zero()
-                   : agx_get_cf(b->shader, true, false, VARYING_SLOT_POS, 3, 1);
-
    agx_index I = agx_get_cf(b->shader, true, perspective,
                             sem.location + nir_src_as_uint(*offset),
                             nir_intrinsic_component(instr), components);
 
-   agx_iter_to(b, dest, I, J, components, perspective);
+   /* For perspective interpolation, we project (multiply by 1/W) */
+   if (perspective) {
+      agx_index J = agx_get_cf(b->shader, true, false, VARYING_SLOT_POS, 3, 1);
+      agx_iterproj_to(b, dest, I, J, sample_index, components, interp);
+   } else {
+      agx_iter_to(b, dest, I, sample_index, components, interp);
+   }
+
    agx_emit_cached_split(b, dest, components);
 }
 
@@ -419,26 +439,6 @@ agx_emit_store_vary(agx_builder *b, nir_intrinsic_instr *instr)
                       agx_src_index(&instr->src[0]));
 }
 
-static void
-agx_write_sample_mask_1(agx_builder *b)
-{
-   if (b->shader->nir->info.fs.uses_discard && !b->shader->did_sample_mask) {
-      /* If the shader uses discard, the sample mask must be written by the
-       * shader on all execution paths. If we've reached the end of the shader,
-       * we are therefore still active and need to write a full sample mask.
-       * TODO: interactions with MSAA and gl_SampleMask writes
-       */
-      agx_sample_mask(b, agx_immediate(1));
-      agx_signal_pix(b, 1);
-      b->shader->did_sample_mask = true;
-
-      assert(!(b->shader->nir->info.outputs_written &
-               (BITFIELD64_BIT(FRAG_RESULT_DEPTH) |
-                BITFIELD64_BIT(FRAG_RESULT_STENCIL))) &&
-             "incompatible");
-   }
-}
-
 static agx_instr *
 agx_emit_local_store_pixel(agx_builder *b, nir_intrinsic_instr *instr)
 {
@@ -451,8 +451,6 @@ agx_emit_local_store_pixel(agx_builder *b, nir_intrinsic_instr *instr)
       agx_wait_pix(b, 0x000C);
    }
 
-   agx_write_sample_mask_1(b);
-
    /* Compact the registers according to the mask */
    agx_index compacted[4] = {agx_null()};
 
@@ -464,6 +462,7 @@ agx_emit_local_store_pixel(agx_builder *b, nir_intrinsic_instr *instr)
    agx_index collected = agx_emit_collect(b, compact_count, compacted);
 
    b->shader->did_writeout = true;
+   b->shader->out->tag_write_disable = false;
    return agx_st_tile(b, collected, agx_src_index(&instr->src[1]),
                       agx_format_for_pipe(nir_intrinsic_format(instr)),
                       nir_intrinsic_write_mask(instr),
@@ -499,7 +498,6 @@ agx_emit_store_zs(agx_builder *b, nir_intrinsic_instr *instr)
     * maybe rename this flag to something more general.
     */
    b->shader->out->writes_sample_mask = true;
-   assert(!b->shader->did_sample_mask && "incompatible");
 
    return agx_zs_emit(b, agx_src_index(&instr->src[0]), zs, base);
 }
@@ -665,31 +663,11 @@ agx_emit_load_frag_coord(agx_builder *b, agx_index dst,
             agx_get_cf(b->shader, true, false, VARYING_SLOT_POS, i, 1);
 
          dests[i] = fp32;
-         agx_iter_to(b, fp32, cf, agx_null(), 1, false);
+         agx_iter_to(b, fp32, cf, agx_zero(), 1, AGX_INTERPOLATION_CENTER);
       }
    }
 
    agx_emit_collect_to(b, dst, 4, dests);
-}
-
-/*
- * Demoting a helper invocation is logically equivalent to zeroing the sample
- * mask. Metal implement discard as such.
- *
- * XXX: Actually, Metal's "discard" is a demote, and what is implemented here
- * is a demote. There might be a better way to implement this to get correct
- * helper invocation semantics. For now, I'm kicking the can down the road.
- */
-static agx_instr *
-agx_emit_discard(agx_builder *b)
-{
-   assert(!b->shader->key->fs.ignore_tib_dependencies && "invalid usage");
-   agx_wait_pix(b, 0x0001);
-   b->shader->did_writeout = true;
-
-   b->shader->out->writes_sample_mask = true;
-   agx_sample_mask(b, agx_immediate(0));
-   return agx_signal_pix(b, 1);
 }
 
 static agx_instr *
@@ -752,12 +730,12 @@ agx_emit_atomic(agx_builder *b, agx_index dst, nir_intrinsic_instr *instr,
       translate_atomic_opcode(nir_intrinsic_atomic_op(instr));
    agx_index base =
       local ? agx_local_base(instr->src[0]) : agx_src_index(&instr->src[0]);
-   agx_index value = agx_src_index(&instr->src[1]);
-   agx_index index = agx_zero(); /* TODO: optimize address arithmetic? */
+   agx_index value = agx_src_index(&instr->src[local ? 1 : 2]);
+   agx_index index = local ? agx_zero() : agx_src_index(&instr->src[1]);
 
    /* cmpxchg (only) takes 2 sources, passed in consecutive registers */
    if (op == AGX_ATOMIC_OPC_CMPXCHG) {
-      agx_index value2 = agx_src_index(&instr->src[2]);
+      agx_index value2 = agx_src_index(&instr->src[local ? 2 : 3]);
       value = agx_vec2(b, value2, value);
    }
 
@@ -814,7 +792,6 @@ agx_emit_intrinsic(agx_builder *b, nir_intrinsic_instr *instr)
    switch (instr->intrinsic) {
    case nir_intrinsic_load_barycentric_pixel:
    case nir_intrinsic_load_barycentric_centroid:
-   case nir_intrinsic_load_barycentric_sample:
    case nir_intrinsic_load_barycentric_at_sample:
    case nir_intrinsic_load_barycentric_at_offset:
       /* handled later via load_vary */
@@ -850,8 +827,8 @@ agx_emit_intrinsic(agx_builder *b, nir_intrinsic_instr *instr)
       agx_emit_local_load(b, dst, instr);
       return NULL;
 
-   case nir_intrinsic_global_atomic:
-   case nir_intrinsic_global_atomic_swap:
+   case nir_intrinsic_global_atomic_agx:
+   case nir_intrinsic_global_atomic_swap_agx:
       agx_emit_atomic(b, dst, instr, false);
       return NULL;
 
@@ -877,11 +854,20 @@ agx_emit_intrinsic(agx_builder *b, nir_intrinsic_instr *instr)
       agx_emit_load_frag_coord(b, dst, instr);
       return NULL;
 
-   case nir_intrinsic_discard:
-      return agx_emit_discard(b);
+   case nir_intrinsic_sample_mask_agx: {
+      assert(stage == MESA_SHADER_FRAGMENT);
+      b->shader->out->writes_sample_mask = true;
+
+      agx_wait_pix(b, 0x0001);
+      return agx_sample_mask(b, agx_src_index(&instr->src[0]),
+                             agx_src_index(&instr->src[1]));
+   }
 
    case nir_intrinsic_load_back_face_agx:
       return agx_get_sr_to(b, dst, AGX_SR_BACKFACING);
+
+   case nir_intrinsic_load_sample_mask_in:
+      return agx_get_sr_to(b, dst, AGX_SR_INPUT_SAMPLE_MASK);
 
    case nir_intrinsic_load_helper_invocation:
       /* Compare special register to zero. We could lower this in NIR (letting
@@ -921,14 +907,14 @@ agx_emit_intrinsic(agx_builder *b, nir_intrinsic_instr *instr)
    case nir_intrinsic_scoped_barrier: {
       bool needs_threadgroup_barrier = false;
 
-      if (nir_intrinsic_execution_scope(instr) != NIR_SCOPE_NONE) {
-         assert(nir_intrinsic_execution_scope(instr) > NIR_SCOPE_SUBGROUP &&
+      if (nir_intrinsic_execution_scope(instr) != SCOPE_NONE) {
+         assert(nir_intrinsic_execution_scope(instr) > SCOPE_SUBGROUP &&
                 "todo: subgroup barriers");
 
          needs_threadgroup_barrier = true;
       }
 
-      if (nir_intrinsic_memory_scope(instr) != NIR_SCOPE_NONE) {
+      if (nir_intrinsic_memory_scope(instr) != SCOPE_NONE) {
          nir_variable_mode modes = nir_intrinsic_memory_modes(instr);
 
          if (modes & nir_var_mem_global)
@@ -937,7 +923,7 @@ agx_emit_intrinsic(agx_builder *b, nir_intrinsic_instr *instr)
          if (modes & nir_var_mem_shared)
             needs_threadgroup_barrier = true;
 
-         if (nir_intrinsic_memory_scope(instr) >= NIR_SCOPE_WORKGROUP)
+         if (nir_intrinsic_memory_scope(instr) >= SCOPE_WORKGROUP)
             needs_threadgroup_barrier = true;
       }
 
@@ -946,6 +932,11 @@ agx_emit_intrinsic(agx_builder *b, nir_intrinsic_instr *instr)
 
       return NULL;
    }
+
+   case nir_intrinsic_load_barycentric_sample:
+   case nir_intrinsic_load_sample_id:
+   case nir_intrinsic_load_sample_pos:
+      unreachable("Sample shading should have been lowered");
 
    default:
       fprintf(stderr, "Unhandled intrinsic %s\n",
@@ -1145,6 +1136,17 @@ agx_emit_alu(agx_builder *b, nir_alu_instr *instr)
    case nir_op_extr_agx:
       return agx_extr_to(b, dst, s0, s1, s2,
                          nir_alu_src_as_uint(instr->src[3]));
+
+   case nir_op_ubitfield_extract: {
+      unsigned m = nir_alu_src_as_uint(instr->src[2]);
+      assert(m != 0 && "should've been optimized");
+
+      /* Disable masking if the whole thing is used */
+      if (m >= 32)
+         m = 0;
+
+      return agx_bfeil_to(b, dst, i0, s0, s1, m);
+   }
 
    case nir_op_bcsel:
       return agx_icmpsel_to(b, dst, s0, i0, s2, s1, AGX_ICOND_UEQ);
@@ -1966,6 +1968,7 @@ agx_optimize_nir(nir_shader *nir, unsigned *preamble_size)
          progress = false;
 
          NIR_PASS(progress, nir, nir_opt_algebraic);
+         NIR_PASS(progress, nir, nir_opt_constant_folding);
          NIR_PASS(progress, nir, nir_opt_dce);
       } while (progress);
    }
@@ -2037,8 +2040,7 @@ agx_remap_varyings_vs(nir_shader *nir, struct agx_varyings_vs *varyings)
    varyings->slots[VARYING_SLOT_POS] = base;
    base += 4;
 
-   u_foreach_bit64(loc, nir->info.outputs_written)
-   {
+   u_foreach_bit64(loc, nir->info.outputs_written) {
       if (loc == VARYING_SLOT_POS || loc == VARYING_SLOT_PSIZ)
          continue;
 
@@ -2132,7 +2134,8 @@ agx_fp32_varying_mask(nir_shader *nir)
 }
 
 static nir_mem_access_size_align
-mem_access_size_align_cb(nir_intrinsic_op intrin, uint8_t bytes, uint32_t align,
+mem_access_size_align_cb(nir_intrinsic_op intrin, uint8_t bytes,
+                         uint8_t input_bit_size, uint32_t align,
                          uint32_t align_offset, bool offset_is_const,
                          const void *cb_data)
 {
@@ -2186,10 +2189,6 @@ agx_compile_function_nir(nir_shader *nir, nir_function_impl *impl,
     */
    agx_block *last_block = list_last_entry(&ctx->blocks, agx_block, link);
    agx_builder _b = agx_init_builder(ctx, agx_after_block(last_block));
-
-   if (ctx->stage == MESA_SHADER_FRAGMENT && !impl->function->is_preamble)
-      agx_write_sample_mask_1(&_b);
-
    agx_logical_end(&_b);
    agx_stop(&_b);
 
@@ -2384,41 +2383,20 @@ agx_compile_shader_nir(nir_shader *nir, struct agx_shader_key *key,
           "agx_preprocess_nir is called first, then the shader is specalized,"
           "then the specialized shader is compiled");
 
-   if (nir->info.stage == MESA_SHADER_VERTEX) {
-      out->writes_psiz =
-         nir->info.outputs_written & BITFIELD_BIT(VARYING_SLOT_PSIZ);
-   } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
-      out->tag_write_disable =
-         !(nir->info.outputs_written >> FRAG_RESULT_DATA0);
-      out->disable_tri_merging = nir->info.fs.needs_all_helper_invocations ||
-                                 nir->info.fs.needs_quad_helper_invocations ||
-                                 nir->info.writes_memory;
+   out->nr_bindful_textures = BITSET_LAST_BIT(nir->info.textures_used);
 
-      /* Report a canonical depth layout */
-      enum gl_frag_depth_layout layout = nir->info.fs.depth_layout;
-
-      if (!(nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_DEPTH)))
-         out->depth_layout = FRAG_DEPTH_LAYOUT_UNCHANGED;
-      else if (layout == FRAG_DEPTH_LAYOUT_NONE)
-         out->depth_layout = FRAG_DEPTH_LAYOUT_ANY;
-      else
-         out->depth_layout = layout;
-   }
-
-   out->nr_bindful_textures = nir->info.num_textures;
-
-   /* Late clip plane lowering created discards */
-   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
-      NIR_PASS_V(nir, agx_nir_lower_zs_emit);
-   }
+   /* If required, tag writes will be enabled by instruction selection */
+   if (nir->info.stage == MESA_SHADER_FRAGMENT)
+      out->tag_write_disable = true;
 
    /* Late sysval lowering creates large loads. Load lowering creates unpacks */
-   NIR_PASS_V(nir, nir_lower_mem_access_bit_sizes,
-              nir_var_mem_ssbo | nir_var_mem_constant |
-                 nir_var_mem_task_payload | nir_var_shader_temp |
-                 nir_var_function_temp | nir_var_mem_global |
-                 nir_var_mem_shared,
-              mem_access_size_align_cb, NULL);
+   nir_lower_mem_access_bit_sizes_options lower_mem_access_options = {
+      .modes = nir_var_mem_ssbo | nir_var_mem_constant |
+               nir_var_mem_task_payload | nir_var_shader_temp |
+               nir_var_function_temp | nir_var_mem_global | nir_var_mem_shared,
+      .callback = mem_access_size_align_cb,
+   };
+   NIR_PASS_V(nir, nir_lower_mem_access_bit_sizes, &lower_mem_access_options);
    NIR_PASS_V(nir, nir_lower_pack);
 
    /* Late blend lowering creates vectors */
@@ -2437,10 +2415,16 @@ agx_compile_shader_nir(nir_shader *nir, struct agx_shader_key *key,
    out->push_count = key->reserved_preamble;
    agx_optimize_nir(nir, &out->push_count);
 
-   /* Implement conditional discard with real control flow like Metal */
-   NIR_PASS_V(nir, nir_lower_discard_if,
-              (nir_lower_discard_if_to_cf | nir_lower_demote_if_to_cf |
-               nir_lower_terminate_if_to_cf));
+   /* Create sample_mask instructions late, since NIR's scheduling is not aware
+    * of the ordering requirements between sample_mask and pixel stores.
+    *
+    * Note: when epilogs are used, special handling is required since the sample
+    * count is dynamic when the main fragment shader is compiled.
+    */
+   if (key->fs.nr_samples) {
+      assert(nir->info.stage == MESA_SHADER_FRAGMENT);
+      NIR_PASS_V(nir, agx_nir_lower_sample_mask, key->fs.nr_samples);
+   }
 
    /* Must be last since NIR passes can remap driver_location freely */
    if (nir->info.stage == MESA_SHADER_VERTEX)
@@ -2464,5 +2448,29 @@ agx_compile_shader_nir(nir_shader *nir, struct agx_shader_key *key,
       } else {
          unreachable("General functions not yet supported");
       }
+   }
+
+   if (nir->info.stage == MESA_SHADER_VERTEX) {
+      out->writes_psiz =
+         nir->info.outputs_written & BITFIELD_BIT(VARYING_SLOT_PSIZ);
+   } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+      out->disable_tri_merging = nir->info.fs.needs_all_helper_invocations ||
+                                 nir->info.fs.needs_quad_helper_invocations ||
+                                 nir->info.writes_memory;
+
+      /* Writing the sample mask requires tag writes */
+      out->tag_write_disable &= !out->writes_sample_mask;
+
+      /* Report a canonical depth layout. This happens at the end because the
+       * sample mask lowering affects it.
+       */
+      enum gl_frag_depth_layout layout = nir->info.fs.depth_layout;
+
+      if (!(nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_DEPTH)))
+         out->depth_layout = FRAG_DEPTH_LAYOUT_UNCHANGED;
+      else if (layout == FRAG_DEPTH_LAYOUT_NONE)
+         out->depth_layout = FRAG_DEPTH_LAYOUT_ANY;
+      else
+         out->depth_layout = layout;
    }
 }

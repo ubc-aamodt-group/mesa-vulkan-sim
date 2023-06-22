@@ -68,7 +68,7 @@ fetch_pipeline_middle_end(struct draw_pt_middle_end *middle)
  */
 static void
 fetch_pipeline_prepare(struct draw_pt_middle_end *middle,
-                       enum pipe_prim_type prim,
+                       enum mesa_prim prim,
                        unsigned opt,
                        unsigned *max_vertices)
 {
@@ -83,8 +83,8 @@ fetch_pipeline_prepare(struct draw_pt_middle_end *middle,
    unsigned nr = MAX2(vs->info.num_inputs, nr_vs_outputs);
    unsigned point_line_clip = draw->rasterizer->fill_front == PIPE_POLYGON_MODE_POINT ||
                               draw->rasterizer->fill_front == PIPE_POLYGON_MODE_LINE ||
-                              gs_out_prim == PIPE_PRIM_POINTS ||
-                              gs_out_prim == PIPE_PRIM_LINE_STRIP;
+                              gs_out_prim == MESA_PRIM_POINTS ||
+                              gs_out_prim == MESA_PRIM_LINE_STRIP;
 
    if (gs) {
       nr = MAX2(nr, gs->info.num_outputs + 1);
@@ -195,8 +195,7 @@ emit(struct pt_emit *emit,
 
 static void
 draw_vertex_shader_run(struct draw_vertex_shader *vshader,
-                       const void *constants[PIPE_MAX_CONSTANT_BUFFERS],
-                       unsigned const_size[PIPE_MAX_CONSTANT_BUFFERS],
+                       const struct draw_buffer_info *constants,
                        const struct draw_fetch_info *fetch_info,
                        const struct draw_vertex_info *input_verts,
                        struct draw_vertex_info *output_verts)
@@ -213,7 +212,6 @@ draw_vertex_shader_run(struct draw_vertex_shader *vshader,
                        (const float (*)[4])input_verts->verts->data,
                        (      float (*)[4])output_verts->verts->data,
                        constants,
-                       const_size,
                        input_verts->count,
                        input_verts->vertex_size,
                        input_verts->vertex_size,
@@ -272,8 +270,7 @@ fetch_pipeline_generic(struct draw_pt_middle_end *middle,
     */
    if (fpme->opt & PT_SHADE) {
       draw_vertex_shader_run(vshader,
-                             draw->pt.user.vs_constants,
-                             draw->pt.user.vs_constants_size,
+                             draw->pt.user.constants[PIPE_SHADER_VERTEX],
                              fetch_info,
                              vert_info,
                              &vs_vert_info);
@@ -288,8 +285,7 @@ fetch_pipeline_generic(struct draw_pt_middle_end *middle,
 
    if ((fpme->opt & PT_SHADE) && gshader) {
       draw_geometry_shader_run(gshader,
-                               draw->pt.user.gs_constants,
-                               draw->pt.user.gs_constants_size,
+                               draw->pt.user.constants[PIPE_SHADER_GEOMETRY],
                                vert_info,
                                prim_info,
                                &vshader->info,
@@ -372,7 +368,7 @@ static inline unsigned
 prim_type(unsigned prim, unsigned flags)
 {
    if (flags & DRAW_LINE_LOOP_AS_STRIP)
-      return PIPE_PRIM_LINE_STRIP;
+      return MESA_PRIM_LINE_STRIP;
    else
       return prim;
 }

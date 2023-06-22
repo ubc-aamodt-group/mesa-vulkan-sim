@@ -88,7 +88,7 @@ blorp_blit_get_frag_coords(nir_builder *b,
       return nir_vec3(b, nir_channel(b, coord, 0), nir_channel(b, coord, 1),
                       nir_load_sample_id(b));
    } else {
-      return nir_vec2(b, nir_channel(b, coord, 0), nir_channel(b, coord, 1));
+      return nir_trim_vector(b, coord, 2);
    }
 }
 
@@ -111,7 +111,7 @@ blorp_blit_get_cs_dst_coords(nir_builder *b,
       coord = nir_isub(b, coord, nir_load_var(b, v->v_dst_offset));
 
    assert(!key->persample_msaa_dispatch);
-   return nir_channels(b, coord, 0x3);
+   return nir_trim_vector(b, coord, 2);
 }
 
 /**
@@ -162,8 +162,7 @@ blorp_create_nir_tex_instr(nir_builder *b, struct brw_blorp_blit_vars *v,
                         nir_load_var(b, v->v_src_z));
    }
 
-   tex->src[0].src_type = nir_tex_src_coord;
-   tex->src[0].src = nir_src_for_ssa(pos);
+   tex->src[0] = nir_tex_src_for_ssa(nir_tex_src_coord, pos);
    tex->coord_components = 3;
 
    nir_ssa_dest_init(&tex->instr, &tex->dest, 4, 32);
@@ -188,8 +187,7 @@ blorp_nir_tex(nir_builder *b, struct brw_blorp_blit_vars *v,
 
    assert(pos->num_components == 2);
    tex->sampler_dim = GLSL_SAMPLER_DIM_2D;
-   tex->src[1].src_type = nir_tex_src_lod;
-   tex->src[1].src = nir_src_for_ssa(nir_imm_int(b, 0));
+   tex->src[1] = nir_tex_src_for_ssa(nir_tex_src_lod, nir_imm_int(b, 0));
 
    nir_builder_instr_insert(b, &tex->instr);
 
@@ -204,8 +202,7 @@ blorp_nir_txf(nir_builder *b, struct brw_blorp_blit_vars *v,
       blorp_create_nir_tex_instr(b, v, nir_texop_txf, pos, 2, dst_type);
 
    tex->sampler_dim = GLSL_SAMPLER_DIM_3D;
-   tex->src[1].src_type = nir_tex_src_lod;
-   tex->src[1].src = nir_src_for_ssa(nir_imm_int(b, 0));
+   tex->src[1] = nir_tex_src_for_ssa(nir_tex_src_lod, nir_imm_int(b, 0));
 
    nir_builder_instr_insert(b, &tex->instr);
 
@@ -232,8 +229,7 @@ blorp_nir_txf_ms(nir_builder *b, struct brw_blorp_blit_vars *v,
    if (!mcs)
       mcs = nir_imm_zero(b, 4, 32);
 
-   tex->src[2].src_type = nir_tex_src_ms_mcs_intel;
-   tex->src[2].src = nir_src_for_ssa(mcs);
+   tex->src[2] = nir_tex_src_for_ssa(nir_tex_src_ms_mcs_intel, mcs);
 
    nir_builder_instr_insert(b, &tex->instr);
 
@@ -722,7 +718,7 @@ blorp_nir_manual_blend_bilinear(nir_builder *b, nir_ssa_def *pos,
                                 const struct brw_blorp_blit_prog_key *key,
                                 struct brw_blorp_blit_vars *v)
 {
-   nir_ssa_def *pos_xy = nir_channels(b, pos, 0x3);
+   nir_ssa_def *pos_xy = nir_trim_vector(b, pos, 2);
    nir_ssa_def *rect_grid = nir_load_var(b, v->v_rect_grid);
    nir_ssa_def *scale = nir_imm_vec2(b, key->x_scale, key->y_scale);
 
@@ -738,8 +734,7 @@ blorp_nir_manual_blend_bilinear(nir_builder *b, nir_ssa_def *pos,
     * texels on texture edges.
     */
    pos_xy = nir_fmin(b, nir_fmax(b, pos_xy, nir_imm_float(b, 0.0)),
-                        nir_vec2(b, nir_channel(b, rect_grid, 0),
-                                    nir_channel(b, rect_grid, 1)));
+                        nir_trim_vector(b, rect_grid, 2));
 
    /* Store the fractional parts to be used as bilinear interpolation
     * coefficients.
@@ -840,7 +835,7 @@ blorp_nir_manual_blend_bilinear(nir_builder *b, nir_ssa_def *pos,
                                           nir_imm_int(b, 2))),
                      nir_imm_int(b, 0xf));
 
-         sample = nir_bcsel(b, nir_ilt(b, sample, nir_imm_int(b, 8)),
+         sample = nir_bcsel(b, nir_ilt_imm(b, sample, 8),
                             sample_low, sample_high);
       }
       nir_ssa_def *pos_ms = nir_vec3(b, nir_channel(b, sample_coords_int, 0),
@@ -1291,7 +1286,7 @@ brw_blorp_build_nir_shader(struct blorp_context *blorp,
     * number 0, because that's the only sample there is.
     */
    if (key->src_samples == 1)
-      src_pos = nir_channels(&b, src_pos, 0x3);
+      src_pos = nir_trim_vector(&b, src_pos, 2);
 
    /* X, Y, and S are now the coordinates of the pixel in the source image
     * that we want to texture from.  Exception: if we are blending, then S is
@@ -1378,7 +1373,7 @@ brw_blorp_build_nir_shader(struct blorp_context *blorp,
       /* Resolves (effecively) use texelFetch, so we need integers and we
        * don't care about the sample index if we got one.
        */
-      src_pos = nir_f2i32(&b, nir_channels(&b, src_pos, 0x3));
+      src_pos = nir_f2i32(&b, nir_trim_vector(&b, src_pos, 2));
 
       if (devinfo->ver == 6) {
          /* Because gfx6 only supports 4x interleved MSAA, we can do all the
@@ -2439,7 +2434,7 @@ blorp_blit_supports_compute(struct blorp_context *blorp,
       return false;
 
    if (blorp->isl_dev->info->ver >= 12) {
-      return dst_aux_usage == ISL_AUX_USAGE_GFX12_CCS_E ||
+      return dst_aux_usage == ISL_AUX_USAGE_FCV_CCS_E ||
              dst_aux_usage == ISL_AUX_USAGE_CCS_E ||
              dst_aux_usage == ISL_AUX_USAGE_NONE;
    } else if (blorp->isl_dev->info->ver >= 7) {
@@ -2458,7 +2453,7 @@ blorp_blitter_supports_aux(const struct intel_device_info *devinfo,
    case ISL_AUX_USAGE_NONE:
       return true;
    case ISL_AUX_USAGE_CCS_E:
-   case ISL_AUX_USAGE_GFX12_CCS_E:
+   case ISL_AUX_USAGE_FCV_CCS_E:
       return devinfo->verx10 >= 125;
    default:
       return false;
@@ -2725,7 +2720,7 @@ get_ccs_compatible_copy_format(const struct isl_format_layout *fmtl)
       return ISL_FORMAT_R32_UINT;
 
    case ISL_FORMAT_R11G11B10_FLOAT:
-      return ISL_FORMAT_R32_UINT;
+      return ISL_FORMAT_R8G8B8A8_UINT;
 
    case ISL_FORMAT_B10G10R10A2_UNORM:
    case ISL_FORMAT_B10G10R10A2_UNORM_SRGB:
@@ -2963,11 +2958,33 @@ blorp_copy(struct blorp_batch *batch,
           params.src.aux_usage == ISL_AUX_USAGE_MCS ||
           params.src.aux_usage == ISL_AUX_USAGE_MCS_CCS ||
           params.src.aux_usage == ISL_AUX_USAGE_CCS_E ||
-          params.src.aux_usage == ISL_AUX_USAGE_GFX12_CCS_E ||
+          params.src.aux_usage == ISL_AUX_USAGE_FCV_CCS_E ||
           params.src.aux_usage == ISL_AUX_USAGE_STC_CCS);
 
    blorp_copy_get_formats(isl_dev, &params.src.surf, &params.dst.surf,
                           &params.src.view.format, &params.dst.view.format);
+
+   if (isl_aux_usage_has_fast_clears(params.src.aux_usage) &&
+       isl_dev->ss.clear_color_state_size > 0) {
+      /* For 32bpc formats, the sampler fetches the raw clear color dwords
+       * used for rendering instead of the converted pixel dwords typically
+       * used for sampling. The CLEAR_COLOR struct page documents this for
+       * 128bpp formats, but not for 32bpp and 64bpp formats.
+       *
+       * Note that although the sampler doesn't use the converted clear color
+       * field with 32bpc formats, the Clear Color Conversion hardware feature
+       * still occurs when the format sizes are less than 128bpp.
+       *
+       * The sampler changing its clear color fetching location can be a
+       * problem in some cases, but we won't run into them here. When using an
+       * indirect clear color, we won't create 32bpc views of non-32bpc
+       * surfaces (and vice-versa).
+       */
+      const struct isl_format_layout *src_view_fmtl =
+         isl_format_get_layout(params.src.view.format);
+      assert((src_fmtl->channels.r.bits == 32) ==
+             (src_view_fmtl->channels.r.bits == 32));
+   }
 
    if (params.src.view.format != params.dst.view.format) {
       enum isl_format src_cast_format = params.src.view.format;

@@ -697,6 +697,9 @@ eglInitialize(EGLDisplay dpy, EGLint *major, EGLint *minor)
       disp->Options.Zink = env && !strcmp(env, "zink");
       disp->Options.ForceSoftware |= disp->Options.Zink;
 
+      const char *gallium_hud_env = getenv("GALLIUM_HUD");
+      disp->Options.GalliumHud = gallium_hud_env && gallium_hud_env[0] != '\0';
+
       /**
        * Initialize the display using the driver's function.
        * If the initialisation fails, try again using only software rendering.
@@ -1862,6 +1865,13 @@ _eglCreateImageCommon(_EGLDisplay *disp, EGLContext ctx, EGLenum target,
       RETURN_EGL_EVAL(disp, EGL_NO_IMAGE_KHR);
    if (!context && ctx != EGL_NO_CONTEXT)
       RETURN_EGL_ERROR(disp, EGL_BAD_CONTEXT, EGL_NO_IMAGE_KHR);
+
+   /* "If <target> is EGL_NATIVE_PIXMAP_KHR, and <ctx> is not EGL_NO_CONTEXT,
+    * the error EGL_BAD_PARAMETER is generated."
+    */
+   if (target == EGL_NATIVE_PIXMAP_KHR && ctx != EGL_NO_CONTEXT)
+      RETURN_EGL_ERROR(disp, EGL_BAD_PARAMETER, EGL_NO_IMAGE_KHR);
+
    /* "If <target> is EGL_LINUX_DMA_BUF_EXT, <dpy> must be a valid display,
     *  <ctx> must be EGL_NO_CONTEXT..."
     */

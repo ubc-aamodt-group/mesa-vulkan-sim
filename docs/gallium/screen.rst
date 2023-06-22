@@ -153,6 +153,7 @@ The integer capabilities:
   the pipe_screen::get_timestamp hook are implemented.
 * ``PIPE_CAP_QUERY_TIMESTAMP_BITS``: How many bits the driver uses for the
   results of GL_TIMESTAMP queries.
+* ``PIPE_CAP_TIMER_RESOLUTION``: The resolution of the timer in nanos.
 * ``PIPE_CAP_TEXTURE_MULTISAMPLE``: Whether all MSAA resources supported
   for rendering are also supported for texturing.
 * ``PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT``: The minimum alignment that should be
@@ -631,8 +632,8 @@ The integer capabilities:
 * ``PIPE_CAP_SAMPLER_REDUCTION_MINMAX``: Driver supports EXT min/max sampler reduction.
 * ``PIPE_CAP_SAMPLER_REDUCTION_MINMAX_ARB``: Driver supports ARB min/max sampler reduction with format queries.
 * ``PIPE_CAP_EMULATE_NONFIXED_PRIMITIVE_RESTART``: Driver requests all draws using a non-fixed restart index to be rewritten to use a fixed restart index.
-* ``PIPE_CAP_SUPPORTED_PRIM_MODES``: A bitmask of the ``pipe_prim_type`` enum values that the driver can natively support.
-* ``PIPE_CAP_SUPPORTED_PRIM_MODES_WITH_RESTART``: A bitmask of the ``pipe_prim_type`` enum values that the driver can natively support for primitive restart. Only useful if ``PIPE_CAP_PRIMITIVE_RESTART`` is also exported.
+* ``PIPE_CAP_SUPPORTED_PRIM_MODES``: A bitmask of the ``mesa_prim`` enum values that the driver can natively support.
+* ``PIPE_CAP_SUPPORTED_PRIM_MODES_WITH_RESTART``: A bitmask of the ``mesa_prim`` enum values that the driver can natively support for primitive restart. Only useful if ``PIPE_CAP_PRIMITIVE_RESTART`` is also exported.
 * ``PIPE_CAP_PREFER_BACK_BUFFER_REUSE``: Only applies to DRI_PRIME. If 1, the driver prefers that DRI3 tries to use the same back buffer each frame. If 0, this means DRI3 will at least use 2 back buffers and ping-pong between them to allow the tiled->linear copy to run in parallel.
 * ``PIPE_CAP_DRAW_VERTEX_STATE``: Driver supports ``pipe_screen::create_vertex_state/vertex_state_destroy`` and ``pipe_context::draw_vertex_state``. Only used by display lists and designed to serve vbo_save.
 * ``PIPE_CAP_PREFER_POT_ALIGNED_VARYINGS``: Driver prefers varyings to be aligned to power of two in a slot. If this cap is enabled, vec4 varying will be placed in .xyzw components of the varying slot, vec3 in .xyz and vec2 in .xy or .zw
@@ -741,8 +742,6 @@ support different features.
   Note that 16-bit constants are not lowered to uniforms in GLSL.
 * ``PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS``: The maximum number of texture
   samplers.
-* ``PIPE_SHADER_CAP_PREFERRED_IR``: Preferred representation of the
-  program.  It should be one of the ``pipe_shader_ir`` enum values.
 * ``PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS``: The maximum number of texture
   sampler views. Must not be lower than PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS.
 * ``PIPE_SHADER_CAP_DROUND_SUPPORTED``: Whether double precision rounding

@@ -195,8 +195,7 @@ opt_peel_loop_initial_if(nir_loop *loop)
     */
    foreach_list_typed(nir_cf_node, cf_node, node, entry_list) {
       nir_foreach_block_in_cf_node(block, cf_node) {
-         nir_instr *last_instr = nir_block_last_instr(block);
-         if (last_instr && last_instr->type == nir_instr_type_jump)
+         if (nir_block_ends_in_jump(block))
             return false;
       }
    }
@@ -267,26 +266,6 @@ opt_peel_loop_initial_if(nir_loop *loop)
    nir_cf_node_remove(&nif->cf_node);
 
    return true;
-}
-
-static bool
-alu_instr_is_comparison(const nir_alu_instr *alu)
-{
-   switch (alu->op) {
-   case nir_op_flt32:
-   case nir_op_fge32:
-   case nir_op_feq32:
-   case nir_op_fneu32:
-   case nir_op_ilt32:
-   case nir_op_ult32:
-   case nir_op_ige32:
-   case nir_op_uge32:
-   case nir_op_ieq32:
-   case nir_op_ine32:
-      return true;
-   default:
-      return nir_alu_instr_is_comparison(alu);
-   }
 }
 
 static bool
@@ -423,7 +402,7 @@ opt_split_alu_of_phi(nir_builder *b, nir_loop *loop)
        * conversions also lead to regressions.
        */
       if (nir_op_is_vec(alu->op) ||
-          alu_instr_is_comparison(alu) ||
+          nir_alu_instr_is_comparison(alu) ||
           alu_instr_is_type_conversion(alu))
          continue;
 

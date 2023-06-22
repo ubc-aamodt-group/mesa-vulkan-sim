@@ -46,7 +46,7 @@
 #include "r300_fs.h"
 #include "r300_texture.h"
 #include "r300_vs.h"
-#include "nir.h"
+#include "compiler/r300_nir.h"
 #include "nir/nir_to_tgsi.h"
 
 /* r300_state: Functions used to initialize state context by translating
@@ -1281,17 +1281,15 @@ static void* r300_create_rs_state(struct pipe_context* pipe,
     clip_rule = state->scissor ? 0xAAAA : 0xFFFF;
 
     /* Point sprites coord mode */
-    if (rs->rs.sprite_coord_enable) {
-        switch (state->sprite_coord_mode) {
-            case PIPE_SPRITE_COORD_UPPER_LEFT:
-                point_texcoord_top = 0.0f;
-                point_texcoord_bottom = 1.0f;
-                break;
-            case PIPE_SPRITE_COORD_LOWER_LEFT:
-                point_texcoord_top = 1.0f;
-                point_texcoord_bottom = 0.0f;
-                break;
-        }
+    switch (state->sprite_coord_mode) {
+        case PIPE_SPRITE_COORD_UPPER_LEFT:
+            point_texcoord_top = 0.0f;
+            point_texcoord_bottom = 1.0f;
+            break;
+        case PIPE_SPRITE_COORD_LOWER_LEFT:
+            point_texcoord_top = 1.0f;
+            point_texcoord_bottom = 0.0f;
+            break;
     }
 
     if (r300_screen(pipe->screen)->caps.has_tcl) {
@@ -1954,7 +1952,6 @@ static void* r300_create_vs_state(struct pipe_context* pipe,
            .ubo_vec4_max = 0x00ff,
        };
        static const struct nir_to_tgsi_options hwtcl_r500_options = {
-           .lower_cmp = true,
            .ubo_vec4_max = 0x00ff,
        };
        const struct nir_to_tgsi_options *ntt_options;

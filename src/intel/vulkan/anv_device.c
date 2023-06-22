@@ -77,6 +77,8 @@ static const driOptionDescription anv_dri_options[] = {
       DRI_CONF_ANV_GENERATED_INDIRECT_THRESHOLD(4)
       DRI_CONF_NO_16BIT(false)
       DRI_CONF_ANV_QUERY_CLEAR_WITH_BLORP_THRESHOLD(6)
+      DRI_CONF_ANV_QUERY_COPY_WITH_SHADER_THRESHOLD(6)
+      DRI_CONF_ANV_FORCE_INDIRECT_DESCRIPTORS(false)
    DRI_CONF_SECTION_END
 
    DRI_CONF_SECTION_DEBUG
@@ -84,6 +86,7 @@ static const driOptionDescription anv_dri_options[] = {
       DRI_CONF_VK_WSI_FORCE_BGRA8_UNORM_FIRST(false)
       DRI_CONF_LIMIT_TRIG_INPUT_RANGE(false)
       DRI_CONF_ANV_MESH_CONV_PRIM_ATTRS_TO_VERT_ATTRS(-2)
+      DRI_CONF_FORCE_VK_VENDOR(0)
    DRI_CONF_SECTION_END
 
    DRI_CONF_SECTION_QUALITY
@@ -299,6 +302,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .EXT_conditional_rendering             = true,
       .EXT_conservative_rasterization        = true,
       .EXT_custom_border_color               = true,
+      .EXT_depth_bias_control                = true,
       .EXT_depth_clamp_zero_one              = true,
       .EXT_depth_clip_control                = true,
       .EXT_depth_clip_enable                 = true,
@@ -306,6 +310,7 @@ get_device_extensions(const struct anv_physical_device *device,
 #ifdef VK_USE_PLATFORM_DISPLAY_KHR
       .EXT_display_control                   = true,
 #endif
+      .EXT_dynamic_rendering_unused_attachments = true,
       .EXT_extended_dynamic_state            = true,
       .EXT_extended_dynamic_state2           = true,
       .EXT_extended_dynamic_state3           = true,
@@ -808,6 +813,15 @@ get_features(const struct anv_physical_device *pdevice,
 
       /* VK_KHR_ray_tracing_position_fetch */
       .rayTracingPositionFetch = rt_enabled,
+
+      /* VK_EXT_dynamic_rendering_unused_attachments */
+      .dynamicRenderingUnusedAttachments = true,
+
+      /* VK_EXT_depth_bias_control */
+      .depthBiasControl = true,
+      .floatRepresentation = true,
+      .leastRepresentableValueForceUnormRepresentation = false,
+      .depthBiasExact = true,
    };
 
    /* The new DOOM and Wolfenstein games require depthBounds without
@@ -1323,6 +1337,15 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
 
    device->video_decode_enabled = debug_get_bool_option("ANV_VIDEO_DECODE", false);
 
+   device->uses_ex_bso = device->info.verx10 >= 125;
+
+   /* For now always use indirect descriptors. We'll update this
+    * to !uses_ex_bso when all the infrastructure is built up.
+    */
+   device->indirect_descriptors =
+      !device->uses_ex_bso ||
+      driQueryOptionb(&instance->dri_options, "force_indirect_descriptors");
+
    /* Check if we can read the GPU timestamp register from the CPU */
    uint64_t u64_ignore;
    device->has_reg_timestamp = intel_gem_read_render_timestamp(fd,
@@ -1342,6 +1365,8 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
    device->compiler->constant_buffer_0_is_relative = false;
    device->compiler->supports_shader_constants = true;
    device->compiler->indirect_ubos_use_sampler = device->info.ver < 12;
+   device->compiler->extended_bindless_surface_offset = device->uses_ex_bso;
+   device->compiler->use_bindless_sampler_offset = !device->indirect_descriptors;
 
    isl_device_init(&device->isl_dev, &device->info);
 
@@ -1366,7 +1391,8 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
    device->master_fd = master_fd;
 
    device->engine_info = intel_engine_get_info(fd, device->info.kmd_type);
-   device->info.has_compute_engine = intel_engines_count(device->engine_info,
+   device->info.has_compute_engine = device->engine_info &&
+                                     intel_engines_count(device->engine_info,
                                                          INTEL_ENGINE_CLASS_COMPUTE);
    anv_physical_device_init_queue_families(device);
 
@@ -1488,6 +1514,10 @@ anv_init_dri_options(struct anv_instance *instance)
             driQueryOptioni(&instance->dri_options, "generated_indirect_threshold");
     instance->query_clear_with_blorp_threshold =
        driQueryOptioni(&instance->dri_options, "query_clear_with_blorp_threshold");
+    instance->query_copy_with_shader_threshold =
+       driQueryOptioni(&instance->dri_options, "query_copy_with_shader_threshold");
+    instance->force_vk_vendor =
+       driQueryOptioni(&instance->dri_options, "force_vk_vendor");
 }
 
 VkResult anv_CreateInstance(
@@ -1737,6 +1767,8 @@ void anv_GetPhysicalDeviceProperties(
       .sparseProperties = {0}, /* Broadwell doesn't do sparse. */
    };
 
+   if (unlikely(pdevice->instance->force_vk_vendor))
+      pProperties->vendorID = pdevice->instance->force_vk_vendor;
    snprintf(pProperties->deviceName, sizeof(pProperties->deviceName),
             "%s", pdevice->info.name);
    memcpy(pProperties->pipelineCacheUUID,
@@ -1817,7 +1849,7 @@ anv_get_physical_device_properties_1_2(struct anv_physical_device *pdevice,
    p->conformanceVersion = (VkConformanceVersion) {
       .major = 1,
       .minor = 3,
-      .subminor = 0,
+      .subminor = 6,
       .patch = 0,
    };
 
@@ -1867,7 +1899,8 @@ anv_get_physical_device_properties_1_2(struct anv_physical_device *pdevice,
     * twice a bunch of times (or a bunch of null descriptors), we can safely
     * advertise a larger limit here.
     */
-   const unsigned max_bindless_views = 1 << 20;
+   const unsigned max_bindless_views =
+      anv_physical_device_bindless_heap_size(pdevice) / ANV_SURFACE_STATE_SIZE;
    p->maxUpdateAfterBindDescriptorsInAllPools            = max_bindless_views;
    p->shaderUniformBufferArrayNonUniformIndexingNative   = false;
    p->shaderSampledImageArrayNonUniformIndexingNative    = false;
@@ -1990,7 +2023,7 @@ anv_get_physical_device_properties_1_3(struct anv_physical_device *pdevice,
     * experience demonstrate that this is true.
     */
    p->uniformTexelBufferOffsetAlignmentBytes = 1;
-   p->uniformTexelBufferOffsetSingleTexelAlignment = false;
+   p->uniformTexelBufferOffsetSingleTexelAlignment = true;
 
    p->maxBufferSize = pdevice->isl_dev.max_buffer_size;
 }
@@ -2837,9 +2870,12 @@ decode_get_bo(void *v_batch, bool ppgtt, uint64_t address)
       return ret_bo;
    if (get_bo_from_pool(&ret_bo, &device->scratch_surface_state_pool.block_pool, address))
       return ret_bo;
-   if (get_bo_from_pool(&ret_bo, &device->bindless_surface_state_pool.block_pool, address))
+   if (device->physical->indirect_descriptors &&
+       get_bo_from_pool(&ret_bo, &device->bindless_surface_state_pool.block_pool, address))
       return ret_bo;
    if (get_bo_from_pool(&ret_bo, &device->internal_surface_state_pool.block_pool, address))
+      return ret_bo;
+   if (get_bo_from_pool(&ret_bo, &device->push_descriptor_pool.block_pool, address))
       return ret_bo;
 
    if (!device->cmd_buffer_being_decoded)
@@ -3096,6 +3132,10 @@ VkResult anv_CreateDevice(
                       device->physical->va.high_heap.addr,
                       device->physical->va.high_heap.size);
 
+   util_vma_heap_init(&device->vma_desc,
+                      device->physical->va.descriptor_pool.addr,
+                      device->physical->va.descriptor_pool.size);
+
    list_inithead(&device->memory_objects);
    list_inithead(&device->image_private_objects);
 
@@ -3186,12 +3226,14 @@ VkResult anv_CreateDevice(
    if (result != VK_SUCCESS)
       goto fail_scratch_surface_state_pool;
 
-   result = anv_state_pool_init(&device->bindless_surface_state_pool, device,
-                                "bindless surface state pool",
-                                device->physical->va.bindless_surface_state_pool.addr,
-                                0, 4096);
-   if (result != VK_SUCCESS)
-      goto fail_internal_surface_state_pool;
+   if (device->physical->indirect_descriptors) {
+      result = anv_state_pool_init(&device->bindless_surface_state_pool, device,
+                                   "bindless surface state pool",
+                                   device->physical->va.bindless_surface_state_pool.addr,
+                                   0, 4096);
+      if (result != VK_SUCCESS)
+         goto fail_internal_surface_state_pool;
+   }
 
    if (device->info->verx10 >= 125) {
       /* We're using 3DSTATE_BINDING_TABLE_POOL_ALLOC to give the binding
@@ -3220,14 +3262,21 @@ VkResult anv_CreateDevice(
    if (result != VK_SUCCESS)
       goto fail_bindless_surface_state_pool;
 
+   result = anv_state_pool_init(&device->push_descriptor_pool, device,
+                                "push descriptor pool",
+                                device->physical->va.push_descriptor_pool.addr,
+                                0, 4096);
+   if (result != VK_SUCCESS)
+      goto fail_binding_table_pool;
+
    if (device->info->has_aux_map) {
       device->aux_map_ctx = intel_aux_map_init(device, &aux_map_allocator,
                                                &physical_device->info);
       if (!device->aux_map_ctx)
-         goto fail_binding_table_pool;
+         goto fail_push_descriptor_pool;
    }
 
-   result = anv_device_alloc_bo(device, "workaround", 4096,
+   result = anv_device_alloc_bo(device, "workaround", 8192,
                                 ANV_BO_ALLOC_CAPTURE |
                                 ANV_BO_ALLOC_MAPPED,
                                 0 /* explicit_address */,
@@ -3295,17 +3344,31 @@ VkResult anv_CreateDevice(
       anv_genX(device->info, init_cps_device_state)(device);
    }
 
-   /* Allocate a null surface state at surface state offset 0.  This makes
-    * NULL descriptor handling trivial because we can just memset structures
-    * to zero and they have a valid descriptor.
-    */
-   device->null_surface_state =
-      anv_state_pool_alloc(&device->bindless_surface_state_pool,
-                           device->isl_dev.ss.size,
-                           device->isl_dev.ss.align);
-   isl_null_fill_state(&device->isl_dev, device->null_surface_state.map,
-                       .size = isl_extent3d(1, 1, 1) /* This shouldn't matter */);
-   assert(device->null_surface_state.offset == 0);
+   if (device->physical->indirect_descriptors) {
+      /* Allocate a null surface state at surface state offset 0. This makes
+       * NULL descriptor handling trivial because we can just memset
+       * structures to zero and they have a valid descriptor.
+       */
+      device->null_surface_state =
+         anv_state_pool_alloc(&device->bindless_surface_state_pool,
+                              device->isl_dev.ss.size,
+                              device->isl_dev.ss.align);
+      isl_null_fill_state(&device->isl_dev, device->null_surface_state.map,
+                          .size = isl_extent3d(1, 1, 1) /* This shouldn't matter */);
+      assert(device->null_surface_state.offset == 0);
+   } else {
+      /* When using direct descriptors, those can hold the null surface state
+       * directly. We still need a null surface for the binding table entries
+       * though but this one can live anywhere the internal surface state
+       * pool.
+       */
+      device->null_surface_state =
+         anv_state_pool_alloc(&device->internal_surface_state_pool,
+                              device->isl_dev.ss.size,
+                              device->isl_dev.ss.align);
+      isl_null_fill_state(&device->isl_dev, device->null_surface_state.map,
+                          .size = isl_extent3d(1, 1, 1) /* This shouldn't matter */);
+   }
 
    anv_scratch_pool_init(device, &device->scratch_pool);
 
@@ -3362,11 +3425,15 @@ VkResult anv_CreateDevice(
       goto fail_internal_cache;
    }
 
+   device->robust_buffer_access =
+      device->vk.enabled_features.robustBufferAccess ||
+      device->vk.enabled_features.nullDescriptor;
+
    anv_device_init_blorp(device);
 
    anv_device_init_border_colors(device);
 
-   anv_device_init_generated_indirect_draws(device);
+   anv_device_init_internal_kernels(device);
 
    anv_device_perf_init(device);
 
@@ -3397,10 +3464,13 @@ VkResult anv_CreateDevice(
       intel_aux_map_finish(device->aux_map_ctx);
       device->aux_map_ctx = NULL;
    }
+ fail_push_descriptor_pool:
+   anv_state_pool_finish(&device->push_descriptor_pool);
  fail_binding_table_pool:
    anv_state_pool_finish(&device->binding_table_pool);
  fail_bindless_surface_state_pool:
-   anv_state_pool_finish(&device->bindless_surface_state_pool);
+   if (device->physical->indirect_descriptors)
+      anv_state_pool_finish(&device->bindless_surface_state_pool);
  fail_internal_surface_state_pool:
    anv_state_pool_finish(&device->internal_surface_state_pool);
  fail_scratch_surface_state_pool:
@@ -3421,6 +3491,7 @@ VkResult anv_CreateDevice(
  fail_mutex:
    pthread_mutex_destroy(&device->mutex);
  fail_vmas:
+   util_vma_heap_finish(&device->vma_desc);
    util_vma_heap_finish(&device->vma_hi);
    util_vma_heap_finish(&device->vma_cva);
    util_vma_heap_finish(&device->vma_lo);
@@ -3457,7 +3528,7 @@ void anv_DestroyDevice(
 
    anv_device_finish_rt_shaders(device);
 
-   anv_device_finish_generated_indirect_draws(device);
+   anv_device_finish_internal_kernels(device);
 
    vk_pipeline_cache_destroy(device->internal_cache, NULL);
    vk_pipeline_cache_destroy(device->default_pipeline_cache, NULL);
@@ -3497,11 +3568,13 @@ void anv_DestroyDevice(
       device->aux_map_ctx = NULL;
    }
 
+   anv_state_pool_finish(&device->push_descriptor_pool);
    anv_state_pool_finish(&device->binding_table_pool);
    if (device->info->verx10 >= 125)
       anv_state_pool_finish(&device->scratch_surface_state_pool);
    anv_state_pool_finish(&device->internal_surface_state_pool);
-   anv_state_pool_finish(&device->bindless_surface_state_pool);
+   if (device->physical->indirect_descriptors)
+      anv_state_pool_finish(&device->bindless_surface_state_pool);
    anv_state_pool_finish(&device->instruction_state_pool);
    anv_state_pool_finish(&device->dynamic_state_pool);
    anv_state_pool_finish(&device->general_state_pool);
@@ -3510,6 +3583,7 @@ void anv_DestroyDevice(
 
    anv_bo_cache_finish(&device->bo_cache);
 
+   util_vma_heap_finish(&device->vma_desc);
    util_vma_heap_finish(&device->vma_hi);
    util_vma_heap_finish(&device->vma_cva);
    util_vma_heap_finish(&device->vma_lo);
@@ -3572,6 +3646,9 @@ anv_vma_heap_for_flags(struct anv_device *device,
    if (alloc_flags & ANV_BO_ALLOC_32BIT_ADDRESS)
       return &device->vma_lo;
 
+   if (alloc_flags & ANV_BO_ALLOC_DESCRIPTOR_POOL)
+      return &device->vma_desc;
+
    return &device->vma_hi;
 }
 
@@ -3618,7 +3695,8 @@ anv_vma_free(struct anv_device *device,
 {
    assert(vma_heap == &device->vma_lo ||
           vma_heap == &device->vma_cva ||
-          vma_heap == &device->vma_hi);
+          vma_heap == &device->vma_hi ||
+          vma_heap == &device->vma_desc);
 
    const uint64_t addr_48b = intel_48b_address(address);
 
@@ -4275,11 +4353,11 @@ anv_get_buffer_memory_requirements(struct anv_device *device,
     */
    uint32_t memory_types = (1ull << device->physical->memory.type_count) - 1;
 
-   /* Base alignment requirement of a cache line */
-   uint32_t alignment = 16;
-
-   if (usage & VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)
-      alignment = MAX2(alignment, ANV_UBO_ALIGNMENT);
+   /* The GPU appears to write back to main memory in cachelines. Writes to a
+    * buffers should not clobber with writes to another buffers so make sure
+    * those are in different cachelines.
+    */
+   uint32_t alignment = 64;
 
    pMemoryRequirements->memoryRequirements.size = size;
    pMemoryRequirements->memoryRequirements.alignment = alignment;
@@ -4289,7 +4367,7 @@ anv_get_buffer_memory_requirements(struct anv_device *device,
     * This would ensure that not internal padding would be needed for
     * 16-bit types.
     */
-   if (device->vk.enabled_features.robustBufferAccess &&
+   if (device->robust_buffer_access &&
        (usage & VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT ||
         usage & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT))
       pMemoryRequirements->memoryRequirements.size = align64(size, 4);
@@ -4398,14 +4476,15 @@ uint64_t anv_GetDeviceMemoryOpaqueCaptureAddress(
 }
 
 void
-anv_fill_buffer_surface_state(struct anv_device *device, struct anv_state state,
+anv_fill_buffer_surface_state(struct anv_device *device,
+                              void *surface_state_ptr,
                               enum isl_format format,
                               struct isl_swizzle swizzle,
                               isl_surf_usage_flags_t usage,
                               struct anv_address address,
                               uint32_t range, uint32_t stride)
 {
-   isl_buffer_fill_state(&device->isl_dev, state.map,
+   isl_buffer_fill_state(&device->isl_dev, surface_state_ptr,
                          .address = anv_address_physical(address),
                          .mocs = isl_mocs(&device->isl_dev, usage,
                                           address.bo && address.bo->is_external),

@@ -35,21 +35,12 @@
 static nir_deref_instr *
 deref_offset_var(nir_builder *b, unsigned binding, unsigned offset_align_state)
 {
-   nir_foreach_uniform_variable(var, b->shader) {
-      if (var->num_state_slots != 1)
-         continue;
-      if (var->state_slots[0].tokens[0] == offset_align_state &&
-          var->state_slots[0].tokens[1] == binding)
-         return nir_build_deref_var(b, var);
+   gl_state_index16 tokens[STATE_LENGTH] = {offset_align_state, binding};
+   nir_variable *var = nir_find_state_variable(b->shader, tokens);
+   if (!var) {
+      var = nir_state_variable_create(b->shader, glsl_uint_type(), "offset", tokens);
+      var->data.how_declared = nir_var_hidden;
    }
-
-   nir_variable *var = nir_variable_create(b->shader, nir_var_uniform, glsl_uint_type(), "offset");
-   var->state_slots = rzalloc_array(var, nir_state_slot, 1);
-   var->state_slots[0].tokens[0] = offset_align_state;
-   var->state_slots[0].tokens[1] = binding;
-   var->num_state_slots = 1;
-   var->data.how_declared = nir_var_hidden;
-   b->shader->num_uniforms++;
    return nir_build_deref_var(b, var);
 }
 
@@ -64,21 +55,6 @@ lower_instr(nir_intrinsic_instr *instr, unsigned ssbo_offset, nir_builder *b, un
    b->cursor = nir_before_instr(&instr->instr);
 
    switch (instr->intrinsic) {
-   case nir_intrinsic_memory_barrier_atomic_counter:
-      /* Atomic counters are now SSBOs so memoryBarrierAtomicCounter() is now
-       * memoryBarrierBuffer().
-       */
-      if (b->shader->options->use_scoped_barrier) {
-         instr->intrinsic = nir_intrinsic_scoped_barrier;
-         nir_intrinsic_set_execution_scope(instr, NIR_SCOPE_NONE);
-         nir_intrinsic_set_memory_scope(instr, NIR_SCOPE_DEVICE);
-         nir_intrinsic_set_memory_semantics(instr, NIR_MEMORY_ACQ_REL);
-         nir_intrinsic_set_memory_modes(instr, nir_var_mem_ssbo);
-      } else {
-         instr->intrinsic = nir_intrinsic_memory_barrier_buffer;
-      }
-      return true;
-
    case nir_intrinsic_atomic_counter_inc:
    case nir_intrinsic_atomic_counter_add:
    case nir_intrinsic_atomic_counter_pre_dec:

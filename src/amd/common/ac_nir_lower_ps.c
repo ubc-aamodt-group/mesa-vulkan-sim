@@ -248,16 +248,7 @@ lower_ps_load_sample_mask_in(nir_builder *b, nir_intrinsic_instr *intrin, lower_
 
    b->cursor = nir_before_instr(&intrin->instr);
 
-   /* The bit pattern matches that used by fixed function fragment
-    * processing.
-    */
-   static const uint16_t ps_iter_masks[] = {
-      0xffff, /* not used */
-      0x5555, 0x1111, 0x0101, 0x0001,
-   };
-   assert(s->options->samplemask_log_ps_iter < ARRAY_SIZE(ps_iter_masks));
-   uint32_t ps_iter_mask = ps_iter_masks[s->options->samplemask_log_ps_iter];
-
+   uint32_t ps_iter_mask = ac_get_ps_iter_mask(s->options->ps_iter_samples);
    nir_ssa_def *sampleid = nir_load_sample_id(b);
    nir_ssa_def *submask = nir_ishl(b, nir_imm_int(b, ps_iter_mask), sampleid);
 
@@ -290,7 +281,7 @@ lower_ps_intrinsic(nir_builder *b, nir_instr *instr, void *state)
          return lower_ps_load_barycentric(b, intrin, s);
       break;
    case nir_intrinsic_load_sample_mask_in:
-      if (s->options->samplemask_log_ps_iter)
+      if (s->options->ps_iter_samples > 1)
          return lower_ps_load_sample_mask_in(b, intrin, s);
       break;
    default:
@@ -331,9 +322,9 @@ emit_ps_color_clamp_and_alpha_test(nir_builder *b, lower_ps_state *s)
       }
 
       if (slot == FRAG_RESULT_COLOR || slot == FRAG_RESULT_DATA0) {
-         if (s->options->alpha_func == PIPE_FUNC_ALWAYS) {
+         if (s->options->alpha_func == COMPARE_FUNC_ALWAYS) {
             /* always pass, do nothing */
-         } else if (s->options->alpha_func == PIPE_FUNC_NEVER) {
+         } else if (s->options->alpha_func == COMPARE_FUNC_NEVER) {
             nir_discard(b);
          } else if (s->outputs[slot][3]) {
             nir_ssa_def *ref = nir_load_alpha_reference_amd(b);
@@ -348,6 +339,8 @@ emit_ps_color_clamp_and_alpha_test(nir_builder *b, lower_ps_state *s)
 static void
 emit_ps_mrtz_export(nir_builder *b, lower_ps_state *s)
 {
+   uint64_t outputs_written = b->shader->info.outputs_written;
+
    nir_ssa_def *mrtz_alpha = NULL;
    if (s->options->alpha_to_coverage_via_mrtz) {
       mrtz_alpha = s->outputs[FRAG_RESULT_COLOR][3] ?
@@ -359,11 +352,15 @@ emit_ps_mrtz_export(nir_builder *b, lower_ps_state *s)
    nir_ssa_def *stencil = s->outputs[FRAG_RESULT_STENCIL][0];
    nir_ssa_def *sample_mask = s->outputs[FRAG_RESULT_SAMPLE_MASK][0];
 
+   if (s->options->kill_samplemask) {
+      sample_mask = NULL;
+      outputs_written &= ~BITFIELD64_BIT(FRAG_RESULT_SAMPLE_MASK);
+   }
+
    /* skip mrtz export if no one has written to any of them */
    if (!depth && !stencil && !sample_mask && !mrtz_alpha)
       return;
 
-   uint64_t outputs_written = b->shader->info.outputs_written;
    /* use outputs_written to determine export format as we use it to set
     * R_028710_SPI_SHADER_Z_FORMAT instead of relying on the real store output,
     * because store output may be optimized out.

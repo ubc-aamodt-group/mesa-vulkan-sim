@@ -8,6 +8,7 @@
 #include "util/format/u_format.h"
 #include "util/format_srgb.h"
 #include "util/u_helpers.h"
+#include "util/hash_table.h"
 
 static bool si_can_use_compute_blit(struct si_context *sctx, enum pipe_format format,
                                     unsigned num_samples, bool is_store, bool has_dcc)
@@ -152,9 +153,6 @@ static void si_launch_grid_internal(struct si_context *sctx, const struct pipe_g
    if (flags & SI_OP_SYNC_CS_BEFORE)
       sctx->flags |= SI_CONTEXT_CS_PARTIAL_FLUSH;
 
-   if (!(flags & SI_OP_CS_IMAGE))
-      sctx->flags |= SI_CONTEXT_PFP_SYNC_ME;
-
    /* Invalidate L0-L1 caches. */
    /* sL0 is never invalidated, because src resources don't use it. */
    if (!(flags & SI_OP_SKIP_CACHE_INV_BEFORE))
@@ -162,7 +160,8 @@ static void si_launch_grid_internal(struct si_context *sctx, const struct pipe_g
 
    /* Set settings for driver-internal compute dispatches. */
    sctx->flags &= ~SI_CONTEXT_START_PIPELINE_STATS;
-   sctx->flags |= SI_CONTEXT_STOP_PIPELINE_STATS;
+   if (sctx->num_hw_pipestat_streamout_queries)
+      sctx->flags |= SI_CONTEXT_STOP_PIPELINE_STATS;
 
    if (!(flags & SI_OP_CS_RENDER_COND_ENABLE))
       sctx->render_cond_enabled = false;
@@ -181,7 +180,9 @@ static void si_launch_grid_internal(struct si_context *sctx, const struct pipe_g
 
    /* Restore default settings. */
    sctx->flags &= ~SI_CONTEXT_STOP_PIPELINE_STATS;
-   sctx->flags |= SI_CONTEXT_START_PIPELINE_STATS;
+   if (sctx->num_hw_pipestat_streamout_queries)
+      sctx->flags |= SI_CONTEXT_START_PIPELINE_STATS;
+
    sctx->render_cond_enabled = sctx->render_cond;
    sctx->blitter_running = false;
 
@@ -566,7 +567,7 @@ static void si_launch_grid_internal_images(struct si_context *sctx,
       /* Simplify the format according to what image stores support. */
       if (images[i].access & PIPE_IMAGE_ACCESS_WRITE) {
          images[i].format = util_format_linear(images[i].format); /* SRGB not supported */
-         images[i].format = util_format_luminance_to_red(images[i].format);
+         /* Keep L8A8 formats as-is because GFX7 is unable to store into R8A8 for some reason. */
          images[i].format = util_format_intensity_to_red(images[i].format);
          images[i].format = util_format_rgbx_to_rgba(images[i].format); /* prevent partial writes */
       }
@@ -1140,14 +1141,15 @@ bool si_compute_blit(struct si_context *sctx, const struct pipe_blit_info *info,
                              options.last_src_channel < options.last_dst_channel &&
                              options.last_dst_channel == 3;
 
-   /* WARNING: We only use this codepath for AMD_TEST to get results identical with the gfx blit,
+   /* WARNING: We need this option for AMD_TEST to get results identical with the gfx blit,
     * otherwise we wouldn't be able to fully validate whether everything else works.
     * The test expects that the behavior is identical to u_blitter.
+    *
+    * Additionally, we need to keep this enabled even when not testing because not doing fp16_rtz
+    * breaks "piglit/bin/texsubimage -auto pbo".
     */
-   if (testing) {
-      options.fp16_rtz = !util_format_is_pure_integer(info->dst.format) &&
-                         dst_desc->channel[i].size <= 10;
-   }
+   options.fp16_rtz = !util_format_is_pure_integer(info->dst.format) &&
+                      dst_desc->channel[i].size <= 10;
 
    struct hash_entry *entry = _mesa_hash_table_search(sctx->cs_blit_shaders,
                                                       (void*)(uintptr_t)options.key);

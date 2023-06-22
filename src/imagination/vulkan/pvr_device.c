@@ -41,6 +41,7 @@
 #include "hwdef/rogue_hw_utils.h"
 #include "pipe/p_defines.h"
 #include "pvr_bo.h"
+#include "pvr_border.h"
 #include "pvr_clear.h"
 #include "pvr_csb.h"
 #include "pvr_csb_enum_helpers.h"
@@ -158,6 +159,76 @@ static void pvr_physical_device_get_supported_extensions(
       .EXT_private_data = true,
    };
    /* clang-format on */
+}
+
+static void pvr_physical_device_get_supported_features(
+   const struct pvr_device_info *const dev_info,
+   struct vk_features *const features)
+{
+   *features = (struct vk_features){
+      /* Vulkan 1.0 */
+      .robustBufferAccess = true,
+      .fullDrawIndexUint32 = true,
+      .imageCubeArray = true,
+      .independentBlend = false,
+      .geometryShader = false,
+      .tessellationShader = false,
+      .sampleRateShading = true,
+      .dualSrcBlend = false,
+      .logicOp = false,
+      .multiDrawIndirect = true,
+      .drawIndirectFirstInstance = true,
+      .depthClamp = true,
+      .depthBiasClamp = true,
+      .fillModeNonSolid = false,
+      .depthBounds = false,
+      .wideLines = true,
+      .largePoints = true,
+      .alphaToOne = false,
+      .multiViewport = false,
+      .samplerAnisotropy = false,
+      .textureCompressionETC2 = true,
+      .textureCompressionASTC_LDR = PVR_HAS_FEATURE(dev_info, astc),
+      .textureCompressionBC = false,
+      .occlusionQueryPrecise = false,
+      .pipelineStatisticsQuery = false,
+      .vertexPipelineStoresAndAtomics = true,
+      .fragmentStoresAndAtomics = true,
+      .shaderTessellationAndGeometryPointSize = false,
+      .shaderImageGatherExtended = false,
+      .shaderStorageImageExtendedFormats = true,
+      .shaderStorageImageMultisample = false,
+      .shaderStorageImageReadWithoutFormat = true,
+      .shaderStorageImageWriteWithoutFormat = false,
+      .shaderUniformBufferArrayDynamicIndexing = true,
+      .shaderSampledImageArrayDynamicIndexing = true,
+      .shaderStorageBufferArrayDynamicIndexing = true,
+      .shaderStorageImageArrayDynamicIndexing = true,
+      .shaderClipDistance = false,
+      .shaderCullDistance = false,
+      .shaderFloat64 = false,
+      .shaderInt64 = true,
+      .shaderInt16 = true,
+      .shaderResourceResidency = false,
+      .shaderResourceMinLod = false,
+      .sparseBinding = false,
+      .sparseResidencyBuffer = false,
+      .sparseResidencyImage2D = false,
+      .sparseResidencyImage3D = false,
+      .sparseResidency2Samples = false,
+      .sparseResidency4Samples = false,
+      .sparseResidency8Samples = false,
+      .sparseResidency16Samples = false,
+      .sparseResidencyAliased = false,
+      .variableMultisampleRate = false,
+      .inheritedQueries = false,
+
+      /* VK_KHR_timeline_semaphore (promoted to Vulkan 1.2) */
+      .timelineSemaphore = true,
+
+      /* VK_EXT_private_data (promoted to Vulkan 1.3) */
+      .privateData = true,
+   };
 }
 
 VkResult pvr_EnumerateInstanceVersion(uint32_t *pApiVersion)
@@ -282,6 +353,7 @@ static VkResult pvr_physical_device_init(struct pvr_physical_device *pdevice,
 {
    struct vk_physical_device_dispatch_table dispatch_table;
    struct vk_device_extension_table supported_extensions;
+   struct vk_features supported_features;
    struct pvr_winsys *ws;
    char *display_path;
    char *render_path;
@@ -321,7 +393,20 @@ static VkResult pvr_physical_device_init(struct pvr_physical_device *pdevice,
    if (result != VK_SUCCESS)
       goto err_vk_free_display_path;
 
+   pdevice->instance = instance;
+   pdevice->render_path = render_path;
+   pdevice->display_path = display_path;
+   pdevice->ws = ws;
+
+   result = ws->ops->device_info_init(ws,
+                                      &pdevice->dev_info,
+                                      &pdevice->dev_runtime_info);
+   if (result != VK_SUCCESS)
+      goto err_pvr_winsys_destroy;
+
    pvr_physical_device_get_supported_extensions(&supported_extensions);
+   pvr_physical_device_get_supported_features(&pdevice->dev_info,
+                                              &supported_features);
 
    vk_physical_device_dispatch_table_from_entrypoints(
       &dispatch_table,
@@ -336,22 +421,12 @@ static VkResult pvr_physical_device_init(struct pvr_physical_device *pdevice,
    result = vk_physical_device_init(&pdevice->vk,
                                     &instance->vk,
                                     &supported_extensions,
-                                    NULL,
+                                    &supported_features,
                                     &dispatch_table);
    if (result != VK_SUCCESS)
       goto err_pvr_winsys_destroy;
 
-   pdevice->instance = instance;
-   pdevice->render_path = render_path;
-   pdevice->display_path = display_path;
-   pdevice->ws = ws;
    pdevice->vk.supported_sync_types = ws->sync_types;
-
-   result = ws->ops->device_info_init(ws,
-                                      &pdevice->dev_info,
-                                      &pdevice->dev_runtime_info);
-   if (result != VK_SUCCESS)
-      goto err_vk_physical_device_finish;
 
    result = pvr_physical_device_init_uuids(pdevice);
    if (result != VK_SUCCESS)
@@ -635,91 +710,6 @@ VkResult pvr_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    *pInstance = pvr_instance_to_handle(instance);
 
    return VK_SUCCESS;
-}
-
-void pvr_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
-                                    VkPhysicalDeviceFeatures2 *pFeatures)
-{
-   PVR_FROM_HANDLE(pvr_physical_device, pdevice, physicalDevice);
-
-   pFeatures->features = (VkPhysicalDeviceFeatures){
-      .robustBufferAccess = true,
-      .fullDrawIndexUint32 = true,
-      .imageCubeArray = true,
-      .independentBlend = false,
-      .geometryShader = false,
-      .tessellationShader = false,
-      .sampleRateShading = true,
-      .dualSrcBlend = false,
-      .logicOp = false,
-      .multiDrawIndirect = true,
-      .drawIndirectFirstInstance = true,
-      .depthClamp = true,
-      .depthBiasClamp = true,
-      .fillModeNonSolid = false,
-      .depthBounds = false,
-      .wideLines = true,
-      .largePoints = true,
-      .alphaToOne = false,
-      .multiViewport = false,
-      .samplerAnisotropy = false,
-      .textureCompressionETC2 = true,
-      .textureCompressionASTC_LDR = PVR_HAS_FEATURE(&pdevice->dev_info, astc),
-      .textureCompressionBC = false,
-      .occlusionQueryPrecise = false,
-      .pipelineStatisticsQuery = false,
-      .vertexPipelineStoresAndAtomics = true,
-      .fragmentStoresAndAtomics = true,
-      .shaderTessellationAndGeometryPointSize = false,
-      .shaderImageGatherExtended = false,
-      .shaderStorageImageExtendedFormats = true,
-      .shaderStorageImageMultisample = false,
-      .shaderStorageImageReadWithoutFormat = true,
-      .shaderStorageImageWriteWithoutFormat = false,
-      .shaderUniformBufferArrayDynamicIndexing = true,
-      .shaderSampledImageArrayDynamicIndexing = true,
-      .shaderStorageBufferArrayDynamicIndexing = true,
-      .shaderStorageImageArrayDynamicIndexing = true,
-      .shaderClipDistance = false,
-      .shaderCullDistance = false,
-      .shaderFloat64 = false,
-      .shaderInt64 = true,
-      .shaderInt16 = true,
-      .shaderResourceResidency = false,
-      .shaderResourceMinLod = false,
-      .sparseBinding = false,
-      .sparseResidencyBuffer = false,
-      .sparseResidencyImage2D = false,
-      .sparseResidencyImage3D = false,
-      .sparseResidency2Samples = false,
-      .sparseResidency4Samples = false,
-      .sparseResidency8Samples = false,
-      .sparseResidency16Samples = false,
-      .sparseResidencyAliased = false,
-      .variableMultisampleRate = false,
-      .inheritedQueries = false,
-   };
-
-   vk_foreach_struct (ext, pFeatures->pNext) {
-      switch (ext->sType) {
-      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_FEATURES: {
-         VkPhysicalDevicePrivateDataFeatures *pFeature =
-            (VkPhysicalDevicePrivateDataFeatures *)ext;
-         pFeature->privateData = VK_TRUE;
-         break;
-      }
-      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES: {
-         VkPhysicalDeviceTimelineSemaphoreFeatures *pFeature =
-            (VkPhysicalDeviceTimelineSemaphoreFeatures *)ext;
-         pFeature->timelineSemaphore = VK_TRUE;
-         break;
-      }
-      default: {
-         pvr_debug_ignored_stype(ext->sType);
-         break;
-      }
-      }
-   }
 }
 
 static uint32_t
@@ -1887,6 +1877,10 @@ VkResult pvr_CreateDevice(VkPhysicalDevice physicalDevice,
    if (result != VK_SUCCESS)
       goto err_pvr_spm_finish_scratch_buffer_store;
 
+   result = pvr_border_color_table_init(&device->border_color_table, device);
+   if (result != VK_SUCCESS)
+      goto err_pvr_robustness_buffer_finish;
+
    /* FIXME: Move this to a later stage and possibly somewhere other than
     * pvr_device. The purpose of this is so that we don't have to get the size
     * on each kick.
@@ -1901,6 +1895,9 @@ VkResult pvr_CreateDevice(VkPhysicalDevice physicalDevice,
    *pDevice = pvr_device_to_handle(device);
 
    return VK_SUCCESS;
+
+err_pvr_robustness_buffer_finish:
+   pvr_robustness_buffer_finish(device);
 
 err_pvr_spm_finish_scratch_buffer_store:
    pvr_spm_finish_scratch_buffer_store(device);
@@ -1965,6 +1962,7 @@ void pvr_DestroyDevice(VkDevice _device,
    if (!device)
       return;
 
+   pvr_border_color_table_finish(&device->border_color_table, device);
    pvr_robustness_buffer_finish(device);
    pvr_spm_finish_scratch_buffer_store(device);
    pvr_queues_destroy(device);
@@ -2998,10 +2996,12 @@ VkResult pvr_CreateSampler(VkDevice _device,
                            VkSampler *pSampler)
 {
    PVR_FROM_HANDLE(pvr_device, device, _device);
+   uint32_t border_color_table_index;
    struct pvr_sampler *sampler;
    float lod_rounding_bias;
    VkFilter min_filter;
    VkFilter mag_filter;
+   VkResult result;
    float min_lod;
    float max_lod;
 
@@ -3012,11 +3012,20 @@ VkResult pvr_CreateSampler(VkDevice _device,
                              pAllocator,
                              sizeof(*sampler),
                              VK_OBJECT_TYPE_SAMPLER);
-   if (!sampler)
-      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+   if (!sampler) {
+      result = vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+      goto err_out;
+   }
 
    mag_filter = pCreateInfo->magFilter;
    min_filter = pCreateInfo->minFilter;
+
+   result =
+      pvr_border_color_table_get_or_create_entry(&device->border_color_table,
+                                                 pCreateInfo,
+                                                 &border_color_table_index);
+   if (result != VK_SUCCESS)
+      goto err_free_sampler;
 
    if (PVR_HAS_QUIRK(&device->pdevice->dev_info, 51025)) {
       /* The min/mag filters may need adjustment here, the GPU should decide
@@ -3119,7 +3128,7 @@ VkResult pvr_CreateSampler(VkDevice _device,
       word.maxlod = util_unsigned_fixed(CLAMP(max_lod, 0.0f, lod_clamp_max),
                                         PVRX(TEXSTATE_CLAMP_FRACTIONAL_BITS));
 
-      word.bordercolor_index = pCreateInfo->borderColor;
+      word.bordercolor_index = border_color_table_index;
 
       if (pCreateInfo->unnormalizedCoordinates)
          word.non_normalized_coords = true;
@@ -3128,6 +3137,12 @@ VkResult pvr_CreateSampler(VkDevice _device,
    *pSampler = pvr_sampler_to_handle(sampler);
 
    return VK_SUCCESS;
+
+err_free_sampler:
+   vk_object_free(&device->vk, pAllocator, sampler);
+
+err_out:
+   return result;
 }
 
 void pvr_DestroySampler(VkDevice _device,

@@ -5,7 +5,7 @@
  */
 /* based on pieces from si_pipe.c and radeon_llvm_emit.c */
 #include "ac_llvm_build.h"
-
+#include "ac_gpu_info.h"
 #include "ac_nir.h"
 #include "ac_llvm_util.h"
 #include "ac_shader_util.h"
@@ -37,16 +37,14 @@ struct ac_llvm_flow {
  * The caller is responsible for initializing ctx::module and ctx::builder.
  */
 void ac_llvm_context_init(struct ac_llvm_context *ctx, struct ac_llvm_compiler *compiler,
-                          enum amd_gfx_level gfx_level, enum radeon_family family,
-                          bool has_3d_cube_border_color_mipmap,
-                          enum ac_float_mode float_mode, unsigned wave_size,
-                          unsigned ballot_mask_bits, bool exports_color_null, bool exports_mrtz)
+                          const struct radeon_info *info, enum ac_float_mode float_mode,
+                          unsigned wave_size, unsigned ballot_mask_bits, bool exports_color_null,
+                          bool exports_mrtz)
 {
    ctx->context = LLVMContextCreate();
 
-   ctx->gfx_level = gfx_level;
-   ctx->family = family;
-   ctx->has_3d_cube_border_color_mipmap = has_3d_cube_border_color_mipmap;
+   ctx->info = info;
+   ctx->gfx_level = info->gfx_level;
    ctx->wave_size = wave_size;
    ctx->ballot_mask_bits = ballot_mask_bits;
    ctx->float_mode = float_mode;
@@ -296,12 +294,8 @@ LLVMValueRef ac_build_intrinsic(struct ac_llvm_context *ctx, const char *name,
 
    call = LLVMBuildCall2(ctx->builder, function_type, function, params, param_count, "");
 
-   if (attrib_mask & AC_ATTR_INVARIANT_LOAD) {
-      if (LLVM_VERSION_MAJOR >= 15)
-         LLVMSetMetadata(call, ctx->invariant_load_md_kind, ctx->empty_md);
-      else
-         LLVMAddCallSiteAttribute(call, -1, ac_get_llvm_attribute(ctx->context, "readnone"));
-   }
+   if (attrib_mask & AC_ATTR_INVARIANT_LOAD)
+      LLVMSetMetadata(call, ctx->invariant_load_md_kind, ctx->empty_md);
 
    if (attrib_mask & AC_ATTR_CONVERGENT)
       LLVMAddCallSiteAttribute(call, -1, ac_get_llvm_attribute(ctx->context, "convergent"));
@@ -464,9 +458,9 @@ void ac_build_optimization_barrier(struct ac_llvm_context *ctx, LLVMValueRef *pg
    }
 }
 
-LLVMValueRef ac_build_shader_clock(struct ac_llvm_context *ctx, nir_scope scope)
+LLVMValueRef ac_build_shader_clock(struct ac_llvm_context *ctx, mesa_scope scope)
 {
-   if (ctx->gfx_level >= GFX11 && scope == NIR_SCOPE_DEVICE) {
+   if (ctx->gfx_level >= GFX11 && scope == SCOPE_DEVICE) {
       const char *name = "llvm.amdgcn.s.sendmsg.rtn.i64";
       LLVMValueRef arg = LLVMConstInt(ctx->i32, 0x83 /* realtime */, 0);
       LLVMValueRef tmp = ac_build_intrinsic(ctx, name, ctx->i64, &arg, 1, 0);
@@ -474,7 +468,7 @@ LLVMValueRef ac_build_shader_clock(struct ac_llvm_context *ctx, nir_scope scope)
    }
 
    const char *subgroup = "llvm.readcyclecounter";
-   const char *name = scope == NIR_SCOPE_DEVICE ? "llvm.amdgcn.s.memrealtime" : subgroup;
+   const char *name = scope == SCOPE_DEVICE ? "llvm.amdgcn.s.memrealtime" : subgroup;
 
    LLVMValueRef tmp = ac_build_intrinsic(ctx, name, ctx->i64, NULL, 0, 0);
    return LLVMBuildBitCast(ctx->builder, tmp, ctx->v2i32, "");
@@ -1016,7 +1010,7 @@ LLVMValueRef ac_build_load_to_sgpr_uint_wraparound(struct ac_llvm_context *ctx, 
 
 static unsigned get_cache_flags(struct ac_llvm_context *ctx, enum gl_access_qualifier access)
 {
-   return ac_get_hw_cache_flags(ctx->gfx_level, access).value;
+   return ac_get_hw_cache_flags(ctx->info, access).value;
 }
 
 static void ac_build_buffer_store_common(struct ac_llvm_context *ctx, LLVMValueRef rsrc,
@@ -2555,22 +2549,6 @@ void ac_build_else(struct ac_llvm_context *ctx, int label_id)
    current_branch->next_block = endif_block;
 }
 
-/* Invoked after a branch is exited. */
-static void ac_branch_exited(struct ac_llvm_context *ctx)
-{
-   if (ctx->flow->depth == 0 && ctx->conditional_demote_seen) {
-      /* The previous conditional branch contained demote. Kill threads
-       * after all conditional blocks because amdgcn.wqm.vote doesn't
-       * return usable values inside the blocks.
-       *
-       * This is an optional optimization that only kills whole inactive quads.
-       */
-      LLVMValueRef cond = LLVMBuildLoad2(ctx->builder, ctx->i1, ctx->postponed_kill, "");
-      ac_build_kill_if_false(ctx, ac_build_wqm_vote(ctx, cond));
-      ctx->conditional_demote_seen = false;
-   }
-}
-
 void ac_build_endif(struct ac_llvm_context *ctx, int label_id)
 {
    struct ac_llvm_flow *current_branch = get_current_flow(ctx);
@@ -2582,7 +2560,6 @@ void ac_build_endif(struct ac_llvm_context *ctx, int label_id)
    set_basicblock_name(current_branch->next_block, "endif", label_id);
 
    ctx->flow->depth--;
-   ac_branch_exited(ctx);
 }
 
 void ac_build_endloop(struct ac_llvm_context *ctx, int label_id)
@@ -2596,7 +2573,6 @@ void ac_build_endloop(struct ac_llvm_context *ctx, int label_id)
    LLVMPositionBuilderAtEnd(ctx->builder, current_loop->next_block);
    set_basicblock_name(current_loop->next_block, "endloop", label_id);
    ctx->flow->depth--;
-   ac_branch_exited(ctx);
 }
 
 void ac_build_ifcc(struct ac_llvm_context *ctx, LLVMValueRef cond, int label_id)
@@ -3031,9 +3007,9 @@ static LLVMValueRef get_reduction_identity(struct ac_llvm_context *ctx, nir_op o
       switch (op) {
       case nir_op_ior:
       case nir_op_ixor:
-         return LLVMConstInt(ctx->i1, 0, 0);
+         return ctx->i1false;
       case nir_op_iand:
-         return LLVMConstInt(ctx->i1, 1, 0);
+         return ctx->i1true;
       default:
          unreachable("bad reduction intrinsic");
       }
@@ -3267,7 +3243,7 @@ static LLVMValueRef ac_wavefront_shift_right_1(struct ac_llvm_context *ctx, LLVM
    tmp2 = ac_build_readlane(ctx, src, LLVMConstInt(ctx->i32, 31, 0));
    active = LLVMBuildICmp(ctx->builder, LLVMIntEQ, tid, LLVMConstInt(ctx->i32, 32, 0), "");
    tmp1 = LLVMBuildSelect(ctx->builder, active, tmp2, tmp1, "");
-   active = LLVMBuildICmp(ctx->builder, LLVMIntEQ, tid, LLVMConstInt(ctx->i32, 0, 0), "");
+   active = LLVMBuildICmp(ctx->builder, LLVMIntEQ, tid, ctx->i32_0, "");
    return LLVMBuildSelect(ctx->builder, active, identity, tmp1, "");
 }
 
@@ -3655,30 +3631,9 @@ LLVMValueRef ac_build_ddxy_interp(struct ac_llvm_context *ctx, LLVMValueRef inte
 
 LLVMValueRef ac_build_load_helper_invocation(struct ac_llvm_context *ctx)
 {
-   LLVMValueRef result;
+   LLVMValueRef result = ac_build_intrinsic(ctx, "llvm.amdgcn.live.mask", ctx->i1, NULL, 0, 0);
 
-   if (LLVM_VERSION_MAJOR >= 13) {
-      result = ac_build_intrinsic(ctx, "llvm.amdgcn.live.mask", ctx->i1, NULL, 0, 0);
-   } else {
-      result = ac_build_intrinsic(ctx, "llvm.amdgcn.ps.live", ctx->i1, NULL, 0, 0);
-   }
    return LLVMBuildNot(ctx->builder, result, "");
-}
-
-LLVMValueRef ac_build_is_helper_invocation(struct ac_llvm_context *ctx)
-{
-   if (!ctx->postponed_kill)
-      return ac_build_load_helper_invocation(ctx);
-
-   /* postponed_kill should be NULL on LLVM 13+ */
-   assert(LLVM_VERSION_MAJOR < 13);
-
-   /* !(exact && postponed) */
-   LLVMValueRef exact =
-      ac_build_intrinsic(ctx, "llvm.amdgcn.ps.live", ctx->i1, NULL, 0, 0);
-
-   LLVMValueRef postponed = LLVMBuildLoad2(ctx->builder, ctx->i1, ctx->postponed_kill, "");
-   return LLVMBuildNot(ctx->builder, LLVMBuildAnd(ctx->builder, exact, postponed, ""), "");
 }
 
 LLVMValueRef ac_build_call(struct ac_llvm_context *ctx, LLVMTypeRef fn_type, LLVMValueRef func, LLVMValueRef *args,
@@ -3752,26 +3707,13 @@ void ac_export_mrt_z(struct ac_llvm_context *ctx, LLVMValueRef depth, LLVMValueR
 
    /* GFX6 (except OLAND and HAINAN) has a bug that it only looks
     * at the X writemask component. */
-   if (ctx->gfx_level == GFX6 && ctx->family != CHIP_OLAND && ctx->family != CHIP_HAINAN)
+   if (ctx->gfx_level == GFX6 &&
+       ctx->info->family != CHIP_OLAND &&
+       ctx->info->family != CHIP_HAINAN)
       mask |= 0x1;
 
    /* Specify which components to enable */
    args->enabled_channels = mask;
-}
-
-LLVMValueRef ac_pack_edgeflags_for_export(struct ac_llvm_context *ctx,
-                                          const struct ac_shader_args *args)
-{
-   /* Use the following trick to extract the edge flags:
-    *   extracted = v_and_b32 gs_invocation_id, 0x700 ; get edge flags at bits 8, 9, 10
-    *   shifted = v_mul_u32_u24 extracted, 0x80402u   ; shift the bits: 8->9, 9->19, 10->29
-    *   result = v_and_b32 shifted, 0x20080200        ; remove garbage
-    */
-   LLVMValueRef tmp = LLVMBuildAnd(ctx->builder,
-                                   ac_get_arg(ctx, args->gs_invocation_id),
-                                   LLVMConstInt(ctx->i32, 0x700, 0), "");
-   tmp = LLVMBuildMul(ctx->builder, tmp, LLVMConstInt(ctx->i32, 0x80402u, 0), "");
-   return LLVMBuildAnd(ctx->builder, tmp, LLVMConstInt(ctx->i32, 0x20080200, 0), "");
 }
 
 static LLVMTypeRef arg_llvm_type(enum ac_arg_type type, unsigned size, struct ac_llvm_context *ctx)
@@ -3873,7 +3815,7 @@ struct ac_llvm_pointer ac_build_main(const struct ac_shader_args *args, struct a
    LLVMAddTargetDependentFunctionAttr(main_function, "denormal-fp-math-f32",
                                       "preserve-sign,preserve-sign");
 
-   if (LLVM_VERSION_MAJOR >= 15 && convention == AC_LLVM_AMDGPU_PS) {
+   if (convention == AC_LLVM_AMDGPU_PS) {
       LLVMAddTargetDependentFunctionAttr(main_function, "amdgpu-depth-export",
                                          ctx->exports_mrtz ? "1" : "0");
       LLVMAddTargetDependentFunctionAttr(main_function, "amdgpu-color-export",

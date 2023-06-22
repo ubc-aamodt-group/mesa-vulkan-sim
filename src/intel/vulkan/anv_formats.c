@@ -773,7 +773,7 @@ anv_get_image_format_features2(const struct intel_device_info *devinfo,
          }
       }
 
-      if (isl_mod_info->aux_usage == ISL_AUX_USAGE_CCS_E &&
+      if (isl_aux_usage_has_ccs_e(isl_mod_info->aux_usage) &&
           !isl_format_supports_ccs_e(devinfo, plane_format.isl_format)) {
          return 0;
       }
@@ -1249,6 +1249,19 @@ anv_get_image_format_properties(
       maxArraySize = 1;
       sampleCounts = VK_SAMPLE_COUNT_1_BIT;
       break;
+   }
+
+   /* If any of the format in VkImageFormatListCreateInfo is completely
+    * unsupported, report unsupported.
+    */
+   if ((info->flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) &&
+       format_list_info != NULL) {
+      for (uint32_t i = 0; i < format_list_info->viewFormatCount; i++) {
+         const struct anv_format *view_format =
+            anv_get_format(format_list_info->pViewFormats[i]);
+         if (view_format == NULL)
+            goto unsupported;
+      }
    }
 
    /* From the Vulkan 1.3.218 spec:

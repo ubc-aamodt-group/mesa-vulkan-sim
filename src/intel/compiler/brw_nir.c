@@ -710,6 +710,13 @@ brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler)
       OPT(nir_opt_intrinsics);
       OPT(nir_opt_idiv_const, 32);
       OPT(nir_opt_algebraic);
+
+      /* BFI2 did not exist until Gfx7, so there's no point in trying to
+       * optimize an instruction that should not get generated.
+       */
+      if (compiler->devinfo->ver >= 7)
+         OPT(nir_opt_reassociate_bfi);
+
       OPT(nir_lower_constant_convert_alu_types);
       OPT(nir_opt_constant_folding);
 
@@ -946,7 +953,7 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
     *
     * So when robust image access is enabled, just avoid the workaround.
     */
-   if (devinfo->ver >= 12 && !opts->robust_image_access)
+   if (intel_needs_workaround(devinfo, 1806565034) && !opts->robust_image_access)
       OPT(brw_nir_clamp_image_1d_2d_array_sizes);
 
    const nir_lower_tex_options tex_options = {
@@ -1101,7 +1108,7 @@ brw_nir_zero_inputs(nir_shader *shader, uint64_t *zero_inputs)
          nir_metadata_block_index | nir_metadata_dominance, zero_inputs);
 }
 
-/* Code for Wa_14015590813 may have created input/output variables beyond
+/* Code for Wa_18019110168 may have created input/output variables beyond
  * VARYING_SLOT_MAX and removed uses of variables below VARYING_SLOT_MAX.
  * Clean it up, so they all stay below VARYING_SLOT_MAX.
  */
@@ -1138,7 +1145,7 @@ brw_mesh_compact_io(nir_shader *mesh, nir_shader *frag)
    if (!compact)
       return;
 
-   /* The rest of this function should be hit only for Wa_14015590813. */
+   /* The rest of this function should be hit only for Wa_18019110168. */
 
    nir_foreach_shader_out_variable(var, mesh) {
       gl_varying_slot location = var->data.location;
@@ -1308,8 +1315,10 @@ brw_nir_should_vectorize_mem(unsigned align_mul, unsigned align_offset,
       return false;
 
    if (low->intrinsic == nir_intrinsic_load_global_const_block_intel ||
+       low->intrinsic == nir_intrinsic_load_ubo_uniform_block_intel ||
        low->intrinsic == nir_intrinsic_load_ssbo_uniform_block_intel ||
-       low->intrinsic == nir_intrinsic_load_shared_uniform_block_intel) {
+       low->intrinsic == nir_intrinsic_load_shared_uniform_block_intel ||
+       low->intrinsic == nir_intrinsic_load_global_constant_uniform_block_intel) {
       if (num_components > 4) {
          if (!util_is_power_of_two_nonzero(num_components))
             return false;
@@ -1347,8 +1356,8 @@ bool combine_all_memory_barriers(nir_intrinsic_instr *a,
                                  void *data)
 {
    /* Only combine pure memory barriers */
-   if ((nir_intrinsic_execution_scope(a) != NIR_SCOPE_NONE) ||
-       (nir_intrinsic_execution_scope(b) != NIR_SCOPE_NONE))
+   if ((nir_intrinsic_execution_scope(a) != SCOPE_NONE) ||
+       (nir_intrinsic_execution_scope(b) != SCOPE_NONE))
       return false;
 
    /* Translation to backend IR will get rid of modes we don't care about, so
@@ -1368,7 +1377,7 @@ bool combine_all_memory_barriers(nir_intrinsic_instr *a,
 
 static nir_mem_access_size_align
 get_mem_access_size_align(nir_intrinsic_op intrin, uint8_t bytes,
-                          uint32_t align_mul, uint32_t align_offset,
+                          uint8_t bit_size, uint32_t align_mul, uint32_t align_offset,
                           bool offset_is_const, const void *cb_data)
 {
    const uint32_t align = nir_combined_align(align_mul, align_offset);
@@ -1495,15 +1504,17 @@ brw_vectorize_lower_mem_access(nir_shader *nir,
       }
    }
 
-   OPT(nir_lower_mem_access_bit_sizes,
-       nir_var_mem_ssbo |
-       nir_var_mem_constant |
-       nir_var_mem_task_payload |
-       nir_var_shader_temp |
-       nir_var_function_temp |
-       nir_var_mem_global |
-       nir_var_mem_shared,
-       get_mem_access_size_align, NULL);
+   nir_lower_mem_access_bit_sizes_options mem_access_options = {
+      .modes = nir_var_mem_ssbo |
+               nir_var_mem_constant |
+               nir_var_mem_task_payload |
+               nir_var_shader_temp |
+               nir_var_function_temp |
+               nir_var_mem_global |
+               nir_var_mem_shared,
+      .callback = get_mem_access_size_align,
+   };
+   OPT(nir_lower_mem_access_bit_sizes, &mem_access_options);
 
    while (progress) {
       progress = false;

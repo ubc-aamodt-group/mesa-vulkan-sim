@@ -411,7 +411,7 @@ emit_urb_setup(struct anv_graphics_pipeline *pipeline,
    genX(emit_urb_setup)(pipeline->base.base.device,
                         &pipeline->base.base.batch,
                         pipeline->base.base.l3_config,
-                        pipeline->base.active_stages, entry_size,
+                        pipeline->base.base.active_stages, entry_size,
                         deref_block_size);
 }
 
@@ -602,11 +602,11 @@ genX(raster_polygon_mode)(struct anv_graphics_pipeline *pipeline,
 {
    if (anv_pipeline_is_mesh(pipeline)) {
       switch (get_mesh_prog_data(pipeline)->primitive_type) {
-      case SHADER_PRIM_POINTS:
+      case MESA_PRIM_POINTS:
          return VK_POLYGON_MODE_POINT;
-      case SHADER_PRIM_LINES:
+      case MESA_PRIM_LINES:
          return VK_POLYGON_MODE_LINE;
-      case SHADER_PRIM_TRIANGLES:
+      case MESA_PRIM_TRIANGLES:
          return polygon_mode;
       default:
          unreachable("invalid primitive type for mesh");
@@ -1075,9 +1075,7 @@ emit_3dstate_streamout(struct anv_graphics_pipeline *pipeline,
 
 #if GFX_VERx10 == 125
       /* Wa_14015946265: Send PC with CS stall after SO_DECL. */
-      anv_batch_emit(batch, GENX(PIPE_CONTROL), pc) {
-         pc.CommandStreamerStallEnable = true;
-      }
+      genX(batch_emit_pipe_control)(batch, device->info, ANV_PIPE_CS_STALL_BIT);
 #endif
    }
 
@@ -1782,8 +1780,8 @@ emit_mesh_state(struct anv_graphics_pipeline *pipeline)
       brw_cs_get_dispatch_info(devinfo, &mesh_prog_data->base, NULL);
 
    const unsigned output_topology =
-      mesh_prog_data->primitive_type == SHADER_PRIM_POINTS ? OUTPUT_POINT :
-      mesh_prog_data->primitive_type == SHADER_PRIM_LINES  ? OUTPUT_LINE :
+      mesh_prog_data->primitive_type == MESA_PRIM_POINTS ? OUTPUT_POINT :
+      mesh_prog_data->primitive_type == MESA_PRIM_LINES  ? OUTPUT_LINE :
                                                              OUTPUT_TRI;
 
    uint32_t index_format;
@@ -1872,8 +1870,8 @@ genX(graphics_pipeline_emit)(struct anv_graphics_pipeline *pipeline,
 #if GFX_VERx10 >= 125
       const struct anv_device *device = pipeline->base.base.device;
       /* Disable Mesh. */
-      if (device->physical->vk.supported_extensions.NV_mesh_shader ||
-          device->physical->vk.supported_extensions.EXT_mesh_shader) {
+      if (device->vk.enabled_extensions.NV_mesh_shader ||
+          device->vk.enabled_extensions.EXT_mesh_shader) {
          struct anv_batch *batch = &pipeline->base.base.batch;
 
          anv_batch_emit(batch, GENX(3DSTATE_MESH_CONTROL), zero);

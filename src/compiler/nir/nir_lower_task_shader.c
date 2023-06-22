@@ -90,8 +90,8 @@ append_launch_mesh_workgroups_to_nv_task(nir_builder *b,
    nir_store_shared(b, zero, zero, .base = s->task_count_shared_addr);
 
    nir_scoped_barrier(b,
-         .execution_scope = NIR_SCOPE_WORKGROUP,
-         .memory_scope = NIR_SCOPE_WORKGROUP,
+         .execution_scope = SCOPE_WORKGROUP,
+         .memory_scope = SCOPE_WORKGROUP,
          .memory_semantics = NIR_MEMORY_RELEASE,
          .memory_modes = nir_var_mem_shared);
 
@@ -101,8 +101,8 @@ append_launch_mesh_workgroups_to_nv_task(nir_builder *b,
    b->cursor = nir_after_cf_list(&b->impl->body);
 
    nir_scoped_barrier(b,
-         .execution_scope = NIR_SCOPE_WORKGROUP,
-         .memory_scope = NIR_SCOPE_WORKGROUP,
+         .execution_scope = SCOPE_WORKGROUP,
+         .memory_scope = SCOPE_WORKGROUP,
          .memory_semantics = NIR_MEMORY_ACQUIRE,
          .memory_modes = nir_var_mem_shared);
 
@@ -233,8 +233,8 @@ emit_shared_to_payload_copy(nir_builder *b,
    /* Wait for all previous shared stores to finish.
     * This is necessary because we placed the payload in shared memory.
     */
-   nir_scoped_barrier(b, .execution_scope = NIR_SCOPE_WORKGROUP,
-                         .memory_scope = NIR_SCOPE_WORKGROUP,
+   nir_scoped_barrier(b, .execution_scope = SCOPE_WORKGROUP,
+                         .memory_scope = SCOPE_WORKGROUP,
                          .memory_semantics = NIR_MEMORY_ACQ_REL,
                          .memory_modes = nir_var_mem_shared);
 
@@ -260,7 +260,7 @@ emit_shared_to_payload_copy(nir_builder *b,
    if (remaining_vec4_copies > 0) {
       assert(remaining_vec4_copies < invocations);
 
-      nir_ssa_def *cmp = nir_ilt(b, invocation_index, nir_imm_int(b, remaining_vec4_copies));
+      nir_ssa_def *cmp = nir_ilt_imm(b, invocation_index, remaining_vec4_copies);
       nir_if *if_stmt = nir_push_if(b, cmp);
       {
          copy_shared_to_payload(b, vec4size / 4, addr, base_shared_addr, off);
@@ -272,7 +272,7 @@ emit_shared_to_payload_copy(nir_builder *b,
    /* Copy the last few dwords not forming full vec4. */
    if (remaining_dwords > 0) {
       assert(remaining_dwords < 4);
-      nir_ssa_def *cmp = nir_ieq(b, invocation_index, nir_imm_int(b, 0));
+      nir_ssa_def *cmp = nir_ieq_imm(b, invocation_index, 0);
       nir_if *if_stmt = nir_push_if(b, cmp);
       {
          copy_shared_to_payload(b, remaining_dwords, addr, base_shared_addr, off);

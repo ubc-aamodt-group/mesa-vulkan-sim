@@ -46,6 +46,7 @@ static const struct debug_named_value radeonsi_debug_options[] = {
    {"initaco", DBG(INIT_ACO), "Print initial ACO IR before optimizations"},
    {"aco", DBG(ACO), "Print final ACO IR"},
    {"asm", DBG(ASM), "Print final shaders in asm"},
+   {"stats", DBG(STATS), "Print shader-db stats to stderr"},
 
    /* Shader compiler options the shader cache should be aware of: */
    {"w32ge", DBG(W32_GE), "Use Wave32 for vertex, tessellation, and geometry shaders."},
@@ -180,7 +181,6 @@ static void decref_implicit_resource(struct hash_entry *entry)
 static void si_destroy_context(struct pipe_context *context)
 {
    struct si_context *sctx = (struct si_context *)context;
-   int i;
 
    /* Unreference the framebuffer normally to disable related logic
     * properly.
@@ -192,7 +192,7 @@ static void si_destroy_context(struct pipe_context *context)
    si_release_all_descriptors(sctx);
 
    if (sctx->gfx_level >= GFX10 && sctx->has_graphics)
-      gfx10_destroy_query(sctx);
+      gfx11_destroy_query(sctx);
 
    if (sctx->sqtt) {
       struct si_screen *sscreen = sctx->screen;
@@ -223,9 +223,6 @@ static void si_destroy_context(struct pipe_context *context)
       si_pm4_free_state(sctx, sctx->cs_preamble_state, ~0);
    if (sctx->cs_preamble_state_tmz)
       si_pm4_free_state(sctx, sctx->cs_preamble_state_tmz, ~0);
-
-   for (i = 0; i < ARRAY_SIZE(sctx->vgt_shader_config); i++)
-      si_pm4_free_state(sctx, sctx->vgt_shader_config[i], SI_STATE_IDX(vgt_shader_config));
 
    if (sctx->fixed_func_tcs_shader_cache) {
       hash_table_foreach(sctx->fixed_func_tcs_shader_cache, entry) {
@@ -338,7 +335,10 @@ static void si_destroy_context(struct pipe_context *context)
    si_resource_reference(&sctx->shadowing.registers, NULL);
    si_resource_reference(&sctx->shadowing.csa, NULL);
 
-   si_destroy_compiler(&sctx->compiler);
+   if (sctx->compiler) {
+      si_destroy_compiler(sctx->compiler);
+      FREE(sctx->compiler);
+   }
 
    si_saved_cs_reference(&sctx->current_saved_cs, NULL);
 
@@ -637,7 +637,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
    /* Initialize graphics-only context functions. */
    if (sctx->has_graphics) {
       if (sctx->gfx_level >= GFX10)
-         gfx10_init_query(sctx);
+         gfx11_init_query(sctx);
       si_init_msaa_functions(sctx);
       si_init_shader_functions(sctx);
       si_init_state_functions(sctx);
@@ -971,11 +971,19 @@ static void si_destroy_screen(struct pipe_screen *pscreen)
    /* Release the reference on glsl types of the compiler threads. */
    glsl_type_singleton_decref();
 
-   for (i = 0; i < ARRAY_SIZE(sscreen->compiler); i++)
-      si_destroy_compiler(&sscreen->compiler[i]);
+   for (i = 0; i < ARRAY_SIZE(sscreen->compiler); i++) {
+      if (sscreen->compiler[i]) {
+         si_destroy_compiler(sscreen->compiler[i]);
+         FREE(sscreen->compiler[i]);
+      }
+   }
 
-   for (i = 0; i < ARRAY_SIZE(sscreen->compiler_lowp); i++)
-      si_destroy_compiler(&sscreen->compiler_lowp[i]);
+   for (i = 0; i < ARRAY_SIZE(sscreen->compiler_lowp); i++) {
+      if (sscreen->compiler_lowp[i]) {
+         si_destroy_compiler(sscreen->compiler_lowp[i]);
+         FREE(sscreen->compiler_lowp[i]);
+      }
+   }
 
    /* Free shader parts. */
    for (i = 0; i < ARRAY_SIZE(parts); i++) {
@@ -996,7 +1004,6 @@ static void si_destroy_screen(struct pipe_screen *pscreen)
    simple_mtx_destroy(&sscreen->gpu_load_mutex);
    simple_mtx_destroy(&sscreen->gds_mutex);
 
-   radeon_bo_reference(sscreen->ws, &sscreen->gds, NULL);
    radeon_bo_reference(sscreen->ws, &sscreen->gds_oa, NULL);
 
    slab_destroy_parent(&sscreen->pool_transfers);
@@ -1007,6 +1014,7 @@ static void si_destroy_screen(struct pipe_screen *pscreen)
    util_vertex_state_cache_deinit(&sscreen->vertex_state_cache);
 
    sscreen->ws->destroy(sscreen->ws);
+   FREE(sscreen->nir_options);
    FREE(sscreen);
 }
 
@@ -1152,12 +1160,17 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
       sscreen->info.use_display_dcc_with_retile_blit = false;
    }
 
+   if (sscreen->debug_flags & DBG(SHADOW_REGS) ||
+       sscreen->info.gfx_level >= GFX11)
+      sscreen->info.register_shadowing_required = true;
+
    if (sscreen->debug_flags & DBG(NO_GFX))
       sscreen->info.has_graphics = false;
 
    if ((sscreen->debug_flags & DBG(TMZ)) &&
        !sscreen->info.has_tmz_support) {
       fprintf(stderr, "radeonsi: requesting TMZ features but TMZ is not supported\n");
+      FREE(sscreen->nir_options);
       FREE(sscreen);
       return NULL;
    }
@@ -1165,8 +1178,10 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
    /* Initialize just one compiler instance to check for errors. The other compiler instances are
     * initialized on demand.
     */
-   if (!si_init_compiler(sscreen, &sscreen->compiler[0])) {
+   sscreen->compiler[0] = CALLOC_STRUCT(ac_llvm_compiler);
+   if (!si_init_compiler(sscreen, sscreen->compiler[0])) {
       /* The callee prints the error message. */
+      FREE(sscreen->nir_options);
       FREE(sscreen);
       return NULL;
    }
@@ -1180,6 +1195,8 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
    sscreen->b.is_parallel_shader_compilation_finished = si_is_parallel_shader_compilation_finished;
    sscreen->b.finalize_nir = si_finalize_nir;
 
+   sscreen->nir_options = CALLOC_STRUCT(nir_shader_compiler_options);
+
    si_init_screen_get_functions(sscreen);
    si_init_screen_buffer_functions(sscreen);
    si_init_screen_fence_functions(sscreen);
@@ -1190,16 +1207,6 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
 
    sscreen->max_texel_buffer_elements = sscreen->b.get_param(
       &sscreen->b, PIPE_CAP_MAX_TEXEL_BUFFER_ELEMENTS_UINT);
-
-   /* Set these flags in debug_flags early, so that the shader cache takes
-    * them into account.
-    *
-    * Enable FS_CORRECT_DERIVS_AFTER_KILL by default if LLVM is >= 13. This makes
-    * nir_opt_move_discards_to_top more effective.
-    */
-   if (driQueryOptionb(config->options, "glsl_correct_derivatives_after_discard") ||
-       LLVM_VERSION_MAJOR >= 13)
-      sscreen->debug_flags |= DBG(FS_CORRECT_DERIVS_AFTER_KILL);
 
    if (sscreen->debug_flags & DBG(INFO))
       ac_print_gpu_info(&sscreen->info, stdout);
@@ -1224,6 +1231,7 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
 
    si_init_gs_info(sscreen);
    if (!si_init_shader_cache(sscreen)) {
+      FREE(sscreen->nir_options);
       FREE(sscreen);
       return NULL;
    }
@@ -1280,6 +1288,7 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
                            UTIL_QUEUE_INIT_SCALE_THREADS |
                            UTIL_QUEUE_INIT_SET_FULL_THREAD_AFFINITY, NULL)) {
       si_destroy_shader_cache(sscreen);
+      FREE(sscreen->nir_options);
       FREE(sscreen);
       glsl_type_singleton_decref();
       return NULL;
@@ -1292,6 +1301,7 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
                            UTIL_QUEUE_INIT_SET_FULL_THREAD_AFFINITY |
                            UTIL_QUEUE_INIT_USE_MINIMUM_PRIORITY, NULL)) {
       si_destroy_shader_cache(sscreen);
+      FREE(sscreen->nir_options);
       FREE(sscreen);
       glsl_type_singleton_decref();
       return NULL;
@@ -1318,7 +1328,6 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
 
    if (sscreen->info.gfx_level >= GFX11) {
       sscreen->use_ngg = true;
-      sscreen->use_ngg_streamout = true;
       /* TODO: Disable for now. Investigate if it helps.  */
       sscreen->use_ngg_culling = (sscreen->debug_flags & DBG(ALWAYS_NGG_CULLING_ALL)) &&
                                  !(sscreen->debug_flags & DBG(NO_NGG_CULLING));
@@ -1327,11 +1336,9 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
                          sscreen->info.gfx_level >= GFX10 &&
                          (sscreen->info.family != CHIP_NAVI14 ||
                           sscreen->info.is_pro_graphics);
-      sscreen->use_ngg_streamout = false;
       sscreen->use_ngg_culling = sscreen->use_ngg &&
                                  sscreen->info.max_render_backends >= 2 &&
-                                 !(sscreen->debug_flags & DBG(NO_NGG_CULLING)) &&
-                                 LLVM_VERSION_MAJOR >= 12; /* hangs on 11, see #4874 */
+                                 !(sscreen->debug_flags & DBG(NO_NGG_CULLING));
    }
 
    /* Only set this for the cases that are known to work, which are:
@@ -1462,9 +1469,8 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
                                     RADEON_DOMAIN_OA);
    }
 
-   ac_print_shadowed_regs(&sscreen->info);
+   ac_print_nonshadowed_regs(sscreen->info.gfx_level, sscreen->info.family);
 
-   STATIC_ASSERT(sizeof(union si_vgt_stages_key) == 1);
    return &sscreen->b;
 }
 

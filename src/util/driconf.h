@@ -310,6 +310,9 @@
    DRI_CONF_OPT_B(ignore_discard_framebuffer, def, \
                   "Ignore glDiscardFramebuffer/glInvalidateFramebuffer, workaround for games that use it incorrectly")
 
+#define DRI_CONF_FORCE_VK_VENDOR(def) \
+   DRI_CONF_OPT_I(force_vk_vendor, 0, -1, 2147483647, "Override GPU vendor id")
+
 /**
  * \brief Image quality-related options
  */
@@ -642,6 +645,10 @@
    DRI_CONF_OPT_B(radv_flush_before_timestamp_write, def, \
                   "Wait for previous commands to finish before writing timestamps")
 
+#define DRI_CONF_RADV_RT_WAVE64(def) \
+   DRI_CONF_OPT_B(radv_rt_wave64, def, \
+                  "Force wave64 in RT shaders")
+
 #define DRI_CONF_RADV_APP_LAYER() DRI_CONF_OPT_S_NODEF(radv_app_layer, "Select an application layer.")
 
 /**
@@ -675,7 +682,15 @@
 
 #define DRI_CONF_ANV_QUERY_CLEAR_WITH_BLORP_THRESHOLD(def) \
    DRI_CONF_OPT_I(query_clear_with_blorp_threshold, def, 0, INT32_MAX, \
-                  "Indirect threshold count above which we start generating commands")
+                  "Query threshold count above which query buffers are cleared with blorp")
+
+#define DRI_CONF_ANV_QUERY_COPY_WITH_SHADER_THRESHOLD(def) \
+   DRI_CONF_OPT_I(query_copy_with_shader_threshold, def, 0, INT32_MAX, \
+                  "Query threshold count above which query copies are executed with a shader")
+
+#define DRI_CONF_ANV_FORCE_INDIRECT_DESCRIPTORS(def) \
+   DRI_CONF_OPT_B(force_indirect_descriptors, def, \
+                  "Use an indirection to access buffer/image/texture/sampler handles")
 
 /**
  * \brief DZN specific configuration options

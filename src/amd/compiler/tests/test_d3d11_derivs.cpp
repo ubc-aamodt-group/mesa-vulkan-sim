@@ -27,6 +27,7 @@
 using namespace aco;
 
 BEGIN_TEST(d3d11_derivs.simple)
+   // clang-format off
    QoShaderModuleCreateInfo vs = qoShaderModuleCreateInfoGLSL(VERTEX,
       layout(location = 0) in vec2 in_coord;
       layout(location = 0) out vec2 out_coord;
@@ -44,6 +45,7 @@ BEGIN_TEST(d3d11_derivs.simple)
             out_color = texture(tex, in_coord);
       }
    );
+   // clang-format on
 
    PipelineBuilder pbld(get_vk_device(GFX10_3));
    pbld.add_vsfs(vs, fs);
@@ -67,6 +69,7 @@ BEGIN_TEST(d3d11_derivs.simple)
 END_TEST
 
 BEGIN_TEST(d3d11_derivs.constant)
+   // clang-format off
    QoShaderModuleCreateInfo vs = qoShaderModuleCreateInfoGLSL(VERTEX,
       layout(location = 0) in float in_coord;
       layout(location = 0) out float out_coord;
@@ -84,6 +87,7 @@ BEGIN_TEST(d3d11_derivs.constant)
             out_color = texture(tex, vec2(in_coord, -0.5));
       }
    );
+   // clang-format on
 
    PipelineBuilder pbld(get_vk_device(GFX10_3));
    pbld.add_vsfs(vs, fs);
@@ -105,6 +109,7 @@ BEGIN_TEST(d3d11_derivs.constant)
 END_TEST
 
 BEGIN_TEST(d3d11_derivs.discard)
+   // clang-format off
    QoShaderModuleCreateInfo vs = qoShaderModuleCreateInfoGLSL(VERTEX,
       layout(location = 0) in vec2 in_coord;
       layout(location = 0) out vec2 out_coord;
@@ -122,6 +127,7 @@ BEGIN_TEST(d3d11_derivs.discard)
          out_color = texture(tex, in_coord);
       }
    );
+   // clang-format on
 
    PipelineBuilder pbld(get_vk_device(GFX10_3));
    pbld.add_vsfs(vs, fs);
@@ -136,6 +142,7 @@ BEGIN_TEST(d3d11_derivs.discard)
 END_TEST
 
 BEGIN_TEST(d3d11_derivs.bias)
+   // clang-format off
    QoShaderModuleCreateInfo vs = qoShaderModuleCreateInfoGLSL(VERTEX,
       layout(location = 0) in vec2 in_coord;
       layout(location = 0) out vec2 out_coord;
@@ -153,6 +160,7 @@ BEGIN_TEST(d3d11_derivs.bias)
             out_color = texture(tex, in_coord, gl_FragCoord.x);
       }
    );
+   // clang-format on
 
    PipelineBuilder pbld(get_vk_device(GFX10_3));
    pbld.add_vsfs(vs, fs);
@@ -177,6 +185,7 @@ BEGIN_TEST(d3d11_derivs.bias)
 END_TEST
 
 BEGIN_TEST(d3d11_derivs.offset)
+   // clang-format off
    QoShaderModuleCreateInfo vs = qoShaderModuleCreateInfoGLSL(VERTEX,
       layout(location = 0) in vec2 in_coord;
       layout(location = 0) out vec2 out_coord;
@@ -194,6 +203,7 @@ BEGIN_TEST(d3d11_derivs.offset)
             out_color = textureOffset(tex, in_coord, ivec2(1, 2));
       }
    );
+   // clang-format on
 
    /* Use GFX9 because we should have at least one test which doesn't use NSA. */
    PipelineBuilder pbld(get_vk_device(GFX9));
@@ -203,7 +213,7 @@ BEGIN_TEST(d3d11_derivs.offset)
    //>> lv3: %wqm = p_start_linear_vgpr (kill)%vec
    //>> BB1
    //>> v1: %offset = p_parallelcopy 0x201
-   //>> v4: %_ = image_sample_o (kill)%_, (kill)%_, v1: undef, %wqm, (kill)%offset 1d
+   //>> v4: %_ = image_sample_o (kill)%_, (kill)%_, v1: undef, %wqm, (kill)%offset 2d
    //>> BB2
    //>> BB6
    //>> p_end_linear_vgpr (kill)%wqm
@@ -221,6 +231,7 @@ BEGIN_TEST(d3d11_derivs.offset)
 END_TEST
 
 BEGIN_TEST(d3d11_derivs.array)
+   // clang-format off
    QoShaderModuleCreateInfo vs = qoShaderModuleCreateInfoGLSL(VERTEX,
       layout(location = 0) in vec3 in_coord;
       layout(location = 0) out vec3 out_coord;
@@ -238,6 +249,7 @@ BEGIN_TEST(d3d11_derivs.array)
             out_color = texture(tex, in_coord);
       }
    );
+   // clang-format on
 
    PipelineBuilder pbld(get_vk_device(GFX10_3));
    pbld.add_vsfs(vs, fs);
@@ -264,6 +276,7 @@ BEGIN_TEST(d3d11_derivs.array)
 END_TEST
 
 BEGIN_TEST(d3d11_derivs.bias_array)
+   // clang-format off
    QoShaderModuleCreateInfo vs = qoShaderModuleCreateInfoGLSL(VERTEX,
       layout(location = 0) in vec3 in_coord;
       layout(location = 0) out vec3 out_coord;
@@ -281,6 +294,7 @@ BEGIN_TEST(d3d11_derivs.bias_array)
             out_color = texture(tex, in_coord, gl_FragCoord.x);
       }
    );
+   // clang-format on
 
    PipelineBuilder pbld(get_vk_device(GFX10_3));
    pbld.add_vsfs(vs, fs);
@@ -307,7 +321,8 @@ BEGIN_TEST(d3d11_derivs.bias_array)
    pbld.print_ir(VK_SHADER_STAGE_FRAGMENT_BIT, "Assembly");
 END_TEST
 
-BEGIN_TEST(d3d11_derivs.1d_gfx9)
+BEGIN_TEST(d3d11_derivs._1d_gfx9)
+   // clang-format off
    QoShaderModuleCreateInfo vs = qoShaderModuleCreateInfoGLSL(VERTEX,
       layout(location = 0) in float in_coord;
       layout(location = 0) out float out_coord;
@@ -325,6 +340,7 @@ BEGIN_TEST(d3d11_derivs.1d_gfx9)
             out_color = texture(tex, in_coord);
       }
    );
+   // clang-format on
 
    PipelineBuilder pbld(get_vk_device(GFX9));
    pbld.add_vsfs(vs, fs);
@@ -333,7 +349,7 @@ BEGIN_TEST(d3d11_derivs.1d_gfx9)
    //>> v2: %vec = p_create_vector (kill)%x, 0.5
    //>> lv2: %wqm = p_start_linear_vgpr (kill)%vec
    //>> BB1
-   //>> v4: %_ = image_sample (kill)%_, (kill)%_, v1: undef, %wqm 1d
+   //>> v4: %_ = image_sample (kill)%_, (kill)%_, v1: undef, %wqm 2d
    //>> BB2
    //>> BB6
    //>> p_end_linear_vgpr (kill)%wqm
@@ -346,7 +362,8 @@ BEGIN_TEST(d3d11_derivs.1d_gfx9)
    pbld.print_ir(VK_SHADER_STAGE_FRAGMENT_BIT, "Assembly");
 END_TEST
 
-BEGIN_TEST(d3d11_derivs.1d_array_gfx9)
+BEGIN_TEST(d3d11_derivs._1d_array_gfx9)
+   // clang-format off
    QoShaderModuleCreateInfo vs = qoShaderModuleCreateInfoGLSL(VERTEX,
       layout(location = 0) in vec2 in_coord;
       layout(location = 0) out vec2 out_coord;
@@ -364,6 +381,7 @@ BEGIN_TEST(d3d11_derivs.1d_array_gfx9)
             out_color = texture(tex, in_coord);
       }
    );
+   // clang-format on
 
    PipelineBuilder pbld(get_vk_device(GFX9));
    pbld.add_vsfs(vs, fs);
@@ -373,7 +391,7 @@ BEGIN_TEST(d3d11_derivs.1d_array_gfx9)
    //>> v3: %vec = p_create_vector (kill)%x, 0.5, (kill)%layer
    //>> lv3: %wqm = p_start_linear_vgpr (kill)%vec
    //>> BB1
-   //>> v4: %_ = image_sample (kill)%_, (kill)%_, v1: undef, %wqm 1d da
+   //>> v4: %_ = image_sample (kill)%_, (kill)%_, v1: undef, %wqm 2darray da
    //>> BB2
    //>> BB6
    //>> p_end_linear_vgpr (kill)%wqm
@@ -391,6 +409,7 @@ BEGIN_TEST(d3d11_derivs.1d_array_gfx9)
 END_TEST
 
 BEGIN_TEST(d3d11_derivs.cube)
+   // clang-format off
    QoShaderModuleCreateInfo vs = qoShaderModuleCreateInfoGLSL(VERTEX,
       layout(location = 0) in vec3 in_coord;
       layout(location = 0) out vec3 out_coord;
@@ -408,6 +427,7 @@ BEGIN_TEST(d3d11_derivs.cube)
             out_color = texture(tex, in_coord);
       }
    );
+   // clang-format on
 
    PipelineBuilder pbld(get_vk_device(GFX10_3));
    pbld.add_vsfs(vs, fs);
@@ -433,6 +453,7 @@ BEGIN_TEST(d3d11_derivs.cube)
 END_TEST
 
 BEGIN_TEST(d3d11_derivs.cube_array)
+   // clang-format off
    QoShaderModuleCreateInfo vs = qoShaderModuleCreateInfoGLSL(VERTEX,
       layout(location = 0) in vec4 in_coord;
       layout(location = 0) out vec4 out_coord;
@@ -450,6 +471,7 @@ BEGIN_TEST(d3d11_derivs.cube_array)
             out_color = texture(tex, in_coord);
       }
    );
+   // clang-format on
 
    PipelineBuilder pbld(get_vk_device(GFX10_3));
    pbld.add_vsfs(vs, fs);
@@ -480,6 +502,7 @@ BEGIN_TEST(d3d11_derivs.cube_array)
 END_TEST
 
 BEGIN_TEST(d3d11_derivs.fddxy)
+   // clang-format off
    QoShaderModuleCreateInfo vs = qoShaderModuleCreateInfoGLSL(VERTEX,
       layout(location = 0) in vec2 in_coord;
       layout(location = 0) out vec2 out_coord;
@@ -497,6 +520,7 @@ BEGIN_TEST(d3d11_derivs.fddxy)
             out_color = vec4(dFdxFine(in_coord.x), dFdyCoarse(in_coord.y), textureLod(tex, vec2(0.5), 0.0).xy);
       }
    );
+   // clang-format on
 
    PipelineBuilder pbld(get_vk_device(GFX10_3));
    pbld.add_vsfs(vs, fs);
@@ -510,6 +534,7 @@ END_TEST
 
 /* Ensure the BC optimize transform is done after ac_nir_lower_tex. */
 BEGIN_TEST(d3d11_derivs.bc_optimize)
+   // clang-format off
    QoShaderModuleCreateInfo vs = qoShaderModuleCreateInfoGLSL(VERTEX,
       layout(location = 0) in vec2 in_coord;
       layout(location = 0) out vec2 out_coord;
@@ -527,6 +552,7 @@ BEGIN_TEST(d3d11_derivs.bc_optimize)
             out_color = texture(tex, vec2(in_coord.x, interpolateAtCentroid(in_coord.y)));
       }
    );
+   // clang-format on
 
    PipelineBuilder pbld(get_vk_device(GFX10_3));
    pbld.add_vsfs(vs, fs);
@@ -545,6 +571,7 @@ BEGIN_TEST(d3d11_derivs.bc_optimize)
 END_TEST
 
 BEGIN_TEST(d3d11_derivs.get_lod)
+   // clang-format off
    QoShaderModuleCreateInfo vs = qoShaderModuleCreateInfoGLSL(VERTEX,
       layout(location = 0) in vec2 in_coord;
       layout(location = 0) out vec2 out_coord;
@@ -562,6 +589,7 @@ BEGIN_TEST(d3d11_derivs.get_lod)
             out_color = textureQueryLod(tex, in_coord);
       }
    );
+   // clang-format on
 
    PipelineBuilder pbld(get_vk_device(GFX10_3));
    pbld.add_vsfs(vs, fs);
@@ -605,9 +633,10 @@ BEGIN_TEST(d3d11_derivs.nsa_max)
 
       //~gfx11! v4: %_:v[0-3] = image_sample_c_b_o  s8: undef,  s4: undef,  v1: undef, %_:v[6], %_:v[7], %_:v[8], %_:v[3], %_:v[4-5] 2darray da
 
-      Instruction *instr = bld.mimg(aco_opcode::image_sample_c_b_o, Definition(reg_v0, v4),
-                                    Operand(s8), Operand(s4), Operand(v1), Operand(reg_v0, v6.as_linear()),
-                                    Operand(reg_v6, v1), Operand(reg_v7, v1), Operand(reg_v8, v1));
+      Instruction* instr =
+         bld.mimg(aco_opcode::image_sample_c_b_o, Definition(reg_v0, v4), Operand(s8), Operand(s4),
+                  Operand(v1), Operand(reg_v0, v6.as_linear()), Operand(reg_v6, v1),
+                  Operand(reg_v7, v1), Operand(reg_v8, v1));
       instr->mimg().dim = ac_image_2darray;
       instr->mimg().da = true;
       instr->mimg().strict_wqm = true;

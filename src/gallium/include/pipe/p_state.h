@@ -282,12 +282,8 @@ struct pipe_stream_output_info
 };
 
 /**
- * The 'type' parameter identifies whether the shader state contains TGSI
- * tokens, etc.  If the driver returns 'PIPE_SHADER_IR_TGSI' for the
- * 'PIPE_SHADER_CAP_PREFERRED_IR' shader param, the ir will *always* be
- * 'PIPE_SHADER_IR_TGSI' and the tokens ptr will be valid.  If the driver
- * requests a different 'pipe_shader_ir' type, then it must check the 'type'
- * enum to see if it is getting TGSI tokens or its preferred IR.
+ * The 'type' parameter identifies whether the shader state contains NIR, TGSI
+ * tokens, etc.
  *
  * TODO pipe_compute_state should probably get similar treatment to handle
  * multiple IR's in a cleaner way..
@@ -640,7 +636,7 @@ struct pipe_transfer
    unsigned level:8;               /**< texture mipmap level */
    struct pipe_box box;            /**< region of the resource to access */
    unsigned stride;                /**< row stride in bytes */
-   unsigned layer_stride;          /**< image/layer stride in bytes */
+   uintptr_t layer_stride;          /**< image/layer stride in bytes */
 
    /* Offset into a driver-internal staging buffer to make use of unused
     * padding in this structure.
@@ -858,7 +854,7 @@ struct pipe_draw_start_count_bias {
 struct pipe_draw_vertex_state_info {
 #if defined(__GNUC__)
    /* sizeof(mode) == 1 because it's a packed enum. */
-   enum pipe_prim_type mode;  /**< the mode of the primitive */
+   enum mesa_prim mode;  /**< the mode of the primitive */
 #else
    /* sizeof(mode) == 1 is required by draw merging in u_threaded_context. */
    uint8_t mode;              /**< the mode of the primitive */
@@ -873,7 +869,7 @@ struct pipe_draw_info
 {
 #if defined(__GNUC__)
    /* sizeof(mode) == 1 because it's a packed enum. */
-   enum pipe_prim_type mode;  /**< the mode of the primitive */
+   enum mesa_prim mode;  /**< the mode of the primitive */
 #else
    /* sizeof(mode) == 1 is required by draw merging in u_threaded_context. */
    uint8_t mode;              /**< the mode of the primitive */
@@ -888,7 +884,7 @@ struct pipe_draw_info
    bool take_index_buffer_ownership:1; /**< callee inherits caller's refcount
          (no need to reference indexbuf, but still needs to unreference it) */
    bool index_bias_varies:1;   /**< true if index_bias varies between draws */
-   bool was_line_loop:1; /**< true if pipe_prim_type was LINE_LOOP before translation */
+   bool was_line_loop:1; /**< true if mesa_prim was LINE_LOOP before translation */
    uint8_t _pad:1;
 
    unsigned start_instance; /**< first instance id */
@@ -1030,6 +1026,11 @@ struct pipe_grid_info
     */
    struct pipe_resource *indirect;
    unsigned indirect_offset; /**< must be 4 byte aligned */
+   unsigned indirect_stride;
+   /* draw related members are for task/mesh shaders */
+   unsigned draw_count;
+   unsigned indirect_draw_count_offset;
+   struct pipe_resource *indirect_draw_count;
 };
 
 /**

@@ -714,9 +714,13 @@ print_var_decl(nir_variable *var, print_state *state)
    }
 
    if (var->constant_initializer) {
-      fprintf(fp, " = { ");
-      print_constant(var->constant_initializer, var->type, state);
-      fprintf(fp, " }");
+      if (var->constant_initializer->is_null_constant) {
+         fprintf(fp, " = null");
+      } else {
+         fprintf(fp, " = { ");
+         print_constant(var->constant_initializer, var->type, state);
+         fprintf(fp, " }");
+      }
    }
    if (glsl_type_is_sampler(var->type) && var->data.sampler.is_inline_sampler) {
       fprintf(fp, " = { %s, %s, %s }",
@@ -933,7 +937,6 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
 
    for (unsigned i = 0; i < info->num_indices; i++) {
       unsigned idx = info->indices[i];
-      bool print_raw = true;
       if (i != 0)
          fprintf(fp, ", ");
       switch (idx) {
@@ -956,7 +959,6 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
       case NIR_INTRINSIC_ATOMIC_OP: {
          nir_atomic_op atomic_op = nir_intrinsic_atomic_op(instr);
          fprintf(fp, "atomic_op=");
-         print_raw = false;
 
          switch (atomic_op) {
          case nir_atomic_op_iadd:     fprintf(fp, "iadd"); break;
@@ -1060,6 +1062,8 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
       case NIR_INTRINSIC_MEMORY_MODES: {
          fprintf(fp, "mem_modes=");
          unsigned int modes = nir_intrinsic_memory_modes(instr);
+         if (modes == 0)
+            fputc('0', fp);
          while (modes) {
             nir_variable_mode m = u_bit_scan(&modes);
             fprintf(fp, "%s%s", get_variable_mode_str(1 << m, true), modes ? "|" : "");
@@ -1069,19 +1073,14 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
 
       case NIR_INTRINSIC_EXECUTION_SCOPE:
       case NIR_INTRINSIC_MEMORY_SCOPE: {
-         fprintf(fp, "%s=", nir_intrinsic_index_names[idx]);
-         nir_scope scope =
+         mesa_scope scope =
             idx == NIR_INTRINSIC_MEMORY_SCOPE ? nir_intrinsic_memory_scope(instr)
                                               : nir_intrinsic_execution_scope(instr);
-         switch (scope) {
-         case NIR_SCOPE_NONE:         fprintf(fp, "NONE");         break;
-         case NIR_SCOPE_DEVICE:       fprintf(fp, "DEVICE");       break;
-         case NIR_SCOPE_QUEUE_FAMILY: fprintf(fp, "QUEUE_FAMILY"); break;
-         case NIR_SCOPE_WORKGROUP:    fprintf(fp, "WORKGROUP");    break;
-         case NIR_SCOPE_SHADER_CALL:  fprintf(fp, "SHADER_CALL");  break;
-         case NIR_SCOPE_SUBGROUP:     fprintf(fp, "SUBGROUP");     break;
-         case NIR_SCOPE_INVOCATION:   fprintf(fp, "INVOCATION");   break;
-         }
+         const char *name = mesa_scope_name(scope);
+         static const char prefix[] = "SCOPE_";
+         if (strncmp(name, prefix, sizeof(prefix) - 1) == 0)
+            name += sizeof(prefix) - 1;
+         fprintf(fp, "%s=%s", nir_intrinsic_index_names[idx], name);
          break;
       }
 
@@ -1093,6 +1092,8 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
          switch (instr->intrinsic) {
          case nir_intrinsic_load_input:
          case nir_intrinsic_load_interpolated_input:
+         case nir_intrinsic_load_per_vertex_input:
+         case nir_intrinsic_load_input_vertex:
             mode = nir_var_shader_in;
             break;
 
@@ -1224,15 +1225,32 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
          break;
       }
 
+      case NIR_INTRINSIC_RESOURCE_ACCESS_INTEL: {
+         fprintf(fp, "resource_intel=");
+         unsigned int modes = nir_intrinsic_resource_access_intel(instr);
+         if (modes == 0)
+            fputc('0', fp);
+         while (modes) {
+            nir_resource_data_intel i = 1u << u_bit_scan(&modes);
+            switch (i) {
+            case nir_resource_intel_bindless: fprintf(fp, "bindless"); break;
+            case nir_resource_intel_pushable: fprintf(fp, "pushable"); break;
+            case nir_resource_intel_sampler:  fprintf(fp, "sampler"); break;
+            case nir_resource_intel_non_uniform:
+                                              fprintf(fp, "non-uniform"); break;
+            default:                          fprintf(fp, "unknown"); break;
+            }
+            fprintf(fp, "%s", modes ? "|" : "");
+         }
+         break;
+      }
+
       default: {
          unsigned off = info->index_map[idx] - 1;
          fprintf(fp, "%s=%d", nir_intrinsic_index_names[idx], instr->const_index[off]);
-         print_raw = false;
          break;
       }
       }
-      if (print_raw)
-         fprintf(fp, " /*%d*/", instr->const_index[i]);
    }
    fprintf(fp, ")");
 
@@ -1790,7 +1808,7 @@ destroy_print_state(print_state *state)
 static const char *
 primitive_name(unsigned primitive)
 {
-#define PRIM(X) case SHADER_PRIM_ ## X : return #X
+#define PRIM(X) case MESA_PRIM_ ## X : return #X
    switch (primitive) {
    PRIM(POINTS);
    PRIM(LINES);
@@ -1916,6 +1934,8 @@ print_shader_info(const struct shader_info *info, FILE *fp)
 
    if (info->label)
       fprintf(fp, "label: %s\n", info->label);
+
+   fprintf(fp, "internal: %s\n", info->internal ? "true" : "false");
 
    if (gl_shader_stage_uses_workgroup(info->stage)) {
       fprintf(fp, "workgroup-size: %u, %u, %u%s\n",
@@ -2817,17 +2837,17 @@ print_intrinsic_instr_as_ptx(nir_intrinsic_instr *instr, print_state *state, ssa
       case NIR_INTRINSIC_EXECUTION_SCOPE:
       case NIR_INTRINSIC_MEMORY_SCOPE: {
          fprintf(fp, " %s=", nir_intrinsic_index_names[idx]);
-         nir_scope scope =
+         mesa_scope scope =
             idx == NIR_INTRINSIC_MEMORY_SCOPE ? nir_intrinsic_memory_scope(instr)
                                               : nir_intrinsic_execution_scope(instr);
          switch (scope) {
-         case NIR_SCOPE_NONE:         fprintf(fp, "NONE");         break;
-         case NIR_SCOPE_DEVICE:       fprintf(fp, "DEVICE");       break;
-         case NIR_SCOPE_QUEUE_FAMILY: fprintf(fp, "QUEUE_FAMILY"); break;
-         case NIR_SCOPE_WORKGROUP:    fprintf(fp, "WORKGROUP");    break;
-         case NIR_SCOPE_SHADER_CALL:  fprintf(fp, "SHADER_CALL");  break;
-         case NIR_SCOPE_SUBGROUP:     fprintf(fp, "SUBGROUP");     break;
-         case NIR_SCOPE_INVOCATION:   fprintf(fp, "INVOCATION");   break;
+         case SCOPE_NONE:         fprintf(fp, "NONE");         break;
+         case SCOPE_DEVICE:       fprintf(fp, "DEVICE");       break;
+         case SCOPE_QUEUE_FAMILY: fprintf(fp, "QUEUE_FAMILY"); break;
+         case SCOPE_WORKGROUP:    fprintf(fp, "WORKGROUP");    break;
+         case SCOPE_SHADER_CALL:  fprintf(fp, "SHADER_CALL");  break;
+         case SCOPE_SUBGROUP:     fprintf(fp, "SUBGROUP");     break;
+         case SCOPE_INVOCATION:   fprintf(fp, "INVOCATION");   break;
          }
          break;
       }

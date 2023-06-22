@@ -393,6 +393,9 @@ crocus_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_HARDWARE_GL_SELECT:
       return 0;
 
+   case PIPE_CAP_TIMER_RESOLUTION:
+      return DIV_ROUND_UP(1000000000ull, devinfo->timestamp_frequency);
+
    default:
       return u_pipe_screen_get_param_defaults(pscreen, param);
    }
@@ -448,6 +451,10 @@ crocus_get_shader_param(struct pipe_screen *pscreen,
    gl_shader_stage stage = stage_from_pipe(p_stage);
    struct crocus_screen *screen = (struct crocus_screen *)pscreen;
    const struct intel_device_info *devinfo = &screen->devinfo;
+
+   if (p_stage == PIPE_SHADER_MESH ||
+       p_stage == PIPE_SHADER_TASK)
+      return 0;
 
    if (devinfo->ver < 6 &&
        p_stage != PIPE_SHADER_VERTEX &&
@@ -517,8 +524,6 @@ crocus_get_shader_param(struct pipe_screen *pscreen,
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
       return 0;
-   case PIPE_SHADER_CAP_PREFERRED_IR:
-      return PIPE_SHADER_IR_NIR;
    case PIPE_SHADER_CAP_SUPPORTED_IRS:
       return 1 << PIPE_SHADER_IR_NIR;
    case PIPE_SHADER_CAP_DROUND_SUPPORTED:

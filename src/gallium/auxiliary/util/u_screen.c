@@ -105,7 +105,7 @@ u_pipe_screen_get_param_defaults(struct pipe_screen *pscreen,
 
    case PIPE_CAP_SUPPORTED_PRIM_MODES_WITH_RESTART:
    case PIPE_CAP_SUPPORTED_PRIM_MODES:
-      return BITFIELD_MASK(PIPE_PRIM_MAX);
+      return BITFIELD_MASK(MESA_PRIM_COUNT);
 
    case PIPE_CAP_MIN_TEXEL_OFFSET:
       /* GL 3.x minimum value. */
@@ -153,6 +153,7 @@ u_pipe_screen_get_param_defaults(struct pipe_screen *pscreen,
 
    case PIPE_CAP_START_INSTANCE:
    case PIPE_CAP_QUERY_TIMESTAMP:
+   case PIPE_CAP_TIMER_RESOLUTION:
    case PIPE_CAP_TEXTURE_MULTISAMPLE:
       return 0;
 

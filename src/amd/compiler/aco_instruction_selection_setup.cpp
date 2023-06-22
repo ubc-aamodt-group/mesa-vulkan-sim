@@ -308,7 +308,8 @@ init_context(isel_context* ctx, nir_shader* shader)
    ctx->ub_config.max_workgroup_size[2] = 2048;
 
    nir_divergence_analysis(shader);
-   nir_opt_uniform_atomics(shader);
+   if (nir_opt_uniform_atomics(shader) && nir_lower_int64(shader))
+      nir_divergence_analysis(shader);
 
    apply_nuw_to_offsets(ctx, impl);
 
@@ -492,6 +493,8 @@ init_context(isel_context* ctx, nir_shader* shader)
                case nir_intrinsic_bindless_image_samples:
                case nir_intrinsic_load_force_vrs_rates_amd:
                case nir_intrinsic_load_scalar_arg_amd:
+               case nir_intrinsic_load_lds_ngg_scratch_base_amd:
+               case nir_intrinsic_load_lds_ngg_gs_out_vertex_base_amd:
                case nir_intrinsic_load_smem_amd: type = RegType::sgpr; break;
                case nir_intrinsic_load_sample_id:
                case nir_intrinsic_load_input:
@@ -504,7 +507,6 @@ init_context(isel_context* ctx, nir_shader* shader)
                case nir_intrinsic_load_barycentric_pixel:
                case nir_intrinsic_load_barycentric_model:
                case nir_intrinsic_load_barycentric_centroid:
-               case nir_intrinsic_load_barycentric_at_sample:
                case nir_intrinsic_load_barycentric_at_offset:
                case nir_intrinsic_load_interpolated_input:
                case nir_intrinsic_load_frag_coord:
@@ -658,8 +660,8 @@ cleanup_context(isel_context* ctx)
 isel_context
 setup_isel_context(Program* program, unsigned shader_count, struct nir_shader* const* shaders,
                    ac_shader_config* config, const struct aco_compiler_options* options,
-                   const struct aco_shader_info* info,
-                   const struct ac_shader_args* args, bool is_ps_epilog)
+                   const struct aco_shader_info* info, const struct ac_shader_args* args,
+                   bool is_ps_epilog)
 {
    SWStage sw_stage = SWStage::None;
    for (unsigned i = 0; i < shader_count; i++) {

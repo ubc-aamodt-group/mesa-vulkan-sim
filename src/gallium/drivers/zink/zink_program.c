@@ -789,7 +789,7 @@ optimized_compile_job(void *data, void *gdata, int thread_index)
    if (pc_entry->gpl.gkey)
       pipeline = zink_create_gfx_pipeline_combined(screen, pc_entry->prog, pc_entry->gpl.ikey->pipeline, &pc_entry->gpl.gkey->pipeline, 1, pc_entry->gpl.okey->pipeline, true);
    else
-      pipeline = zink_create_gfx_pipeline(screen, pc_entry->prog, pc_entry->prog->objs, &pc_entry->state, pc_entry->state.element_state->binding_map, zink_primitive_topology(pc_entry->state.gfx_prim_mode), true);
+      pipeline = zink_create_gfx_pipeline(screen, pc_entry->prog, pc_entry->prog->objs, &pc_entry->state, pc_entry->state.element_state->binding_map, zink_primitive_topology(pc_entry->state.gfx_prim_mode), true, NULL);
    if (pipeline) {
       pc_entry->gpl.unoptimized_pipeline = pc_entry->pipeline;
       pc_entry->pipeline = pipeline;
@@ -807,7 +807,7 @@ optimized_shobj_compile_job(void *data, void *gdata, int thread_index)
       objs[i].mod = VK_NULL_HANDLE;
       objs[i].spirv = pc_entry->shobjs[i].spirv;
    }
-   pc_entry->pipeline = zink_create_gfx_pipeline(screen, pc_entry->prog, objs, &pc_entry->state, NULL, zink_primitive_topology(pc_entry->state.gfx_prim_mode), true);
+   pc_entry->pipeline = zink_create_gfx_pipeline(screen, pc_entry->prog, objs, &pc_entry->state, NULL, zink_primitive_topology(pc_entry->state.gfx_prim_mode), true, NULL);
    /* no unoptimized_pipeline dance */
 }
 
@@ -1374,8 +1374,11 @@ create_compute_program(struct zink_context *ctx, nir_shader *nir)
    _mesa_hash_table_init(&comp->pipelines, comp, NULL, comp->use_local_size ?
                                                        equals_compute_pipeline_state_local_size :
                                                        equals_compute_pipeline_state);
-   util_queue_add_job(&screen->cache_get_thread, comp, &comp->base.cache_fence,
-                      precompile_compute_job, NULL, 0);
+   if (zink_debug & ZINK_DEBUG_NOBGC)
+      precompile_compute_job(comp, screen, 0);
+   else
+      util_queue_add_job(&screen->cache_get_thread, comp, &comp->base.cache_fence,
+                        precompile_compute_job, NULL, 0);
    return comp;
 }
 
@@ -1637,6 +1640,9 @@ zink_get_compute_pipeline(struct zink_screen *screen,
 static void
 bind_gfx_stage(struct zink_context *ctx, gl_shader_stage stage, struct zink_shader *shader)
 {
+   /* RADV doesn't support binding pipelines in DGC */
+   if (zink_screen(ctx->base.screen)->info.nv_dgc_props.maxGraphicsShaderGroupCount == 0)
+      zink_flush_dgc_if_enabled(ctx);
    if (shader && shader->info.num_inlinable_uniforms)
       ctx->shader_has_inlinable_uniforms_mask |= 1 << stage;
    else
@@ -1665,33 +1671,33 @@ bind_gfx_stage(struct zink_context *ctx, gl_shader_stage stage, struct zink_shad
    }
 }
 
-static enum pipe_prim_type
+static enum mesa_prim
 gs_output_to_reduced_prim_type(struct shader_info *info)
 {
    switch (info->gs.output_primitive) {
-   case SHADER_PRIM_POINTS:
-      return PIPE_PRIM_POINTS;
+   case MESA_PRIM_POINTS:
+      return MESA_PRIM_POINTS;
 
-   case SHADER_PRIM_LINES:
-   case SHADER_PRIM_LINE_LOOP:
-   case SHADER_PRIM_LINE_STRIP:
-   case SHADER_PRIM_LINES_ADJACENCY:
-   case SHADER_PRIM_LINE_STRIP_ADJACENCY:
-      return PIPE_PRIM_LINES;
+   case MESA_PRIM_LINES:
+   case MESA_PRIM_LINE_LOOP:
+   case MESA_PRIM_LINE_STRIP:
+   case MESA_PRIM_LINES_ADJACENCY:
+   case MESA_PRIM_LINE_STRIP_ADJACENCY:
+      return MESA_PRIM_LINES;
 
-   case SHADER_PRIM_TRIANGLES:
-   case SHADER_PRIM_TRIANGLE_STRIP:
-   case SHADER_PRIM_TRIANGLE_FAN:
-   case SHADER_PRIM_TRIANGLES_ADJACENCY:
-   case SHADER_PRIM_TRIANGLE_STRIP_ADJACENCY:
-      return PIPE_PRIM_TRIANGLES;
+   case MESA_PRIM_TRIANGLES:
+   case MESA_PRIM_TRIANGLE_STRIP:
+   case MESA_PRIM_TRIANGLE_FAN:
+   case MESA_PRIM_TRIANGLES_ADJACENCY:
+   case MESA_PRIM_TRIANGLE_STRIP_ADJACENCY:
+      return MESA_PRIM_TRIANGLES;
 
    default:
       unreachable("unexpected output primitive type");
    }
 }
 
-static enum pipe_prim_type
+static enum mesa_prim
 update_rast_prim(struct zink_shader *shader)
 {
    struct shader_info *info = &shader->info;
@@ -1699,20 +1705,20 @@ update_rast_prim(struct zink_shader *shader)
       return gs_output_to_reduced_prim_type(info);
    else if (info->stage == MESA_SHADER_TESS_EVAL) {
       if (info->tess.point_mode)
-         return PIPE_PRIM_POINTS;
+         return MESA_PRIM_POINTS;
       else {
          switch (info->tess._primitive_mode) {
          case TESS_PRIMITIVE_ISOLINES:
-            return PIPE_PRIM_LINES;
+            return MESA_PRIM_LINES;
          case TESS_PRIMITIVE_TRIANGLES:
          case TESS_PRIMITIVE_QUADS:
-            return PIPE_PRIM_TRIANGLES;
+            return MESA_PRIM_TRIANGLES;
          default:
-            return PIPE_PRIM_MAX;
+            return MESA_PRIM_COUNT;
          }
       }
    }
-   return PIPE_PRIM_MAX;
+   return MESA_PRIM_COUNT;
 }
 
 static void
@@ -1746,7 +1752,7 @@ bind_last_vertex_stage(struct zink_context *ctx, gl_shader_stage stage, struct z
    /* update rast_prim */
    ctx->gfx_pipeline_state.shader_rast_prim =
       ctx->last_vertex_stage ? update_rast_prim(ctx->last_vertex_stage) :
-                               PIPE_PRIM_MAX;
+                               MESA_PRIM_COUNT;
 
    if (old != current) {
       if (!zink_screen(ctx->base.screen)->optimal_keys) {
@@ -1852,7 +1858,7 @@ zink_bind_fs_state(struct pipe_context *pctx,
           !zink_screen(pctx->screen)->driver_workarounds.needs_zs_shader_swizzle)
          zink_update_shadow_samplerviews(ctx, shadow_mask | ctx->gfx_stages[MESA_SHADER_FRAGMENT]->fs.legacy_shadow_mask);
       if (!ctx->track_renderpasses && !ctx->blitting)
-         zink_parse_tc_info(ctx);
+         ctx->rp_tc_info_updated = true;
    }
    zink_update_fbfetch(ctx);
 }
@@ -2135,7 +2141,7 @@ zink_link_gfx_shader(struct pipe_context *pctx, void **shaders)
          generate_gfx_program_modules(ctx, screen,  prog, &ctx->gfx_pipeline_state);
       VkPipeline pipeline = zink_create_gfx_pipeline(screen, prog, prog->objs, &ctx->gfx_pipeline_state,
                                                      ctx->gfx_pipeline_state.element_state->binding_map,
-                                                     shaders[MESA_SHADER_TESS_EVAL] ? VK_PRIMITIVE_TOPOLOGY_PATCH_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, true);
+                                                     shaders[MESA_SHADER_TESS_EVAL] ? VK_PRIMITIVE_TOPOLOGY_PATCH_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, true, NULL);
       print_pipeline_stats(screen, pipeline);
    } else {
       if (zink_screen(pctx->screen)->info.have_EXT_shader_object)
@@ -2283,58 +2289,58 @@ static bool
 has_edge_flags(struct zink_context *ctx)
 {
    switch(ctx->gfx_pipeline_state.gfx_prim_mode) {
-   case PIPE_PRIM_POINTS:
-   case PIPE_PRIM_LINE_STRIP:
-   case PIPE_PRIM_LINE_STRIP_ADJACENCY:
-   case PIPE_PRIM_LINES:
-   case PIPE_PRIM_LINE_LOOP:
-   case PIPE_PRIM_LINES_ADJACENCY:
-   case PIPE_PRIM_TRIANGLE_STRIP:
-   case PIPE_PRIM_TRIANGLE_FAN:
-   case PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY:
-   case PIPE_PRIM_QUAD_STRIP:
-   case PIPE_PRIM_PATCHES:
+   case MESA_PRIM_POINTS:
+   case MESA_PRIM_LINE_STRIP:
+   case MESA_PRIM_LINE_STRIP_ADJACENCY:
+   case MESA_PRIM_LINES:
+   case MESA_PRIM_LINE_LOOP:
+   case MESA_PRIM_LINES_ADJACENCY:
+   case MESA_PRIM_TRIANGLE_STRIP:
+   case MESA_PRIM_TRIANGLE_FAN:
+   case MESA_PRIM_TRIANGLE_STRIP_ADJACENCY:
+   case MESA_PRIM_QUAD_STRIP:
+   case MESA_PRIM_PATCHES:
       return false;
-   case PIPE_PRIM_TRIANGLES:
-   case PIPE_PRIM_TRIANGLES_ADJACENCY:
-   case PIPE_PRIM_QUADS:
-   case PIPE_PRIM_POLYGON:
-   case PIPE_PRIM_MAX:
+   case MESA_PRIM_TRIANGLES:
+   case MESA_PRIM_TRIANGLES_ADJACENCY:
+   case MESA_PRIM_QUADS:
+   case MESA_PRIM_POLYGON:
+   case MESA_PRIM_COUNT:
    default:
       break;
    }
-   return ctx->gfx_pipeline_state.rast_prim == PIPE_PRIM_LINES &&
+   return ctx->gfx_pipeline_state.rast_prim == MESA_PRIM_LINES &&
           ctx->gfx_stages[MESA_SHADER_VERTEX]->has_edgeflags;
 }
 
 static enum zink_rast_prim
-zink_rast_prim_for_pipe(enum pipe_prim_type prim)
+zink_rast_prim_for_pipe(enum mesa_prim prim)
 {
    switch (prim) {
-   case PIPE_PRIM_POINTS:
+   case MESA_PRIM_POINTS:
       return ZINK_PRIM_POINTS;
-   case PIPE_PRIM_LINES:
+   case MESA_PRIM_LINES:
       return ZINK_PRIM_LINES;
-   case PIPE_PRIM_TRIANGLES:
+   case MESA_PRIM_TRIANGLES:
    default:
       return ZINK_PRIM_TRIANGLES;
    }
 }
 
-static enum pipe_prim_type
+static enum mesa_prim
 zink_tess_prim_type(struct zink_shader *tess)
 {
    if (tess->info.tess.point_mode)
-      return PIPE_PRIM_POINTS;
+      return MESA_PRIM_POINTS;
    else {
       switch (tess->info.tess._primitive_mode) {
       case TESS_PRIMITIVE_ISOLINES:
-         return PIPE_PRIM_LINES;
+         return MESA_PRIM_LINES;
       case TESS_PRIMITIVE_TRIANGLES:
       case TESS_PRIMITIVE_QUADS:
-         return PIPE_PRIM_TRIANGLES;
+         return MESA_PRIM_TRIANGLES;
       default:
-         return PIPE_PRIM_MAX;
+         return MESA_PRIM_COUNT;
       }
    }
 }
@@ -2347,13 +2353,13 @@ zink_add_inline_uniform(nir_shader *shader, int offset)
 }
 
 static unsigned
-encode_lower_pv_mode(enum pipe_prim_type prim_type)
+encode_lower_pv_mode(enum mesa_prim prim_type)
 {
    switch (prim_type) {
-   case PIPE_PRIM_TRIANGLE_STRIP:
-   case PIPE_PRIM_QUAD_STRIP:
+   case MESA_PRIM_TRIANGLE_STRIP:
+   case MESA_PRIM_QUAD_STRIP:
       return ZINK_PVE_PRIMITIVE_TRISTRIP;
-   case PIPE_PRIM_TRIANGLE_FAN:
+   case MESA_PRIM_TRIANGLE_FAN:
       return ZINK_PVE_PRIMITIVE_FAN;
    default:
       return ZINK_PVE_PRIMITIVE_SIMPLE;
@@ -2367,12 +2373,12 @@ zink_set_primitive_emulation_keys(struct zink_context *ctx)
    bool lower_line_stipple = false, lower_line_smooth = false;
    unsigned lower_pv_mode = 0;
    if (!screen->optimal_keys) {
-      lower_line_stipple = ctx->gfx_pipeline_state.rast_prim == PIPE_PRIM_LINES &&
+      lower_line_stipple = ctx->gfx_pipeline_state.rast_prim == MESA_PRIM_LINES &&
                                 screen->driver_workarounds.no_linestipple &&
                                 ctx->rast_state->base.line_stipple_enable &&
                                 !ctx->num_so_targets;
 
-      bool lower_point_smooth = ctx->gfx_pipeline_state.rast_prim == PIPE_PRIM_POINTS &&
+      bool lower_point_smooth = ctx->gfx_pipeline_state.rast_prim == MESA_PRIM_POINTS &&
                                 screen->driconf.emulate_point_smooth &&
                                 ctx->rast_state->base.point_smooth;
       if (zink_get_fs_key(ctx)->lower_line_stipple != lower_line_stipple) {
@@ -2382,9 +2388,10 @@ zink_set_primitive_emulation_keys(struct zink_context *ctx)
          zink_set_gs_key(ctx)->lower_line_stipple = lower_line_stipple;
       }
 
-      lower_line_smooth = screen->driver_workarounds.no_linesmooth &&
-                               ctx->rast_state->base.line_smooth &&
-                               !ctx->num_so_targets;
+      lower_line_smooth = ctx->gfx_pipeline_state.rast_prim == MESA_PRIM_LINES &&
+                          screen->driver_workarounds.no_linesmooth &&
+                          ctx->rast_state->base.line_smooth &&
+                          !ctx->num_so_targets;
 
       if (zink_get_fs_key(ctx)->lower_line_smooth != lower_line_smooth) {
          assert(zink_get_gs_key(ctx)->lower_line_smooth ==
@@ -2408,10 +2415,10 @@ zink_set_primitive_emulation_keys(struct zink_context *ctx)
 
    bool lower_edge_flags = has_edge_flags(ctx);
 
-   bool lower_quad_prim = ctx->gfx_pipeline_state.gfx_prim_mode == PIPE_PRIM_QUADS;
+   bool lower_quad_prim = ctx->gfx_pipeline_state.gfx_prim_mode == MESA_PRIM_QUADS;
 
    bool lower_filled_quad =  lower_quad_prim &&
-      ctx->gfx_pipeline_state.rast_prim == PIPE_PRIM_TRIANGLES;
+      ctx->gfx_pipeline_state.rast_prim == MESA_PRIM_TRIANGLES;
 
    if (lower_line_stipple || lower_line_smooth ||
        lower_edge_flags || lower_quad_prim ||
@@ -2436,7 +2443,7 @@ zink_set_primitive_emulation_keys(struct zink_context *ctx)
                   &screen->nir_options,
                   prev_stage);
             } else {
-               enum pipe_prim_type prim = ctx->gfx_pipeline_state.gfx_prim_mode;
+               enum mesa_prim prim = ctx->gfx_pipeline_state.gfx_prim_mode;
                if (prev_vertex_stage == MESA_SHADER_TESS_EVAL)
                   prim = zink_tess_prim_type(ctx->gfx_stages[MESA_SHADER_TESS_EVAL]);
                nir = nir_create_passthrough_gs(

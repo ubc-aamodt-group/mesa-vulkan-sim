@@ -438,7 +438,8 @@ void ac_surface_compute_umd_metadata(const struct radeon_info *info, struct rade
                                      bool include_tool_md);
 
 bool ac_surface_override_offset_stride(const struct radeon_info *info, struct radeon_surf *surf,
-                                       unsigned num_mipmap_levels, uint64_t offset, unsigned pitch);
+                                       unsigned num_layers, unsigned num_mipmap_levels,
+                                       uint64_t offset, unsigned pitch);
 
 struct ac_modifier_options {
 	bool dcc; /* Whether to allow DCC. */
@@ -485,6 +486,8 @@ void ac_surface_print_info(FILE *out, const struct radeon_info *info,
 
 bool ac_surface_supports_dcc_image_stores(enum amd_gfx_level gfx_level,
                                           const struct radeon_surf *surf);
+unsigned ac_get_cb_number_type(enum pipe_format format);
+unsigned ac_get_cb_format(enum amd_gfx_level gfx_level, enum pipe_format format);
 
 #ifdef AC_SURFACE_INCLUDE_NIR
 nir_ssa_def *ac_nir_dcc_addr_from_coord(nir_builder *b, const struct radeon_info *info,

@@ -2435,15 +2435,19 @@ static void cayman_convert_border_color(union pipe_color_union *in,
        (util_format_is_srgb(format) ||
         util_format_is_s3tc(format))
        ) {
+                const float values[PIPE_SWIZZLE_MAX] = {
+                   in->f[0], in->f[1], in->f[2], in->f[3], 0.0f, 1.0f, 0.0f /* none */
+                };
 
-      for (int i = 0; i < 4; ++i) {
-         switch (i) {
-         case 0: out->f[0] = in->f[view->swizzle_r];break;
-         case 1: out->f[1] = in->f[view->swizzle_g];break;
-         case 2: out->f[2] = in->f[view->swizzle_b];break;
-         case 3: out->f[3] = in->f[view->swizzle_a];break;
-         }
-      }
+                STATIC_ASSERT(PIPE_SWIZZLE_0 == 4);
+                STATIC_ASSERT(PIPE_SWIZZLE_1 == 5);
+                STATIC_ASSERT(PIPE_SWIZZLE_NONE == 6);
+                STATIC_ASSERT(PIPE_SWIZZLE_MAX == 7);
+
+                out->f[0] = values[view->swizzle_r];
+                out->f[1] = values[view->swizzle_g];
+                out->f[2] = values[view->swizzle_b];
+                out->f[3] = values[view->swizzle_a];
    } else {
       memcpy(out->f, in->f, 4 * sizeof(float));
    }
@@ -2682,13 +2686,13 @@ static void evergreen_emit_shader_stages(struct r600_context *rctx, struct r600_
 		bool tes_vertex_order_cw = info->properties[TGSI_PROPERTY_TES_VERTEX_ORDER_CW];
 		bool tes_point_mode = info->properties[TGSI_PROPERTY_TES_POINT_MODE];
 		switch (tes_prim_mode) {
-		case PIPE_PRIM_LINES:
+		case MESA_PRIM_LINES:
 			type = V_028B6C_TESS_ISOLINE;
 			break;
-		case PIPE_PRIM_TRIANGLES:
+		case MESA_PRIM_TRIANGLES:
 			type = V_028B6C_TESS_TRIANGLE;
 			break;
-		case PIPE_PRIM_QUADS:
+		case MESA_PRIM_QUADS:
 			type = V_028B6C_TESS_QUAD;
 			break;
 		default:
@@ -2713,7 +2717,7 @@ static void evergreen_emit_shader_stages(struct r600_context *rctx, struct r600_
 
 		if (tes_point_mode)
 			topology = V_028B6C_OUTPUT_POINT;
-		else if (tes_prim_mode == PIPE_PRIM_LINES)
+		else if (tes_prim_mode == MESA_PRIM_LINES)
 			topology = V_028B6C_OUTPUT_LINE;
 		else if (tes_vertex_order_cw)
 			/* XXX follow radeonsi and invert */

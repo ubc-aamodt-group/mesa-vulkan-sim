@@ -213,17 +213,19 @@ haiku_swap_buffers(_EGLDisplay *disp, _EGLSurface *surf)
 	struct pipe_screen *screen = hgl_dpy->disp->fscreen->screen;
 
 	struct hgl_buffer* buffer = hgl_surf->fb;
-	auto &backBuffer = buffer->textures[ST_ATTACHMENT_BACK_LEFT];
 	auto &frontBuffer = buffer->textures[ST_ATTACHMENT_FRONT_LEFT];
+	auto &backBuffer = buffer->textures[ST_ATTACHMENT_BACK_LEFT];
 
-	st->pipe->flush_resource(st->pipe, backBuffer);
+	// Inform ST of a flush if double buffering is used
+	if (backBuffer != NULL)
+		st->pipe->flush_resource(st->pipe, backBuffer);
 
 	_mesa_glthread_finish(st->ctx);
 
 	struct pipe_fence_handle *new_fence = NULL;
 	st_context_flush(st, ST_FLUSH_FRONT, &new_fence, NULL, NULL);
 	if (hgl_surf->throttle_fence) {
-		screen->fence_finish(screen, NULL, hgl_surf->throttle_fence, PIPE_TIMEOUT_INFINITE);
+		screen->fence_finish(screen, NULL, hgl_surf->throttle_fence, OS_TIMEOUT_INFINITE);
 		screen->fence_reference(screen, &hgl_surf->throttle_fence, NULL);
 	}
 	hgl_surf->throttle_fence = new_fence;
@@ -234,6 +236,8 @@ haiku_swap_buffers(_EGLDisplay *disp, _EGLSurface *surf)
 		std::swap(frontBuffer, backBuffer);
 		p_atomic_inc(&buffer->base.stamp);
 	}
+
+	// XXX: right front / back if BGL_STEREO?
 
 	update_size(buffer);
 

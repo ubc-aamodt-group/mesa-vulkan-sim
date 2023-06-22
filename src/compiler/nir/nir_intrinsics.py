@@ -246,10 +246,10 @@ index("nir_memory_semantics", "memory_semantics")
 index("nir_variable_mode", "memory_modes")
 
 # Scope of a memory operation
-index("nir_scope", "memory_scope")
+index("mesa_scope", "memory_scope")
 
 # Scope of a control barrier
-index("nir_scope", "execution_scope")
+index("mesa_scope", "execution_scope")
 
 # Semantics of an IO instruction
 index("struct nir_io_semantics", "io_semantics")
@@ -284,6 +284,12 @@ index("unsigned", "flags")
 
 # Logical operation of an atomic intrinsic
 index("nir_atomic_op", "atomic_op")
+
+# Block identifier to push promotion
+index("unsigned", "resource_block_intel")
+
+# Various flags describing the resource access
+index("nir_resource_data_intel", "resource_access_intel")
 
 intrinsic("nop", flags=[CAN_ELIMINATE])
 
@@ -357,21 +363,10 @@ intrinsic("is_helper_invocation", dest_comp=1, flags=[CAN_ELIMINATE])
 # SpvOpTerminateInvocation from SPIR-V.  Essentially a discard "for real".
 barrier("terminate")
 
-# A workgroup-level control barrier.  Any thread which hits this barrier will
-# pause until all threads within the current workgroup have also hit the
-# barrier.  For compute shaders, the workgroup is defined as the local group.
-# For tessellation control shaders, the workgroup is defined as the current
-# patch.  This intrinsic does not imply any sort of memory barrier.
-barrier("control_barrier")
-
-# Memory barrier with semantics analogous to the memoryBarrier() GLSL
-# intrinsic.
-barrier("memory_barrier")
-
 # Control/Memory barrier with explicit scope.  Follows the semantics of SPIR-V
 # OpMemoryBarrier and OpControlBarrier, used to implement Vulkan Memory Model.
 # Storage that the barrier applies is represented using NIR variable modes.
-# For an OpMemoryBarrier, set EXECUTION_SCOPE to NIR_SCOPE_NONE.
+# For an OpMemoryBarrier, set EXECUTION_SCOPE to SCOPE_NONE.
 intrinsic("scoped_barrier",
           indices=[EXECUTION_SCOPE, MEMORY_SCOPE, MEMORY_SEMANTICS, MEMORY_MODES])
 
@@ -407,19 +402,8 @@ intrinsic("elect", dest_comp=1, flags=[CAN_ELIMINATE])
 intrinsic("first_invocation", dest_comp=1, bit_sizes=[32], flags=[CAN_ELIMINATE])
 intrinsic("last_invocation", dest_comp=1, bit_sizes=[32], flags=[CAN_ELIMINATE])
 
-# Memory barrier with semantics analogous to the compute shader
-# groupMemoryBarrier(), memoryBarrierAtomicCounter(), memoryBarrierBuffer(),
-# memoryBarrierImage() and memoryBarrierShared() GLSL intrinsics.
-barrier("group_memory_barrier")
-barrier("memory_barrier_atomic_counter")
-barrier("memory_barrier_buffer")
-barrier("memory_barrier_image")
-barrier("memory_barrier_shared")
 barrier("begin_invocation_interlock")
 barrier("end_invocation_interlock")
-
-# Memory barrier for synchronizing TCS patch outputs
-barrier("memory_barrier_tcs_patch")
 
 # A conditional discard/demote/terminate, with a single boolean source.
 intrinsic("discard_if", src_comp=[1])
@@ -748,6 +732,9 @@ intrinsic("load_vulkan_descriptor", src_comp=[-1], dest_comp=0,
 #
 # IR3 global operations take 32b vec2 as memory address. IR3 doesn't support
 # float atomics.
+#
+# AGX global variants take a 64-bit base address plus a 32-bit offset in words.
+# The offset is sign-extended or zero-extended based on the SIGN_EXTEND index.
 
 intrinsic("deref_atomic",  src_comp=[-1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP])
 intrinsic("ssbo_atomic",  src_comp=[-1, 1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP])
@@ -757,6 +744,7 @@ intrinsic("global_atomic",  src_comp=[1, 1], dest_comp=1, indices=[ATOMIC_OP])
 intrinsic("global_atomic_2x32",  src_comp=[2, 1], dest_comp=1, indices=[ATOMIC_OP])
 intrinsic("global_atomic_amd",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
 intrinsic("global_atomic_ir3",  src_comp=[2, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
+intrinsic("global_atomic_agx",  src_comp=[1, 1, 1], dest_comp=1, indices=[ATOMIC_OP, SIGN_EXTEND])
 
 intrinsic("deref_atomic_swap",  src_comp=[-1, 1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP])
 intrinsic("ssbo_atomic_swap",  src_comp=[-1, 1, 1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP])
@@ -766,6 +754,7 @@ intrinsic("global_atomic_swap",  src_comp=[1, 1, 1], dest_comp=1, indices=[ATOMI
 intrinsic("global_atomic_swap_2x32",  src_comp=[2, 1, 1], dest_comp=1, indices=[ATOMIC_OP])
 intrinsic("global_atomic_swap_amd",  src_comp=[1, 1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
 intrinsic("global_atomic_swap_ir3",  src_comp=[2, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
+intrinsic("global_atomic_swap_agx",  src_comp=[1, 1, 1, 1], dest_comp=1, indices=[ATOMIC_OP, SIGN_EXTEND])
 
 def system_value(name, dest_comp, indices=[], bit_sizes=[32]):
     intrinsic("load_" + name, [], dest_comp, indices,
@@ -928,6 +917,10 @@ system_value("user_data_amd", 4)
 #
 # The vec2 value produced by these intrinsics is intended for use as the
 # barycoord source of a load_interpolated_input intrinsic.
+#
+# The vec3 variants are intended to be used for input barycentric coordinates
+# which are system values on most hardware, compared to the vec2 variants which
+# interpolates input varyings.
 
 def barycentric(name, dst_comp, src_comp=[]):
     intrinsic("load_barycentric_" + name, src_comp=src_comp, dest_comp=dst_comp,
@@ -935,13 +928,18 @@ def barycentric(name, dst_comp, src_comp=[]):
 
 # no sources.
 barycentric("pixel", 2)
+barycentric("coord_pixel", 3)
 barycentric("centroid", 2)
+barycentric("coord_centroid", 3)
 barycentric("sample", 2)
+barycentric("coord_sample", 3)
 barycentric("model", 3)
 # src[] = { sample_id }.
 barycentric("at_sample", 2, [1])
+barycentric("coord_at_sample", 3, [1])
 # src[] = { offset.xy }.
 barycentric("at_offset", 2, [2])
+barycentric("coord_at_offset", 3, [2])
 
 # Load sample position:
 #
@@ -1236,30 +1234,6 @@ store("uniform_ir3", [], indices=[BASE])
 # vec4's.
 intrinsic("copy_ubo_to_uniform_ir3", [1, 1], indices=[BASE, RANGE])
 
-# DXIL specific intrinsics
-# src[] = { value, mask, index, offset }.
-intrinsic("store_ssbo_masked_dxil", [1, 1, 1, 1])
-# src[] = { value, index }.
-intrinsic("store_shared_dxil", [1, 1])
-# src[] = { value, mask, index }.
-intrinsic("store_shared_masked_dxil", [1, 1, 1])
-# src[] = { value, index }.
-intrinsic("store_scratch_dxil", [1, 1])
-# src[] = { index }.
-load("shared_dxil", [1], [], [CAN_ELIMINATE])
-# src[] = { index }.
-load("scratch_dxil", [1], [], [CAN_ELIMINATE])
-# src[] = { deref_var, offset }
-load("ptr_dxil", [1, 1], [], [])
-# src[] = { index, 16-byte-based-offset }
-load("ubo_dxil", [1, 1], [], [CAN_ELIMINATE, CAN_REORDER])
-
-# DXIL Shared atomic intrinsics
-#
-# src0 is the index in the i32 array for by the shared memory region
-intrinsic("shared_atomic_dxil",  src_comp=[1, 1], dest_comp=1, indices=[ATOMIC_OP])
-intrinsic("shared_atomic_swap_dxil", src_comp=[1, 1, 1], dest_comp=1, indices=[ATOMIC_OP])
-
 # Intrinsics used by the Midgard/Bifrost blend pipeline. These are defined
 # within a blend shader to read/write the raw value from the tile buffer,
 # without applying any format conversion in the process. If the shader needs
@@ -1357,9 +1331,6 @@ store("global_amd", [1, 1], indices=[BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET, WRIT
 # Same as shared_atomic_add, but with GDS. src[] = {store_val, gds_addr, m0}
 intrinsic("gds_atomic_add_amd",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE])
 
-# src[] = { descriptor, add_value }
-intrinsic("buffer_atomic_add_amd", src_comp=[4, 1], dest_comp=1, indices=[BASE])
-
 # src[] = { sample_id, num_samples }
 intrinsic("load_sample_positions_amd", src_comp=[1, 1], dest_comp=2, flags=[CAN_ELIMINATE, CAN_REORDER])
 
@@ -1384,6 +1355,12 @@ system_value("task_ring_entry_amd", 1)
 # Descriptor where NGG attributes are stored on GFX11.
 system_value("ring_attr_amd", 4)
 system_value("ring_attr_offset_amd", 1)
+
+# Load provoking vertex info
+system_value("provoking_vtx_amd", 1)
+
+# Load rasterization primitive
+system_value("rasterization_primitive_amd", 1);
 
 # Number of patches processed by each TCS workgroup
 system_value("tcs_num_patches_amd", 1)
@@ -1477,6 +1454,9 @@ system_value("intersection_opaque_amd", 1, bit_sizes=[1])
 # Used for indirect ray tracing.
 system_value("ray_launch_size_addr_amd", 1, bit_sizes=[64])
 
+# pointer to the next resume shader
+system_value("resume_shader_address_amd", 1, bit_sizes=[64], indices=[CALL_IDX])
+
 # Scratch base of callable stack for ray tracing.
 system_value("rt_dynamic_callable_stack_base_amd", 1)
 
@@ -1507,6 +1487,8 @@ intrinsic("load_force_vrs_rates_amd", dest_comp=1, bit_sizes=[32], flags=[CAN_EL
 
 intrinsic("load_scalar_arg_amd", dest_comp=0, bit_sizes=[32], indices=[BASE, ARG_UPPER_BOUND_U32_AMD], flags=[CAN_ELIMINATE, CAN_REORDER])
 intrinsic("load_vector_arg_amd", dest_comp=0, bit_sizes=[32], indices=[BASE, ARG_UPPER_BOUND_U32_AMD], flags=[CAN_ELIMINATE, CAN_REORDER])
+store("scalar_arg_amd", [], [BASE])
+store("vector_arg_amd", [], [BASE])
 
 # src[] = { 32/64-bit base address, 32-bit offset }.
 intrinsic("load_smem_amd", src_comp=[1, 1], dest_comp=0, bit_sizes=[32],
@@ -1696,6 +1678,17 @@ intrinsic("load_ubo_base_agx", src_comp=[1], dest_comp=1, bit_sizes=[64],
 intrinsic("load_vbo_base_agx", src_comp=[1], dest_comp=1, bit_sizes=[64],
           flags=[CAN_ELIMINATE, CAN_REORDER])
 
+# Write out a sample mask for a targeted subset of samples, specified in the two
+# masks. Maps to the corresponding AGX instruction, the actual workings are
+# documented elsewhere as they are too complicated for this comment.
+intrinsic("sample_mask_agx", src_comp=[1, 1])
+
+# The fixed-function sample mask specified in the API (e.g. glSampleMask)
+system_value("api_sample_mask_agx", 1, bit_sizes=[16])
+
+# Loads the sample position array as fixed point packed into a 32-bit word
+system_value("sample_positions_agx", 1, bit_sizes=[32])
+
 # Intel-specific query for loading from the brw_image_param struct passed
 # into the shader as a uniform.  The variable is a deref to the image
 # variable. The const index specifies which of the six parameters to load.
@@ -1719,6 +1712,22 @@ system_value("simd_width_intel", 1)
 # Load a relocatable 32-bit value
 intrinsic("load_reloc_const_intel", dest_comp=1, bit_sizes=[32],
           indices=[PARAM_IDX], flags=[CAN_ELIMINATE, CAN_REORDER])
+
+# 1 component 32bit surface index that can be used for bindless or BTI heaps
+#
+# This intrinsic is used to figure out what UBOs accesses could be promoted to
+# push constants. To allow promoting a load_ubo to push constants, we need to
+# know that the surface & offset are constants. If we want to use the bindless
+# heap for this we have to build the surface index with a pushed constant for
+# the descriptor set which prevents us from doing a nir_src_is_const() check.
+# With this intrinsic, we can just check the surface_index src with
+# nir_src_is_const() and ignore set_offset.
+#
+# src[] = { set_offset, surface_index, array_index }
+intrinsic("resource_intel", dest_comp=1, bit_sizes=[32],
+          src_comp=[1, 1, 1],
+          indices=[DESC_SET, BINDING, RESOURCE_ACCESS_INTEL, RESOURCE_BLOCK_INTEL],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
 
 # 64-bit global address for a Vulkan descriptor set
 # src[0] = { set }
@@ -1752,6 +1761,16 @@ store("ssbo_block_intel", [-1, 1], [WRITE_MASK, ACCESS, ALIGN_MUL, ALIGN_OFFSET]
 
 # src[] = { value, offset }.
 store("shared_block_intel", [1], [BASE, WRITE_MASK, ALIGN_MUL, ALIGN_OFFSET])
+
+# src[] = { address }.
+load("global_constant_uniform_block_intel", [1],
+     [ACCESS, ALIGN_MUL, ALIGN_OFFSET], [CAN_ELIMINATE, CAN_REORDER])
+
+# Similar to load_global_const_block_intel but for UBOs
+# offset should be uniform
+# src[] = { buffer_index, offset }.
+load("ubo_uniform_block_intel", [-1, 1],
+     [ACCESS, ALIGN_MUL, ALIGN_OFFSET, RANGE_BASE, RANGE], [CAN_ELIMINATE, CAN_REORDER])
 
 # Similar to load_global_const_block_intel but for SSBOs
 # offset should be uniform

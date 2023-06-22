@@ -521,7 +521,8 @@ iris_begin_query(struct pipe_context *ctx, struct pipe_query *query)
       size = sizeof(struct iris_query_snapshots);
 
    u_upload_alloc(ice->query_buffer_uploader, 0,
-                  size, size, &q->query_state_ref.offset,
+                  size, util_next_power_of_two(size),
+                  &q->query_state_ref.offset,
                   &q->query_state_ref.res, &ptr);
 
    if (!iris_resource_bo(q->query_state_ref.res))
@@ -642,7 +643,7 @@ iris_get_query_result(struct pipe_context *ctx,
       struct pipe_screen *screen = ctx->screen;
 
       result->b = screen->fence_finish(screen, ctx, q->fence,
-                                       wait ? PIPE_TIMEOUT_INFINITE : 0);
+                                       wait ? OS_TIMEOUT_INFINITE : 0);
       return result->b;
    }
 

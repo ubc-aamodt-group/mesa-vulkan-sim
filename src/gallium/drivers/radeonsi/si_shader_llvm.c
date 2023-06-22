@@ -116,8 +116,7 @@ void si_llvm_context_init(struct si_shader_context *ctx, struct si_screen *sscre
    ctx->screen = sscreen;
    ctx->compiler = compiler;
 
-   ac_llvm_context_init(&ctx->ac, compiler, sscreen->info.gfx_level, sscreen->info.family,
-                        sscreen->info.has_3d_cube_border_color_mipmap, float_mode,
+   ac_llvm_context_init(&ctx->ac, compiler, &sscreen->info, float_mode,
                         wave_size, 64, exports_color_null, exports_mrtz);
 }
 
@@ -178,7 +177,7 @@ void si_llvm_create_func(struct si_shader_context *ctx, const char *name, LLVMTy
       ac_llvm_add_target_dep_function_attr(ctx->main_fn.value, "amdgpu-gds-size", 256);
 
    ac_llvm_set_workgroup_size(ctx->main_fn.value, max_workgroup_size);
-   ac_llvm_set_target_features(ctx->main_fn.value, &ctx->ac);
+   ac_llvm_set_target_features(ctx->main_fn.value, &ctx->ac, false);
 }
 
 void si_llvm_create_main_func(struct si_shader_context *ctx)
@@ -312,17 +311,21 @@ LLVMValueRef si_prolog_get_internal_bindings(struct si_shader_context *ctx)
  * We declare it with 64KB alignment as a hint that the
  * pointer value will always be 0.
  */
-void si_llvm_declare_esgs_ring(struct si_shader_context *ctx)
+static void si_llvm_declare_lds_esgs_ring(struct si_shader_context *ctx)
 {
-   if (ctx->esgs_ring)
+   if (ctx->ac.lds.value)
       return;
 
    assert(!LLVMGetNamedGlobal(ctx->ac.module, "esgs_ring"));
 
-   ctx->esgs_ring = LLVMAddGlobalInAddressSpace(ctx->ac.module, LLVMArrayType(ctx->ac.i32, 0),
-                                                "esgs_ring", AC_ADDR_SPACE_LDS);
-   LLVMSetLinkage(ctx->esgs_ring, LLVMExternalLinkage);
-   LLVMSetAlignment(ctx->esgs_ring, 64 * 1024);
+   LLVMValueRef esgs_ring =
+      LLVMAddGlobalInAddressSpace(ctx->ac.module, LLVMArrayType(ctx->ac.i32, 0),
+                                  "esgs_ring", AC_ADDR_SPACE_LDS);
+   LLVMSetLinkage(esgs_ring, LLVMExternalLinkage);
+   LLVMSetAlignment(esgs_ring, 64 * 1024);
+
+   ctx->ac.lds.value = esgs_ring;
+   ctx->ac.lds.pointee_type = ctx->ac.i32;
 }
 
 static void si_init_exec_from_input(struct si_shader_context *ctx, struct ac_arg param,
@@ -668,17 +671,8 @@ static LLVMValueRef si_llvm_load_intrinsic(struct ac_shader_abi *abi, nir_intrin
    struct si_shader_context *ctx = si_shader_context_from_abi(abi);
 
    switch (intrin->intrinsic) {
-   case nir_intrinsic_load_ring_tess_offchip_amd:
-      return ctx->tess_offchip_ring;
-
    case nir_intrinsic_load_tess_rel_patch_id_amd:
       return si_get_rel_patch_id(ctx);
-
-   case nir_intrinsic_load_ring_esgs_amd:
-      return ctx->esgs_ring;
-
-   case nir_intrinsic_load_ring_gsvs_amd:
-      return ctx->gsvs_ring[nir_intrinsic_stream_id(intrin)];
 
    case nir_intrinsic_load_lds_ngg_scratch_base_amd:
       return LLVMBuildPtrToInt(ctx->ac.builder, ctx->gs_ngg_scratch.value, ctx->ac.i32, "");
@@ -756,10 +750,6 @@ static bool si_llvm_translate_nir(struct si_shader_context *ctx, struct si_shade
 
    si_llvm_create_main_func(ctx);
 
-   if (ctx->stage <= MESA_SHADER_GEOMETRY &&
-       (ctx->shader->key.ge.as_es || ctx->stage == MESA_SHADER_GEOMETRY))
-      si_preload_esgs_ring(ctx);
-
    switch (ctx->stage) {
    case MESA_SHADER_VERTEX:
       /* preload instance_divisor_constbuf to be used for input load after culling */
@@ -770,24 +760,10 @@ static bool si_llvm_translate_nir(struct si_shader_context *ctx, struct si_shade
             ac_build_load_to_sgpr(
                &ctx->ac, buf, LLVMConstInt(ctx->ac.i32, SI_VS_CONST_INSTANCE_DIVISORS, 0));
       }
-
-      /* preload GSVS ring for GS copy shader */
-      if (shader->is_gs_copy_shader) {
-         ctx->gsvs_ring[0] =
-            ac_build_load_to_sgpr(
-               &ctx->ac,
-               ac_get_ptr_arg(&ctx->ac, &ctx->args->ac, ctx->args->internal_bindings),
-               LLVMConstInt(ctx->ac.i32, SI_RING_GSVS, 0));
-      }
       break;
 
    case MESA_SHADER_TESS_CTRL:
       si_llvm_init_tcs_callbacks(ctx);
-      si_llvm_preload_tess_rings(ctx);
-      break;
-
-   case MESA_SHADER_TESS_EVAL:
-      si_llvm_preload_tess_rings(ctx);
       break;
 
    case MESA_SHADER_GEOMETRY:
@@ -804,8 +780,6 @@ static bool si_llvm_translate_nir(struct si_shader_context *ctx, struct si_shade
             ctx->ac.module, LLVMArrayType(ctx->ac.i32, 0), "ngg_emit", AC_ADDR_SPACE_LDS);
          LLVMSetLinkage(ctx->gs_ngg_emit, LLVMExternalLinkage);
          LLVMSetAlignment(ctx->gs_ngg_emit, 4);
-      } else {
-         si_preload_gs_rings(ctx);
       }
       break;
 
@@ -819,12 +793,6 @@ static bool si_llvm_translate_nir(struct si_shader_context *ctx, struct si_shade
    }
 
    case MESA_SHADER_COMPUTE:
-      if (nir->info.cs.user_data_components_amd) {
-         ctx->abi.user_data = ac_get_arg(&ctx->ac, ctx->args->cs_user_data);
-         ctx->abi.user_data = ac_build_expand_to_vec4(&ctx->ac, ctx->abi.user_data,
-                                                      nir->info.cs.user_data_components_amd);
-      }
-
       if (ctx->shader->selector->info.base.shared_size)
          si_llvm_declare_compute_memory(ctx);
       break;
@@ -833,28 +801,34 @@ static bool si_llvm_translate_nir(struct si_shader_context *ctx, struct si_shade
       break;
    }
 
-   if ((ctx->stage == MESA_SHADER_VERTEX || ctx->stage == MESA_SHADER_TESS_EVAL) &&
-       shader->key.ge.as_ngg && !shader->key.ge.as_es) {
-      /* Unconditionally declare scratch space base for streamout and
-       * vertex compaction. Whether space is actually allocated is
-       * determined during linking / PM4 creation.
-       */
-      si_llvm_declare_esgs_ring(ctx);
-      ctx->ac.lds.value = ctx->esgs_ring;
-      ctx->ac.lds.pointee_type = ctx->ac.i32;
+   bool is_merged_esgs_stage =
+      ctx->screen->info.gfx_level >= GFX9 && ctx->stage <= MESA_SHADER_GEOMETRY &&
+      (ctx->shader->key.ge.as_es || ctx->stage == MESA_SHADER_GEOMETRY);
 
-      /* This is really only needed when streamout and / or vertex
-       * compaction is enabled.
-       */
-      if (si_shader_uses_streamout(shader) || shader->key.ge.opt.ngg_culling) {
-         LLVMTypeRef asi32 = LLVMArrayType(ctx->ac.i32, gfx10_ngg_get_scratch_dw_size(shader));
-         ctx->gs_ngg_scratch = (struct ac_llvm_pointer) {
-            .value = LLVMAddGlobalInAddressSpace(ctx->ac.module, asi32, "ngg_scratch", AC_ADDR_SPACE_LDS),
-            .pointee_type = asi32
-         };
-         LLVMSetInitializer(ctx->gs_ngg_scratch.value, LLVMGetUndef(asi32));
-         LLVMSetAlignment(ctx->gs_ngg_scratch.value, 8);
-      }
+   bool is_nogs_ngg_stage =
+      (ctx->stage == MESA_SHADER_VERTEX || ctx->stage == MESA_SHADER_TESS_EVAL) &&
+      shader->key.ge.as_ngg && !shader->key.ge.as_es;
+
+   /* Declare the ESGS ring as an explicit LDS symbol.
+    * When NGG VS/TES, unconditionally declare for streamout and vertex compaction.
+    * Whether space is actually allocated is determined during linking / PM4 creation.
+    */
+   if (is_merged_esgs_stage || is_nogs_ngg_stage)
+      si_llvm_declare_lds_esgs_ring(ctx);
+
+   /* This is really only needed when streamout and / or vertex
+    * compaction is enabled.
+    */
+   if (is_nogs_ngg_stage &&
+       (si_shader_uses_streamout(shader) || shader->key.ge.opt.ngg_culling)) {
+      LLVMTypeRef asi32 = LLVMArrayType(ctx->ac.i32, gfx10_ngg_get_scratch_dw_size(shader));
+      ctx->gs_ngg_scratch = (struct ac_llvm_pointer) {
+         .value = LLVMAddGlobalInAddressSpace(ctx->ac.module, asi32, "ngg_scratch",
+                                              AC_ADDR_SPACE_LDS),
+         .pointee_type = asi32
+      };
+      LLVMSetInitializer(ctx->gs_ngg_scratch.value, LLVMGetUndef(asi32));
+      LLVMSetAlignment(ctx->gs_ngg_scratch.value, 8);
    }
 
    /* For merged shaders (VS-TCS, VS-GS, TES-GS): */
@@ -952,7 +926,6 @@ static bool si_llvm_translate_nir(struct si_shader_context *ctx, struct si_shade
    ctx->abi.clamp_div_by_zero = ctx->screen->options.clamp_div_by_zero ||
                                 info->options & SI_PROFILE_CLAMP_DIV_BY_ZERO;
    ctx->abi.disable_aniso_single_level = true;
-   ctx->abi.conformant_trunc_coord = ctx->screen->info.conformant_trunc_coord;
 
    bool ls_need_output =
       ctx->stage == MESA_SHADER_VERTEX && shader->key.ge.as_ls &&
@@ -1042,11 +1015,15 @@ bool si_llvm_compile_shader(struct si_screen *sscreen, struct ac_llvm_compiler *
    struct si_shader_selector *sel = shader->selector;
    struct si_shader_context ctx;
    enum ac_float_mode float_mode = nir->info.stage == MESA_SHADER_KERNEL ? AC_FLOAT_MODE_DEFAULT : AC_FLOAT_MODE_DEFAULT_OPENGL;
+   bool exports_color_null = false;
+   bool exports_mrtz = false;
 
-   bool exports_color_null = sel->info.colors_written;
-   bool exports_mrtz = sel->info.writes_z || sel->info.writes_stencil || sel->info.writes_samplemask;
-   if (!exports_mrtz && !exports_color_null)
-      exports_color_null = si_shader_uses_discard(shader) || sscreen->info.gfx_level < GFX10;
+   if (sel->stage == MESA_SHADER_FRAGMENT) {
+      exports_color_null = sel->info.colors_written;
+      exports_mrtz = sel->info.writes_z || sel->info.writes_stencil || shader->ps.writes_samplemask;
+      if (!exports_mrtz && !exports_color_null)
+         exports_color_null = si_shader_uses_discard(shader) || sscreen->info.gfx_level < GFX10;
+   }
 
    si_llvm_context_init(&ctx, sscreen, compiler, shader->wave_size, exports_color_null, exports_mrtz,
                         float_mode);
