@@ -1,5 +1,0 @@
-ptxas info    : 0 bytes gmem
-ptxas info    : Compiling entry function 'MESA_SHADER_RAYGEN_func0_main' for 'sm_30'
-ptxas info    : Function properties for MESA_SHADER_RAYGEN_func0_main
-    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
-ptxas info    : Used 11 registers, 320 bytes cmem[0], 8 bytes cmem[2]
