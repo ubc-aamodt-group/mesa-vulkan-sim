@@ -258,10 +258,10 @@ lvp_CreateAccelerationStructureKHR(
    *pAccelerationStructure = lvp_acceleration_structure_to_handle(accel);
    
    if (pCreateInfo->type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR) {
-      gpgpusim_allocTLAS((void *)accel->address.bo + accel->address.offset, buffer->total_size, buffer->pBuffer_gpgpusim);
+      gpgpusim_allocTLAS((void *)accel->address.bo + accel->address.offset, buffer->total_size, (void *)buffer->pBuffer_gpgpusim + accel->address.offset);
    }
    else {
-      gpgpusim_allocBLAS((void *)accel->address.bo + accel->address.offset, buffer->total_size, buffer->pBuffer_gpgpusim);
+      gpgpusim_allocBLAS((void *)accel->address.bo + accel->address.offset, buffer->total_size, (void *)buffer->pBuffer_gpgpusim + accel->address.offset);
    }
 
    return VK_SUCCESS;
