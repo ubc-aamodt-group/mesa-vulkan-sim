@@ -1216,7 +1216,7 @@ static void handle_trace_ray(struct vk_cmd_queue_entry *cmd,
       (void *)cmd->u.trace_rays_khr.hit_shader_binding_table->deviceAddress,
       (void *)cmd->u.trace_rays_khr.callable_shader_binding_table->deviceAddress);
 
-   printf("LVP: Launching vkCmdTraceRaysKHR on Vulkan-Sim; Mesa last updated April 12, 2023\n");
+   printf("LVP: Launching vkCmdTraceRaysKHR on Vulkan-Sim; Mesa last updated August 29, 2023\n");
    gpgpusim_vkCmdTraceRaysKHR(
       (void *)cmd->u.trace_rays_khr.raygen_shader_binding_table->deviceAddress,
       (void *)cmd->u.trace_rays_khr.miss_shader_binding_table->deviceAddress,
