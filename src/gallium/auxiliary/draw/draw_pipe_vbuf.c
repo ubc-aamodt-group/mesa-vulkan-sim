@@ -191,6 +191,8 @@ vbuf_start_prim(struct vbuf_stage *vbuf, uint prim)
    const struct vertex_info *vinfo;
 
    vbuf->render->set_primitive(vbuf->render, prim);
+   if (vbuf->render->set_view_index)
+      vbuf->render->set_view_index(vbuf->render, vbuf->stage.draw->pt.user.viewid);
 
    /* Must do this after set_primitive() above:
     *
@@ -268,7 +270,7 @@ vbuf_first_tri(struct draw_stage *stage, struct prim_header *prim)
    struct vbuf_stage *vbuf = vbuf_stage(stage);
 
    vbuf_flush_vertices(vbuf);
-   vbuf_start_prim(vbuf, PIPE_PRIM_TRIANGLES);
+   vbuf_start_prim(vbuf, MESA_PRIM_TRIANGLES);
    stage->tri = vbuf_tri;
    stage->tri(stage, prim);
 }
@@ -280,7 +282,7 @@ vbuf_first_line(struct draw_stage *stage, struct prim_header *prim)
    struct vbuf_stage *vbuf = vbuf_stage(stage);
 
    vbuf_flush_vertices(vbuf);
-   vbuf_start_prim(vbuf, PIPE_PRIM_LINES);
+   vbuf_start_prim(vbuf, MESA_PRIM_LINES);
    stage->line = vbuf_line;
    stage->line(stage, prim);
 }
@@ -292,7 +294,7 @@ vbuf_first_point(struct draw_stage *stage, struct prim_header *prim)
    struct vbuf_stage *vbuf = vbuf_stage(stage);
 
    vbuf_flush_vertices(vbuf);
-   vbuf_start_prim(vbuf, PIPE_PRIM_POINTS);
+   vbuf_start_prim(vbuf, MESA_PRIM_POINTS);
    stage->point = vbuf_point;
    stage->point(stage, prim);
 }

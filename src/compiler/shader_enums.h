@@ -26,10 +26,16 @@
 #ifndef SHADER_ENUMS_H
 #define SHADER_ENUMS_H
 
+#include "util/macros.h"
+
 #include <stdbool.h>
 
 /* Project-wide (GL and Vulkan) maximum. */
 #define MAX_DRAW_BUFFERS 8
+/* Size of an atomic counter in bytes according to ARB_shader_atomic_counters */
+#define ATOMIC_COUNTER_SIZE 4
+/** For GL_ARB_gpu_shader5 */
+#define MAX_VERTEX_STREAMS 4
 
 #ifdef __cplusplus
 extern "C" {
@@ -42,19 +48,30 @@ extern "C" {
  * The GLSL linker assumes that if i<j, then the j-th shader is
  * executed later than the i-th shader.
  */
-typedef enum
+typedef enum pipe_shader_type
 {
    MESA_SHADER_NONE = -1,
    MESA_SHADER_VERTEX = 0,
+   PIPE_SHADER_VERTEX = MESA_SHADER_VERTEX,
    MESA_SHADER_TESS_CTRL = 1,
+   PIPE_SHADER_TESS_CTRL = MESA_SHADER_TESS_CTRL,
    MESA_SHADER_TESS_EVAL = 2,
+   PIPE_SHADER_TESS_EVAL = MESA_SHADER_TESS_EVAL,
    MESA_SHADER_GEOMETRY = 3,
+   PIPE_SHADER_GEOMETRY = MESA_SHADER_GEOMETRY,
    MESA_SHADER_FRAGMENT = 4,
+   PIPE_SHADER_FRAGMENT = MESA_SHADER_FRAGMENT,
    MESA_SHADER_COMPUTE = 5,
+   PIPE_SHADER_COMPUTE = MESA_SHADER_COMPUTE,
 
+   PIPE_SHADER_TYPES = (PIPE_SHADER_COMPUTE + 1),
    /* Vulkan-only stages. */
    MESA_SHADER_TASK         = 6,
+   PIPE_SHADER_TASK = MESA_SHADER_TASK,
    MESA_SHADER_MESH         = 7,
+   PIPE_SHADER_MESH = MESA_SHADER_MESH,
+   PIPE_SHADER_MESH_TYPES = (PIPE_SHADER_MESH + 1),
+
    MESA_SHADER_RAYGEN       = 8,
    MESA_SHADER_ANY_HIT      = 9,
    MESA_SHADER_CLOSEST_HIT  = 10,
@@ -73,6 +90,33 @@ gl_shader_stage_is_compute(gl_shader_stage stage)
 }
 
 static inline bool
+gl_shader_stage_is_raytrace(gl_shader_stage stage)
+{
+   return stage == MESA_SHADER_RAYGEN ||
+          stage == MESA_SHADER_ANY_HIT ||
+          stage == MESA_SHADER_CLOSEST_HIT ||
+          stage == MESA_SHADER_MISS ||
+          stage == MESA_SHADER_INTERSECTION ||
+          stage == MESA_SHADER_CALLABLE;
+}
+
+static inline bool
+gl_shader_stage_is_mesh(gl_shader_stage stage)
+{
+   return stage == MESA_SHADER_TASK ||
+          stage == MESA_SHADER_MESH;
+}
+
+static inline bool
+gl_shader_stage_uses_workgroup(gl_shader_stage stage)
+{
+   return stage == MESA_SHADER_COMPUTE ||
+          stage == MESA_SHADER_KERNEL ||
+          stage == MESA_SHADER_TASK ||
+          stage == MESA_SHADER_MESH;
+}
+
+static inline bool
 gl_shader_stage_is_callable(gl_shader_stage stage)
 {
    return stage == MESA_SHADER_ANY_HIT ||
@@ -80,6 +124,25 @@ gl_shader_stage_is_callable(gl_shader_stage stage)
           stage == MESA_SHADER_MISS ||
           stage == MESA_SHADER_INTERSECTION ||
           stage == MESA_SHADER_CALLABLE;
+}
+
+static inline bool
+gl_shader_stage_is_rt(gl_shader_stage stage)
+{
+   return stage == MESA_SHADER_RAYGEN || gl_shader_stage_is_callable(stage);
+}
+
+static inline bool
+gl_shader_stage_can_set_fragment_shading_rate(gl_shader_stage stage)
+{
+   /* According to EXT_fragment_shading_rate :
+    *
+    *    "This extension adds support for setting the fragment shading rate
+    *     for a primitive in vertex, geometry, and mesh shading stages"
+    */
+   return stage == MESA_SHADER_VERTEX ||
+          stage == MESA_SHADER_GEOMETRY ||
+          stage == MESA_SHADER_MESH;
 }
 
 /**
@@ -135,7 +198,6 @@ typedef enum
    VERT_ATTRIB_COLOR1,
    VERT_ATTRIB_FOG,
    VERT_ATTRIB_COLOR_INDEX,
-   VERT_ATTRIB_EDGEFLAG,
    VERT_ATTRIB_TEX0,
    VERT_ATTRIB_TEX1,
    VERT_ATTRIB_TEX2,
@@ -161,21 +223,29 @@ typedef enum
    VERT_ATTRIB_GENERIC13,
    VERT_ATTRIB_GENERIC14,
    VERT_ATTRIB_GENERIC15,
+   /* This must be last to keep VS inputs and vertex attributes in the same
+    * order in st/mesa, and st/mesa always adds edgeflags as the last input.
+    */
+   VERT_ATTRIB_EDGEFLAG,
    VERT_ATTRIB_MAX
 } gl_vert_attrib;
 
 const char *gl_vert_attrib_name(gl_vert_attrib attrib);
 
 /**
+ * Max number of texture coordinate units.  This mainly just applies to
+ * the fixed-function vertex code.  This will be difficult to raise above
+ * eight because of various vertex attribute bitvectors.
+ */
+#define MAX_TEXTURE_COORD_UNITS     8
+#define MAX_VERTEX_GENERIC_ATTRIBS  16
+
+/**
  * Symbolic constats to help iterating over
  * specific blocks of vertex attributes.
  *
- * VERT_ATTRIB_FF
- *   includes all fixed function attributes as well as
- *   the aliased GL_NV_vertex_program shader attributes.
  * VERT_ATTRIB_TEX
  *   include the classic texture coordinate attributes.
- *   Is a subset of VERT_ATTRIB_FF.
  * VERT_ATTRIB_GENERIC
  *   include the OpenGL 2.0+ GLSL generic shader attributes.
  *   These alias the generic GL_ARB_vertex_shader attributes.
@@ -185,9 +255,6 @@ const char *gl_vert_attrib_name(gl_vert_attrib attrib);
  *   They are located at the end of the generic attribute
  *   block not to overlap with the generic 0 attribute.
  */
-#define VERT_ATTRIB_FF(i)           (VERT_ATTRIB_POS + (i))
-#define VERT_ATTRIB_FF_MAX          VERT_ATTRIB_GENERIC0
-
 #define VERT_ATTRIB_TEX(i)          (VERT_ATTRIB_TEX0 + (i))
 #define VERT_ATTRIB_TEX_MAX         MAX_TEXTURE_COORD_UNITS
 
@@ -211,7 +278,6 @@ const char *gl_vert_attrib_name(gl_vert_attrib attrib);
 #define VERT_BIT_COLOR1          BITFIELD_BIT(VERT_ATTRIB_COLOR1)
 #define VERT_BIT_FOG             BITFIELD_BIT(VERT_ATTRIB_FOG)
 #define VERT_BIT_COLOR_INDEX     BITFIELD_BIT(VERT_ATTRIB_COLOR_INDEX)
-#define VERT_BIT_EDGEFLAG        BITFIELD_BIT(VERT_ATTRIB_EDGEFLAG)
 #define VERT_BIT_TEX0            BITFIELD_BIT(VERT_ATTRIB_TEX0)
 #define VERT_BIT_TEX1            BITFIELD_BIT(VERT_ATTRIB_TEX1)
 #define VERT_BIT_TEX2            BITFIELD_BIT(VERT_ATTRIB_TEX2)
@@ -222,12 +288,13 @@ const char *gl_vert_attrib_name(gl_vert_attrib attrib);
 #define VERT_BIT_TEX7            BITFIELD_BIT(VERT_ATTRIB_TEX7)
 #define VERT_BIT_POINT_SIZE      BITFIELD_BIT(VERT_ATTRIB_POINT_SIZE)
 #define VERT_BIT_GENERIC0        BITFIELD_BIT(VERT_ATTRIB_GENERIC0)
+#define VERT_BIT_EDGEFLAG        BITFIELD_BIT(VERT_ATTRIB_EDGEFLAG)
 
 #define VERT_BIT(i)              BITFIELD_BIT(i)
 #define VERT_BIT_ALL             BITFIELD_RANGE(0, VERT_ATTRIB_MAX)
 
-#define VERT_BIT_FF(i)           VERT_BIT(i)
-#define VERT_BIT_FF_ALL          BITFIELD_RANGE(0, VERT_ATTRIB_FF_MAX)
+#define VERT_BIT_FF_ALL          (BITFIELD_RANGE(0, VERT_ATTRIB_GENERIC0) | \
+                                  VERT_BIT_EDGEFLAG)
 #define VERT_BIT_TEX(i)          VERT_BIT(VERT_ATTRIB_TEX(i))
 #define VERT_BIT_TEX_ALL         \
    BITFIELD_RANGE(VERT_ATTRIB_TEX(0), VERT_ATTRIB_TEX_MAX)
@@ -239,6 +306,9 @@ const char *gl_vert_attrib_name(gl_vert_attrib attrib);
 #define VERT_BIT_MAT(i)	         VERT_BIT(VERT_ATTRIB_MAT(i))
 #define VERT_BIT_MAT_ALL         \
    BITFIELD_RANGE(VERT_ATTRIB_MAT(0), VERT_ATTRIB_MAT_MAX)
+
+#define VERT_ATTRIB_SELECT_RESULT_OFFSET VERT_ATTRIB_GENERIC(3)
+#define VERT_BIT_SELECT_RESULT_OFFSET VERT_BIT_GENERIC(3)
 /*@}*/
 
 #define MAX_VARYING 32 /**< number of float[4] vectors */
@@ -253,6 +323,7 @@ const char *gl_vert_attrib_name(gl_vert_attrib attrib);
  * - vertResults (in prog_print.c's arb_output_attrib_string())
  * - fragAttribs (in prog_print.c's arb_input_attrib_string())
  * - _mesa_varying_slot_in_fs()
+ * - gl_varying_slot_name_for_stage()
  */
 typedef enum
 {
@@ -289,6 +360,12 @@ typedef enum
    VARYING_SLOT_VIEW_INDEX,
    VARYING_SLOT_VIEWPORT_MASK, /* Does not appear in FS */
    VARYING_SLOT_PRIMITIVE_SHADING_RATE = VARYING_SLOT_FACE, /* Does not appear in FS. */
+
+   VARYING_SLOT_PRIMITIVE_COUNT = VARYING_SLOT_TESS_LEVEL_OUTER, /* Only appears in MESH. */
+   VARYING_SLOT_PRIMITIVE_INDICES = VARYING_SLOT_TESS_LEVEL_INNER, /* Only appears in MESH. */
+   VARYING_SLOT_TASK_COUNT = VARYING_SLOT_BOUNDING_BOX0, /* Only appears in TASK. */
+   VARYING_SLOT_CULL_PRIMITIVE = VARYING_SLOT_BOUNDING_BOX0, /* Only appears in MESH. */
+
    VARYING_SLOT_VAR0 = 32, /* First generic varying slot */
    /* the remaining are simply for the benefit of gl_varying_slot_name()
     * and not to be construed as an upper bound:
@@ -324,18 +401,103 @@ typedef enum
    VARYING_SLOT_VAR29,
    VARYING_SLOT_VAR30,
    VARYING_SLOT_VAR31,
+   /* Per-patch varyings for tessellation. */
+   VARYING_SLOT_PATCH0,
+   VARYING_SLOT_PATCH1,
+   VARYING_SLOT_PATCH2,
+   VARYING_SLOT_PATCH3,
+   VARYING_SLOT_PATCH4,
+   VARYING_SLOT_PATCH5,
+   VARYING_SLOT_PATCH6,
+   VARYING_SLOT_PATCH7,
+   VARYING_SLOT_PATCH8,
+   VARYING_SLOT_PATCH9,
+   VARYING_SLOT_PATCH10,
+   VARYING_SLOT_PATCH11,
+   VARYING_SLOT_PATCH12,
+   VARYING_SLOT_PATCH13,
+   VARYING_SLOT_PATCH14,
+   VARYING_SLOT_PATCH15,
+   VARYING_SLOT_PATCH16,
+   VARYING_SLOT_PATCH17,
+   VARYING_SLOT_PATCH18,
+   VARYING_SLOT_PATCH19,
+   VARYING_SLOT_PATCH20,
+   VARYING_SLOT_PATCH21,
+   VARYING_SLOT_PATCH22,
+   VARYING_SLOT_PATCH23,
+   VARYING_SLOT_PATCH24,
+   VARYING_SLOT_PATCH25,
+   VARYING_SLOT_PATCH26,
+   VARYING_SLOT_PATCH27,
+   VARYING_SLOT_PATCH28,
+   VARYING_SLOT_PATCH29,
+   VARYING_SLOT_PATCH30,
+   VARYING_SLOT_PATCH31,
+   /* 32 16-bit vec4 slots packed in 16 32-bit vec4 slots for GLES/mediump.
+    * They are really just additional generic slots used for 16-bit data to
+    * prevent conflicts between neighboring mediump and non-mediump varyings
+    * that can't be packed without breaking one or the other, which is
+    * a limitation of separate shaders. This allows linking shaders in 32 bits
+    * and then get an optimally packed 16-bit varyings by remapping the IO
+    * locations to these slots. The remapping can also be undone trivially.
+    *
+    * nir_io_semantics::high_16bit determines which half of the slot is
+    * accessed. The low and high halves share the same IO "base" number.
+    * Drivers can treat these as 32-bit slots everywhere except for FP16
+    * interpolation.
+    */
+   VARYING_SLOT_VAR0_16BIT,
+   VARYING_SLOT_VAR1_16BIT,
+   VARYING_SLOT_VAR2_16BIT,
+   VARYING_SLOT_VAR3_16BIT,
+   VARYING_SLOT_VAR4_16BIT,
+   VARYING_SLOT_VAR5_16BIT,
+   VARYING_SLOT_VAR6_16BIT,
+   VARYING_SLOT_VAR7_16BIT,
+   VARYING_SLOT_VAR8_16BIT,
+   VARYING_SLOT_VAR9_16BIT,
+   VARYING_SLOT_VAR10_16BIT,
+   VARYING_SLOT_VAR11_16BIT,
+   VARYING_SLOT_VAR12_16BIT,
+   VARYING_SLOT_VAR13_16BIT,
+   VARYING_SLOT_VAR14_16BIT,
+   VARYING_SLOT_VAR15_16BIT,
+
+   NUM_TOTAL_VARYING_SLOTS,
 } gl_varying_slot;
 
 
 #define VARYING_SLOT_MAX	(VARYING_SLOT_VAR0 + MAX_VARYING)
-#define VARYING_SLOT_PATCH0	(VARYING_SLOT_MAX)
 #define VARYING_SLOT_TESS_MAX	(VARYING_SLOT_PATCH0 + MAX_VARYING)
 #define MAX_VARYINGS_INCL_PATCH (VARYING_SLOT_TESS_MAX - VARYING_SLOT_VAR0)
 
-const char *gl_varying_slot_name(gl_varying_slot slot);
 const char *gl_varying_slot_name_for_stage(gl_varying_slot slot,
                                            gl_shader_stage stage);
 
+/**
+ * Determine if the given gl_varying_slot appears in the fragment shader.
+ */
+static inline bool
+_mesa_varying_slot_in_fs(gl_varying_slot slot)
+{
+   switch (slot) {
+   case VARYING_SLOT_PSIZ:
+   case VARYING_SLOT_BFC0:
+   case VARYING_SLOT_BFC1:
+   case VARYING_SLOT_EDGE:
+   case VARYING_SLOT_CLIP_VERTEX:
+   case VARYING_SLOT_LAYER:
+   case VARYING_SLOT_TESS_LEVEL_OUTER:
+   case VARYING_SLOT_TESS_LEVEL_INNER:
+   case VARYING_SLOT_BOUNDING_BOX0:
+   case VARYING_SLOT_BOUNDING_BOX1:
+   case VARYING_SLOT_VIEWPORT_MASK:
+      return false;
+   default:
+      return true;
+   }
+}
 
 /**
  * Bitflags for varying slots.
@@ -373,6 +535,7 @@ const char *gl_varying_slot_name_for_stage(gl_varying_slot slot,
 #define VARYING_BIT_LAYER BITFIELD64_BIT(VARYING_SLOT_LAYER)
 #define VARYING_BIT_VIEWPORT BITFIELD64_BIT(VARYING_SLOT_VIEWPORT)
 #define VARYING_BIT_FACE BITFIELD64_BIT(VARYING_SLOT_FACE)
+#define VARYING_BIT_PRIMITIVE_SHADING_RATE BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_SHADING_RATE)
 #define VARYING_BIT_PNTC BITFIELD64_BIT(VARYING_SLOT_PNTC)
 #define VARYING_BIT_TESS_LEVEL_OUTER BITFIELD64_BIT(VARYING_SLOT_TESS_LEVEL_OUTER)
 #define VARYING_BIT_TESS_LEVEL_INNER BITFIELD64_BIT(VARYING_SLOT_TESS_LEVEL_INNER)
@@ -381,15 +544,6 @@ const char *gl_varying_slot_name_for_stage(gl_varying_slot slot,
 #define VARYING_BIT_VIEWPORT_MASK BITFIELD64_BIT(VARYING_SLOT_VIEWPORT_MASK)
 #define VARYING_BIT_VAR(V) BITFIELD64_BIT(VARYING_SLOT_VAR0 + (V))
 /*@}*/
-
-/**
- * Bitflags for system values.
- */
-#define SYSTEM_BIT_SAMPLE_ID ((uint64_t)1 << SYSTEM_VALUE_SAMPLE_ID)
-#define SYSTEM_BIT_SAMPLE_POS ((uint64_t)1 << SYSTEM_VALUE_SAMPLE_POS)
-#define SYSTEM_BIT_SAMPLE_MASK_IN ((uint64_t)1 << SYSTEM_VALUE_SAMPLE_MASK_IN)
-#define SYSTEM_BIT_LOCAL_INVOCATION_ID ((uint64_t)1 << SYSTEM_VALUE_LOCAL_INVOCATION_ID)
-#define SYSTEM_BIT_FRONT_FACE ((uint64_t)1 << SYSTEM_VALUE_FRONT_FACE)
 
 /**
  * If the gl_register_file is PROGRAM_SYSTEM_VALUE, the register index will be
@@ -620,6 +774,7 @@ typedef enum
    SYSTEM_VALUE_FRONT_FACE,
    SYSTEM_VALUE_SAMPLE_ID,
    SYSTEM_VALUE_SAMPLE_POS,
+   SYSTEM_VALUE_SAMPLE_POS_OR_CENTER,
    SYSTEM_VALUE_SAMPLE_MASK_IN,
    SYSTEM_VALUE_HELPER_INVOCATION,
    SYSTEM_VALUE_COLOR0,
@@ -648,9 +803,10 @@ typedef enum
    SYSTEM_VALUE_GLOBAL_INVOCATION_ID,
    SYSTEM_VALUE_BASE_GLOBAL_INVOCATION_ID,
    SYSTEM_VALUE_GLOBAL_INVOCATION_INDEX,
-   SYSTEM_VALUE_WORK_GROUP_ID,
-   SYSTEM_VALUE_NUM_WORK_GROUPS,
-   SYSTEM_VALUE_LOCAL_GROUP_SIZE,
+   SYSTEM_VALUE_WORKGROUP_ID,
+   SYSTEM_VALUE_WORKGROUP_INDEX,
+   SYSTEM_VALUE_NUM_WORKGROUPS,
+   SYSTEM_VALUE_WORKGROUP_SIZE,
    SYSTEM_VALUE_GLOBAL_GROUP_SIZE,
    SYSTEM_VALUE_WORK_DIM,
    SYSTEM_VALUE_USER_DATA_AMD,
@@ -678,11 +834,19 @@ typedef enum
    SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL,
    SYSTEM_VALUE_BARYCENTRIC_PERSP_SAMPLE,
    SYSTEM_VALUE_BARYCENTRIC_PERSP_CENTROID,
-   SYSTEM_VALUE_BARYCENTRIC_PERSP_SIZE,
+   SYSTEM_VALUE_BARYCENTRIC_PERSP_CENTER_RHW,
    SYSTEM_VALUE_BARYCENTRIC_LINEAR_PIXEL,
    SYSTEM_VALUE_BARYCENTRIC_LINEAR_CENTROID,
    SYSTEM_VALUE_BARYCENTRIC_LINEAR_SAMPLE,
    SYSTEM_VALUE_BARYCENTRIC_PULL_MODEL,
+
+   /**
+    * \name VK_KHR_fragment_shader_barycentric
+    */
+   /*@{*/
+   SYSTEM_VALUE_BARYCENTRIC_PERSP_COORD,
+   SYSTEM_VALUE_BARYCENTRIC_LINEAR_COORD,
+   /*@}*/
 
    /**
     * \name Ray tracing shader system values
@@ -690,6 +854,7 @@ typedef enum
    /*@{*/
    SYSTEM_VALUE_RAY_LAUNCH_ID,
    SYSTEM_VALUE_RAY_LAUNCH_SIZE,
+   SYSTEM_VALUE_RAY_LAUNCH_SIZE_ADDR_AMD,
    SYSTEM_VALUE_RAY_WORLD_ORIGIN,
    SYSTEM_VALUE_RAY_WORLD_DIRECTION,
    SYSTEM_VALUE_RAY_OBJECT_ORIGIN,
@@ -702,6 +867,16 @@ typedef enum
    SYSTEM_VALUE_RAY_FLAGS,
    SYSTEM_VALUE_RAY_GEOMETRY_INDEX,
    SYSTEM_VALUE_RAY_INSTANCE_CUSTOM_INDEX,
+   SYSTEM_VALUE_CULL_MASK,
+   SYSTEM_VALUE_RAY_TRIANGLE_VERTEX_POSITIONS,
+   /*@}*/
+
+   /**
+    * \name Task/Mesh shader system values
+    */
+   /*@{*/
+   SYSTEM_VALUE_MESH_VIEW_COUNT,
+   SYSTEM_VALUE_MESH_VIEW_INDICES,
    /*@}*/
 
    /**
@@ -712,10 +887,28 @@ typedef enum
    SYSTEM_VALUE_GS_HEADER_IR3,
    SYSTEM_VALUE_TCS_HEADER_IR3,
 
+   /* IR3 specific system value that contains the patch id for the current
+    * subdraw.
+    */
+   SYSTEM_VALUE_REL_PATCH_ID_IR3,
+
    /**
     * Fragment shading rate used for KHR_fragment_shading_rate (Vulkan).
     */
    SYSTEM_VALUE_FRAG_SHADING_RATE,
+
+   /*
+    * Rasterized fragment is fully covered by the generating primitive
+    * (SPV_EXT_fragment_fully_covered).
+    */
+   SYSTEM_VALUE_FULLY_COVERED,
+
+   /*
+    * Fragment size and invocation count used for
+    * EXT_fragment_invocation_density (Vulkan).
+    */
+   SYSTEM_VALUE_FRAG_SIZE,
+   SYSTEM_VALUE_FRAG_INVOCATION_COUNT,
 
    SYSTEM_VALUE_MAX             /**< Number of values */
 } gl_system_value;
@@ -800,12 +993,39 @@ enum gl_frag_depth_layout
 };
 
 /**
- * \brief Buffer access qualifiers
+ * \brief Layout qualifiers for AMD_shader_early_and_late_fragment_tests.
+ */
+enum gl_frag_stencil_layout
+{
+   FRAG_STENCIL_LAYOUT_NONE, /**< No layout is specified. */
+   FRAG_STENCIL_LAYOUT_ANY,
+   FRAG_STENCIL_LAYOUT_GREATER,
+   FRAG_STENCIL_LAYOUT_LESS,
+   FRAG_STENCIL_LAYOUT_UNCHANGED
+};
+
+/**
+ * \brief Memory access qualifiers
  */
 enum gl_access_qualifier
 {
+   /**
+    * This means that the memory scope is the current device. It indicates
+    * that reads and writes are coherent with reads and writes from other
+    * shader invocations and other workgroups.
+    */
    ACCESS_COHERENT      = (1 << 0),
+
+   /**
+    * This means non-aliased. It indicates that the accessed address is not
+    * accessible through any other memory resource in the shader.
+    */
    ACCESS_RESTRICT      = (1 << 1),
+
+   /**
+    * The access cannot be eliminated, duplicated, or combined with other
+    * accesses.
+    */
    ACCESS_VOLATILE      = (1 << 2),
 
    /* The memory used by the access/variable is not read. */
@@ -814,7 +1034,32 @@ enum gl_access_qualifier
    /* The memory used by the access/variable is not written. */
    ACCESS_NON_WRITEABLE = (1 << 4),
 
-   /** The access may use a non-uniform buffer or image index */
+   /**
+    * The access may use a non-uniform buffer or image index.
+    *
+    * This is not allowed in either OpenGL or OpenGL ES, or Vulkan unless
+    * VK_EXT_descriptor_indexing is supported and the appropriate capability is
+    * enabled.
+    *
+    * Some GL spec archaeology justifying this:
+    *
+    * Up through at least GLSL ES 3.20 and GLSL 4.50,  "Opaque Types" says "When
+    * aggregated into arrays within a shader, opaque types can only be indexed
+    * with a dynamically uniform integral expression (see section 3.9.3) unless
+    * otherwise noted; otherwise, results are undefined."
+    *
+    * The original GL_AB_shader_image_load_store specification for desktop GL
+    * didn't have this restriction ("Images may be aggregated into arrays within
+    * a shader (using square brackets [ ]) and can be indexed with general
+    * integer expressions.")  At the same time,
+    * GL_ARB_shader_storage_buffer_objects *did* have the uniform restriction
+    * ("A uniform or shader storage block array can only be indexed with a
+    * dynamically uniform integral expression, otherwise results are
+    * undefined"), just like ARB_gpu_shader5 did when it first introduced a
+    * non-constant indexing of an opaque type with samplers.  So, we assume that
+    * this was an oversight in the original image_load_store spec, and was
+    * considered a correction in the merge to core.
+    */
    ACCESS_NON_UNIFORM   = (1 << 5),
 
    /* This has the same semantics as NIR_INTRINSIC_CAN_REORDER, only to be
@@ -824,8 +1069,38 @@ enum gl_access_qualifier
     */
    ACCESS_CAN_REORDER = (1 << 6),
 
-   /** Use as little cache space as possible. */
-   ACCESS_STREAM_CACHE_POLICY = (1 << 7),
+   /**
+    * Hints that the accessed address is not likely to be accessed again
+    * in the near future. This reduces data retention in caches.
+    */
+   ACCESS_NON_TEMPORAL = (1 << 7),
+
+   /** Execute instruction also in helpers. */
+   ACCESS_INCLUDE_HELPERS = (1 << 8),
+
+   /**
+    * Whether the address bits are swizzled by the hw. This practically means
+    * that loads can't be vectorized and must be exactly 32 bits on some chips.
+    * The swizzle amount is determined by the descriptor.
+    */
+   ACCESS_IS_SWIZZLED_AMD = (1 << 9),
+
+   /**
+    * Whether an AMD-specific buffer intrinsic uses a format conversion.
+    *
+    * If unset, the intrinsic will access raw memory without any conversion.
+    *
+    * If set, the memory opcode performs a format conversion according to
+    * the format determined by the descriptor (in a manner identical to image
+    * buffers and sampler buffers).
+    */
+   ACCESS_USES_FORMAT_AMD = (1 << 10),
+
+   /**
+    * Whether a multi sample image load intrinsic uses sample index extracted
+    * from fragment mask buffer.
+    */
+   ACCESS_FMASK_LOWERED_AMD = (1 << 11),
 };
 
 /**
@@ -881,6 +1156,44 @@ enum gl_tess_spacing
    TESS_SPACING_FRACTIONAL_ODD,
    TESS_SPACING_FRACTIONAL_EVEN,
 };
+
+enum tess_primitive_mode
+{
+   TESS_PRIMITIVE_UNSPECIFIED,
+   TESS_PRIMITIVE_TRIANGLES,
+   TESS_PRIMITIVE_QUADS,
+   TESS_PRIMITIVE_ISOLINES,
+};
+
+/**
+ * Mesa primitive types for both GL and Vulkan:
+ */
+enum ENUM_PACKED mesa_prim
+{
+   MESA_PRIM_POINTS,
+   MESA_PRIM_LINES,
+   MESA_PRIM_LINE_LOOP,
+   MESA_PRIM_LINE_STRIP,
+   MESA_PRIM_TRIANGLES,
+   MESA_PRIM_TRIANGLE_STRIP,
+   MESA_PRIM_TRIANGLE_FAN,
+   MESA_PRIM_QUADS,
+   MESA_PRIM_QUAD_STRIP,
+   MESA_PRIM_POLYGON,
+   MESA_PRIM_LINES_ADJACENCY,
+   MESA_PRIM_LINE_STRIP_ADJACENCY,
+   MESA_PRIM_TRIANGLES_ADJACENCY,
+   MESA_PRIM_TRIANGLE_STRIP_ADJACENCY,
+   MESA_PRIM_PATCHES,
+   MESA_PRIM_MAX = MESA_PRIM_PATCHES,
+   MESA_PRIM_COUNT = MESA_PRIM_MAX +1,
+   MESA_PRIM_UNKNOWN = (MESA_PRIM_MAX * 2),
+};
+
+/**
+ * Number of vertices per mesh shader primitive.
+ */
+unsigned num_mesh_vertices_per_primitive(unsigned prim);
 
 /**
  * A compare function enum for use in compiler lowering passes.  This is in
@@ -976,6 +1289,116 @@ enum cl_sampler_filter_mode {
    SAMPLER_FILTER_MODE_NEAREST = 0,
    SAMPLER_FILTER_MODE_LINEAR = 1,
 };
+
+/**
+ * \name Bit flags used for updating material values.
+ */
+/*@{*/
+#define MAT_ATTRIB_FRONT_AMBIENT           0
+#define MAT_ATTRIB_BACK_AMBIENT            1
+#define MAT_ATTRIB_FRONT_DIFFUSE           2
+#define MAT_ATTRIB_BACK_DIFFUSE            3
+#define MAT_ATTRIB_FRONT_SPECULAR          4
+#define MAT_ATTRIB_BACK_SPECULAR           5
+#define MAT_ATTRIB_FRONT_EMISSION          6
+#define MAT_ATTRIB_BACK_EMISSION           7
+#define MAT_ATTRIB_FRONT_SHININESS         8
+#define MAT_ATTRIB_BACK_SHININESS          9
+#define MAT_ATTRIB_FRONT_INDEXES           10
+#define MAT_ATTRIB_BACK_INDEXES            11
+#define MAT_ATTRIB_MAX                     12
+
+#define MAT_ATTRIB_AMBIENT(f)  (MAT_ATTRIB_FRONT_AMBIENT+(f))
+#define MAT_ATTRIB_DIFFUSE(f)  (MAT_ATTRIB_FRONT_DIFFUSE+(f))
+#define MAT_ATTRIB_SPECULAR(f) (MAT_ATTRIB_FRONT_SPECULAR+(f))
+#define MAT_ATTRIB_EMISSION(f) (MAT_ATTRIB_FRONT_EMISSION+(f))
+#define MAT_ATTRIB_SHININESS(f)(MAT_ATTRIB_FRONT_SHININESS+(f))
+#define MAT_ATTRIB_INDEXES(f)  (MAT_ATTRIB_FRONT_INDEXES+(f))
+
+#define MAT_BIT_FRONT_AMBIENT         (1<<MAT_ATTRIB_FRONT_AMBIENT)
+#define MAT_BIT_BACK_AMBIENT          (1<<MAT_ATTRIB_BACK_AMBIENT)
+#define MAT_BIT_FRONT_DIFFUSE         (1<<MAT_ATTRIB_FRONT_DIFFUSE)
+#define MAT_BIT_BACK_DIFFUSE          (1<<MAT_ATTRIB_BACK_DIFFUSE)
+#define MAT_BIT_FRONT_SPECULAR        (1<<MAT_ATTRIB_FRONT_SPECULAR)
+#define MAT_BIT_BACK_SPECULAR         (1<<MAT_ATTRIB_BACK_SPECULAR)
+#define MAT_BIT_FRONT_EMISSION        (1<<MAT_ATTRIB_FRONT_EMISSION)
+#define MAT_BIT_BACK_EMISSION         (1<<MAT_ATTRIB_BACK_EMISSION)
+#define MAT_BIT_FRONT_SHININESS       (1<<MAT_ATTRIB_FRONT_SHININESS)
+#define MAT_BIT_BACK_SHININESS        (1<<MAT_ATTRIB_BACK_SHININESS)
+#define MAT_BIT_FRONT_INDEXES         (1<<MAT_ATTRIB_FRONT_INDEXES)
+#define MAT_BIT_BACK_INDEXES          (1<<MAT_ATTRIB_BACK_INDEXES)
+
+/** An enum representing what kind of input gl_SubgroupSize is. */
+enum ENUM_PACKED gl_subgroup_size
+{
+   /** Actual subgroup size, whatever that happens to be */
+   SUBGROUP_SIZE_VARYING = 0,
+
+   /** Subgroup size must appear to be draw or dispatch-uniform
+    *
+    * This is the OpenGL behavior
+    */
+   SUBGROUP_SIZE_UNIFORM,
+
+   /** Subgroup size must appear to be the API advertised constant
+    *
+    * This is the default Vulkan 1.1 behavior
+    */
+   SUBGROUP_SIZE_API_CONSTANT,
+
+   /** Subgroup size must actually be the API advertised constant
+    *
+    * Not only must the subgroup size match the API advertised constant as
+    * with SUBGROUP_SIZE_API_CONSTANT but it must also be dispatched such that
+    * all the subgroups are full if there are enough invocations.
+    */
+   SUBGROUP_SIZE_FULL_SUBGROUPS,
+
+   /* These enums are specifically chosen so that the value of the enum is
+    * also the subgroup size.  If any new values are added, they must respect
+    * this invariant.
+    */
+   SUBGROUP_SIZE_REQUIRE_8   = 8,   /**< VK_EXT_subgroup_size_control */
+   SUBGROUP_SIZE_REQUIRE_16  = 16,  /**< VK_EXT_subgroup_size_control */
+   SUBGROUP_SIZE_REQUIRE_32  = 32,  /**< VK_EXT_subgroup_size_control */
+   SUBGROUP_SIZE_REQUIRE_64  = 64,  /**< VK_EXT_subgroup_size_control */
+   SUBGROUP_SIZE_REQUIRE_128 = 128, /**< VK_EXT_subgroup_size_control */
+};
+
+/**
+ * An index for each type of texture object.  These correspond to the GL
+ * texture target enums, such as GL_TEXTURE_2D, GL_TEXTURE_CUBE_MAP, etc.
+ * Note: the order is from highest priority to lowest priority.
+ */
+typedef enum
+{
+   TEXTURE_2D_MULTISAMPLE_INDEX,
+   TEXTURE_2D_MULTISAMPLE_ARRAY_INDEX,
+   TEXTURE_CUBE_ARRAY_INDEX,
+   TEXTURE_BUFFER_INDEX,
+   TEXTURE_2D_ARRAY_INDEX,
+   TEXTURE_1D_ARRAY_INDEX,
+   TEXTURE_EXTERNAL_INDEX,
+   TEXTURE_CUBE_INDEX,
+   TEXTURE_3D_INDEX,
+   TEXTURE_RECT_INDEX,
+   TEXTURE_2D_INDEX,
+   TEXTURE_1D_INDEX,
+   NUM_TEXTURE_TARGETS
+} gl_texture_index;
+
+/* Ordered from narrower to wider scope. */
+typedef enum {
+   SCOPE_NONE,
+   SCOPE_INVOCATION,
+   SCOPE_SUBGROUP,
+   SCOPE_SHADER_CALL,
+   SCOPE_WORKGROUP,
+   SCOPE_QUEUE_FAMILY,
+   SCOPE_DEVICE,
+} mesa_scope;
+
+const char *mesa_scope_name(mesa_scope scope);
 
 #ifdef __cplusplus
 } /* extern "C" */

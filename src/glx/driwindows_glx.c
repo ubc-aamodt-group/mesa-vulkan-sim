@@ -79,8 +79,7 @@ driwindows_destroy_context(struct glx_context *context)
 }
 
 static int
-driwindows_bind_context(struct glx_context *context, struct glx_context *old,
-                        GLXDrawable draw, GLXDrawable read)
+driwindows_bind_context(struct glx_context *context, GLXDrawable draw, GLXDrawable read)
 {
    struct driwindows_context *pcp = (struct driwindows_context *) context;
    struct driwindows_drawable *pdraw, *pread;
@@ -101,47 +100,11 @@ driwindows_bind_context(struct glx_context *context, struct glx_context *old,
 }
 
 static void
-driwindows_unbind_context(struct glx_context *context, struct glx_context *new)
+driwindows_unbind_context(struct glx_context *context)
 {
    struct driwindows_context *pcp = (struct driwindows_context *) context;
 
    windows_unbind_context(pcp->windowsContext);
-}
-
-static void
-driwindows_bind_tex_image(Display * dpy,
-                    GLXDrawable drawable,
-                    int buffer, const int *attrib_list)
-{
-   struct glx_context *gc = __glXGetCurrentContext();
-   struct driwindows_context *pcp = (struct driwindows_context *) gc;
-   __GLXDRIdrawable *base = GetGLXDRIDrawable(dpy, drawable);
-   struct driwindows_drawable *pdraw = (struct driwindows_drawable *) base;
-
-   __glXInitialize(dpy);
-
-   if (pdraw != NULL) {
-      windows_setTexBuffer(pcp->windowsContext,
-                          pdraw->base.textureTarget,
-                          pdraw->base.textureFormat,
-                          pdraw->windowsDrawable);
-   }
-}
-
-static void
-driwindows_release_tex_image(Display * dpy, GLXDrawable drawable, int buffer)
-{
-   struct glx_context *gc = __glXGetCurrentContext();
-   struct driwindows_context *pcp = (struct driwindows_context *) gc;
-   __GLXDRIdrawable *base = GetGLXDRIDrawable(dpy, drawable);
-   struct glx_display *dpyPriv = __glXInitialize(dpy);
-   struct driwindows_drawable *pdraw = (struct driwindows_drawable *) base;
-
-   if (dpyPriv != NULL && pdraw != NULL) {
-      windows_releaseTexBuffer(pcp->windowsContext,
-                              pdraw->base.textureTarget,
-                              pdraw->windowsDrawable);
-      }
 }
 
 static const struct glx_context_vtable driwindows_context_vtable = {
@@ -150,10 +113,6 @@ static const struct glx_context_vtable driwindows_context_vtable = {
    .unbind              = driwindows_unbind_context,
    .wait_gl             = NULL,
    .wait_x              = NULL,
-   .use_x_font          = DRI_glXUseXFont,
-   .bind_tex_image      = driwindows_bind_tex_image,
-   .release_tex_image   = driwindows_release_tex_image,
-   .get_proc_address    = NULL,
 };
 
 static struct glx_context *
@@ -240,7 +199,7 @@ driwindows_create_context_attribs(struct glx_screen *base,
      identical values, so far
    */
 
-   if (!psc->base.driScreen)
+   if (!psc->base.driScreen || !config_base)
       return NULL;
 
    /* Check the renderType value */
@@ -298,7 +257,8 @@ driwindowsDestroyDrawable(__GLXDRIdrawable * pdraw)
 
 static __GLXDRIdrawable *
 driwindowsCreateDrawable(struct glx_screen *base, XID xDrawable,
-                         GLXDrawable drawable, struct glx_config *modes)
+                         GLXDrawable drawable, int type,
+                         struct glx_config *modes)
 {
    struct driwindows_drawable *pdp;
    struct driwindows_screen *psc = (struct driwindows_screen *) base;

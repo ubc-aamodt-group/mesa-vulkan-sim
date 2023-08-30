@@ -51,7 +51,8 @@ struct acp_entry : public exec_node {
    unsigned size_written;
    unsigned size_read;
    enum opcode opcode;
-   bool saturate;
+   bool is_partial_write;
+   bool force_writemask_all;
 };
 
 struct block_data {
@@ -88,6 +89,25 @@ struct block_data {
     * have a fully uninitialized destination at the end of this block.
     */
    BITSET_WORD *undef;
+
+   /**
+    * Which entries in the fs_copy_prop_dataflow acp table can the
+    * start of this block be reached from.  Note that this is a weaker
+    * condition than livein.
+    */
+   BITSET_WORD *reachin;
+
+   /**
+    * Which entries in the fs_copy_prop_dataflow acp table are
+    * overwritten by an instruction with channel masks inconsistent
+    * with the copy instruction (e.g. due to force_writemask_all).
+    * Such an overwrite can cause the copy entry to become invalid
+    * even if the copy instruction is subsequently re-executed for any
+    * given channel i, since the execution of the overwrite for
+    * channel i may corrupt other channels j!=i inactive for the
+    * subsequent copy.
+    */
+   BITSET_WORD *exec_mismatch;
 };
 
 class fs_copy_prop_dataflow
@@ -139,6 +159,8 @@ fs_copy_prop_dataflow::fs_copy_prop_dataflow(void *mem_ctx, cfg_t *cfg,
       bd[block->num].copy = rzalloc_array(bd, BITSET_WORD, bitset_words);
       bd[block->num].kill = rzalloc_array(bd, BITSET_WORD, bitset_words);
       bd[block->num].undef = rzalloc_array(bd, BITSET_WORD, bitset_words);
+      bd[block->num].reachin = rzalloc_array(bd, BITSET_WORD, bitset_words);
+      bd[block->num].exec_mismatch = rzalloc_array(bd, BITSET_WORD, bitset_words);
 
       for (int i = 0; i < ACP_HASH_SIZE; i++) {
          foreach_in_list(acp_entry, entry, &out_acp[block->num][i]) {
@@ -161,6 +183,28 @@ fs_copy_prop_dataflow::fs_copy_prop_dataflow(void *mem_ctx, cfg_t *cfg,
 
    setup_initial_values();
    run();
+}
+
+/**
+ * Like reg_offset, but register must be VGRF or FIXED_GRF.
+ */
+static inline unsigned
+grf_reg_offset(const fs_reg &r)
+{
+   return (r.file == VGRF ? 0 : r.nr) * REG_SIZE +
+          r.offset +
+          (r.file == FIXED_GRF ? r.subnr : 0);
+}
+
+/**
+ * Like regions_overlap, but register must be VGRF or FIXED_GRF.
+ */
+static inline bool
+grf_regions_overlap(const fs_reg &r, unsigned dr, const fs_reg &s, unsigned ds)
+{
+   return reg_space(r) == reg_space(s) &&
+          !(grf_reg_offset(r) + dr <= grf_reg_offset(s) ||
+            grf_reg_offset(s) + ds <= grf_reg_offset(r));
 }
 
 /**
@@ -205,9 +249,12 @@ fs_copy_prop_dataflow::setup_initial_values()
 
             unsigned idx = reg_space(inst->dst) & (acp_table_size - 1);
             foreach_in_list(acp_entry, entry, &acp_table[idx]) {
-               if (regions_overlap(inst->dst, inst->size_written,
-                                   entry->dst, entry->size_written))
+               if (grf_regions_overlap(inst->dst, inst->size_written,
+                                       entry->dst, entry->size_written)) {
                   BITSET_SET(bd[block->num].kill, entry->global_idx);
+                  if (inst->force_writemask_all && !entry->force_writemask_all)
+                     BITSET_SET(bd[block->num].exec_mismatch, entry->global_idx);
+               }
             }
          }
       }
@@ -232,9 +279,12 @@ fs_copy_prop_dataflow::setup_initial_values()
 
             unsigned idx = reg_space(inst->dst) & (acp_table_size - 1);
             foreach_in_list(acp_entry, entry, &acp_table[idx]) {
-               if (regions_overlap(inst->dst, inst->size_written,
-                                   entry->src, entry->size_read))
+               if (grf_regions_overlap(inst->dst, inst->size_written,
+                                       entry->src, entry->size_read)) {
                   BITSET_SET(bd[block->num].kill, entry->global_idx);
+                  if (inst->force_writemask_all && !entry->force_writemask_all)
+                     BITSET_SET(bd[block->num].exec_mismatch, entry->global_idx);
+               }
             }
          }
       }
@@ -291,6 +341,7 @@ fs_copy_prop_dataflow::run()
 
          for (int i = 0; i < bitset_words; i++) {
             const BITSET_WORD old_liveout = bd[block->num].liveout[i];
+            const BITSET_WORD old_reachin = bd[block->num].reachin[i];
             BITSET_WORD livein_from_any_block = 0;
 
             /* Update livein for this block.  If a copy is live out of all
@@ -308,6 +359,13 @@ fs_copy_prop_dataflow::run()
                bd[block->num].livein[i] &= (bd[parent->num].liveout[i] |
                                             bd[parent->num].undef[i]);
                livein_from_any_block |= bd[parent->num].liveout[i];
+
+               /* Update reachin for this block.  If the end of any
+                * parent block is reachable from the copy, the start
+                * of this block is reachable from it as well.
+                */
+               bd[block->num].reachin[i] |= (bd[parent->num].reachin[i] |
+                                             bd[parent->num].copy[i]);
             }
 
             /* Limit to the set of ACP entries that can possibly be available
@@ -323,7 +381,44 @@ fs_copy_prop_dataflow::run()
                bd[block->num].copy[i] | (bd[block->num].livein[i] &
                                          ~bd[block->num].kill[i]);
 
-            if (old_liveout != bd[block->num].liveout[i])
+            if (old_liveout != bd[block->num].liveout[i] ||
+                old_reachin != bd[block->num].reachin[i])
+               progress = true;
+         }
+      }
+   } while (progress);
+
+   /* Perform a second fixed-point pass in order to propagate the
+    * exec_mismatch bitsets.  Note that this requires an accurate
+    * value of the reachin bitsets as input, which isn't available
+    * until the end of the first propagation pass, so this loop cannot
+    * be folded into the previous one.
+    */
+   do {
+      progress = false;
+
+      foreach_block (block, cfg) {
+         for (int i = 0; i < bitset_words; i++) {
+            const BITSET_WORD old_exec_mismatch = bd[block->num].exec_mismatch[i];
+
+            /* Update exec_mismatch for this block.  If the end of a
+             * parent block is reachable by an overwrite with
+             * inconsistent execution masking, the start of this block
+             * is reachable by such an overwrite as well.
+             */
+            foreach_list_typed(bblock_link, parent_link, link, &block->parents) {
+               bblock_t *parent = parent_link->block;
+               bd[block->num].exec_mismatch[i] |= (bd[parent->num].exec_mismatch[i] &
+                                                   bd[parent->num].reachin[i]);
+            }
+
+            /* Only consider overwrites with inconsistent execution
+             * masking if they are reachable from the copy, since
+             * overwrites unreachable from a copy are harmless to that
+             * copy.
+             */
+            bd[block->num].exec_mismatch[i] &= bd[block->num].reachin[i];
+            if (old_exec_mismatch != bd[block->num].exec_mismatch[i])
                progress = true;
          }
       }
@@ -367,9 +462,12 @@ is_logic_op(enum opcode opcode)
 }
 
 static bool
-can_take_stride(fs_inst *inst, unsigned arg, unsigned stride,
-                const gen_device_info *devinfo)
+can_take_stride(fs_inst *inst, brw_reg_type dst_type,
+                unsigned arg, unsigned stride,
+                const struct brw_compiler *compiler)
 {
+   const struct intel_device_info *devinfo = compiler->devinfo;
+
    if (stride > 4)
       return false;
 
@@ -377,9 +475,9 @@ can_take_stride(fs_inst *inst, unsigned arg, unsigned stride,
     * of the corresponding channel of the destination, and the provided stride
     * would break this restriction.
     */
-   if (has_dst_aligned_region_restriction(devinfo, inst) &&
+   if (has_dst_aligned_region_restriction(devinfo, inst, dst_type) &&
        !(type_sz(inst->src[arg].type) * stride ==
-           type_sz(inst->dst.type) * inst->dst.stride ||
+           type_sz(dst_type) * inst->dst.stride ||
          stride == 0))
       return false;
 
@@ -393,7 +491,7 @@ can_take_stride(fs_inst *inst, unsigned arg, unsigned stride,
     *    This is applicable to 32b datatypes and 16b datatype. 64b datatypes
     *    cannot use the replicate control.
     */
-   if (inst->is_3src(devinfo)) {
+   if (inst->is_3src(compiler)) {
       if (type_sz(inst->src[arg].type) > 4)
          return stride == 1;
       else
@@ -418,10 +516,10 @@ can_take_stride(fs_inst *inst, unsigned arg, unsigned stride,
     * restrictions.
     */
    if (inst->is_math()) {
-      if (devinfo->gen == 6 || devinfo->gen == 7) {
+      if (devinfo->ver == 6 || devinfo->ver == 7) {
          assert(inst->dst.stride == 1);
          return stride == 1 || stride == 0;
-      } else if (devinfo->gen >= 8) {
+      } else if (devinfo->ver >= 8) {
          return stride == inst->dst.stride || stride == 0;
       }
    }
@@ -437,6 +535,7 @@ instruction_requires_packed_data(fs_inst *inst)
    case FS_OPCODE_DDX_COARSE:
    case FS_OPCODE_DDY_FINE:
    case FS_OPCODE_DDY_COARSE:
+   case SHADER_OPCODE_QUAD_SWIZZLE:
       return true;
    default:
       return false;
@@ -483,17 +582,36 @@ fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
                             entry->dst, entry->size_written))
       return false;
 
-   /* Avoid propagating a FIXED_GRF register into an EOT instruction in order
-    * for any register allocation restrictions to be applied.
+   /* Send messages with EOT set are restricted to use g112-g127 (and we
+    * sometimes need g127 for other purposes), so avoid copy propagating
+    * anything that would make it impossible to satisfy that restriction.
     */
-   if (entry->src.file == FIXED_GRF && inst->eot)
-      return false;
+   if (inst->eot) {
+      /* Avoid propagating a FIXED_GRF register, as that's already pinned. */
+      if (entry->src.file == FIXED_GRF)
+         return false;
+
+      /* We might be propagating from a large register, while the SEND only
+       * is reading a portion of it (say the .A channel in an RGBA value).
+       * We need to pin both split SEND sources in g112-g126/127, so only
+       * allow this if the registers aren't too large.
+       */
+      if (inst->opcode == SHADER_OPCODE_SEND && entry->src.file == VGRF) {
+         int other_src = arg == 2 ? 3 : 2;
+         unsigned other_size = inst->src[other_src].file == VGRF ?
+                               alloc.sizes[inst->src[other_src].nr] :
+                               inst->size_read(other_src);
+         unsigned prop_src_size = alloc.sizes[entry->src.nr];
+         if (other_size + prop_src_size > 15)
+            return false;
+      }
+   }
 
    /* Avoid propagating odd-numbered FIXED_GRF registers into the first source
     * of a LINTERP instruction on platforms where the PLN instruction has
     * register alignment restrictions.
     */
-   if (devinfo->has_pln && devinfo->gen <= 6 &&
+   if (devinfo->has_pln && devinfo->ver <= 6 &&
        entry->src.file == FIXED_GRF && (entry->src.nr & 1) &&
        inst->opcode == FS_OPCODE_LINTERP && arg == 0)
       return false;
@@ -509,13 +627,19 @@ fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
 
    bool has_source_modifiers = entry->src.abs || entry->src.negate;
 
-   if ((has_source_modifiers || entry->src.file == UNIFORM ||
-        !entry->src.is_contiguous()) &&
-       !inst->can_do_source_mods(devinfo))
+   if (has_source_modifiers && !inst->can_do_source_mods(devinfo))
       return false;
 
+   /* Reject cases that would violate register regioning restrictions. */
+   if ((entry->src.file == UNIFORM || !entry->src.is_contiguous()) &&
+       ((devinfo->ver == 6 && inst->is_math()) ||
+        inst->is_send_from_grf() ||
+        inst->uses_indirect_addressing())) {
+      return false;
+   }
+
    if (has_source_modifiers &&
-       inst->opcode == SHADER_OPCODE_GEN4_SCRATCH_WRITE)
+       inst->opcode == SHADER_OPCODE_GFX4_SCRATCH_WRITE)
       return false;
 
    /* Some instructions implemented in the generator backend, such as
@@ -527,11 +651,38 @@ fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
    if (instruction_requires_packed_data(inst) && entry_stride != 1)
       return false;
 
+   const brw_reg_type dst_type = (has_source_modifiers &&
+                                  entry->dst.type != inst->src[arg].type) ?
+      entry->dst.type : inst->dst.type;
+
    /* Bail if the result of composing both strides would exceed the
     * hardware limit.
     */
-   if (!can_take_stride(inst, arg, entry_stride * inst->src[arg].stride,
-                        devinfo))
+   if (!can_take_stride(inst, dst_type, arg,
+                        entry_stride * inst->src[arg].stride,
+                        compiler))
+      return false;
+
+   /* From the Cherry Trail/Braswell PRMs, Volume 7: 3D Media GPGPU:
+    *    EU Overview
+    *       Register Region Restrictions
+    *          Special Requirements for Handling Double Precision Data Types :
+    *
+    *   "When source or destination datatype is 64b or operation is integer
+    *    DWord multiply, regioning in Align1 must follow these rules:
+    *
+    *      1. Source and Destination horizontal stride must be aligned to the
+    *         same qword.
+    *      2. Regioning must ensure Src.Vstride = Src.Width * Src.Hstride.
+    *      3. Source and Destination offset must be the same, except the case
+    *         of scalar source."
+    *
+    * Most of this is already checked in can_take_stride(), we're only left
+    * with checking 3.
+    */
+   if (has_dst_aligned_region_restriction(devinfo, inst, dst_type) &&
+       entry_stride != 0 &&
+       (reg_offset(inst->dst) % REG_SIZE) != (reg_offset(entry->src) % REG_SIZE))
       return false;
 
    /* Bail if the source FIXED_GRF region of the copy cannot be trivially
@@ -551,8 +702,11 @@ fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
     * destination of the copy, and simply replacing the sources would give a
     * program with different semantics.
     */
-   if (type_sz(entry->dst.type) < type_sz(inst->src[arg].type))
+   if ((type_sz(entry->dst.type) < type_sz(inst->src[arg].type) ||
+        entry->is_partial_write) &&
+       inst->opcode != BRW_OPCODE_MOV) {
       return false;
+   }
 
    /* Bail if the result of composing both strides cannot be expressed
     * as another stride. This avoids, for example, trying to transform
@@ -584,25 +738,9 @@ fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
         type_sz(entry->dst.type) != type_sz(inst->src[arg].type)))
       return false;
 
-   if (devinfo->gen >= 8 && (entry->src.negate || entry->src.abs) &&
+   if (devinfo->ver >= 8 && (entry->src.negate || entry->src.abs) &&
        is_logic_op(inst->opcode)) {
       return false;
-   }
-
-   if (entry->saturate) {
-      switch(inst->opcode) {
-      case BRW_OPCODE_SEL:
-         if ((inst->conditional_mod != BRW_CONDITIONAL_GE &&
-              inst->conditional_mod != BRW_CONDITIONAL_L) ||
-             inst->src[1].file != IMM ||
-             inst->src[1].f < 0.0 ||
-             inst->src[1].f > 1.0) {
-            return false;
-         }
-         break;
-      default:
-         return false;
-      }
    }
 
    /* Save the offset of inst->src[arg] relative to entry->dst for it to be
@@ -639,13 +777,11 @@ fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
       inst->src[arg].stride *= entry->src.stride;
    }
 
-   /* Compose any saturate modifiers. */
-   inst->saturate = inst->saturate || entry->saturate;
-
    /* Compute the first component of the copy that the instruction is
     * reading, and the base byte offset within that component.
     */
-   assert(entry->dst.offset % REG_SIZE == 0 && entry->dst.stride == 1);
+   assert((entry->dst.offset % REG_SIZE == 0 || inst->opcode == BRW_OPCODE_MOV) &&
+           entry->dst.stride == 1);
    const unsigned component = rel_offset / type_sz(entry->dst.type);
    const unsigned suboffset = rel_offset % type_sz(entry->dst.type);
 
@@ -687,8 +823,6 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
       return false;
    if (type_sz(entry->src.type) > 4)
       return false;
-   if (entry->saturate)
-      return false;
 
    for (int i = inst->sources - 1; i >= 0; i--) {
       if (inst->src[i].file != VGRF)
@@ -705,26 +839,50 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
                                entry->dst, entry->size_written))
          continue;
 
-      /* If the type sizes don't match each channel of the instruction is
-       * either extracting a portion of the constant (which could be handled
-       * with some effort but the code below doesn't) or reading multiple
-       * channels of the source at once.
+      /* If the size of the use type is larger than the size of the entry
+       * type, the entry doesn't contain all of the data that the user is
+       * trying to use.
        */
-      if (type_sz(inst->src[i].type) != type_sz(entry->dst.type))
+      if (type_sz(inst->src[i].type) > type_sz(entry->dst.type))
          continue;
 
       fs_reg val = entry->src;
+
+      /* If the size of the use type is smaller than the size of the entry,
+       * clamp the value to the range of the use type.  This enables constant
+       * copy propagation in cases like
+       *
+       *
+       *    mov(8)          g12<1>UD        0x0000000cUD
+       *    ...
+       *    mul(8)          g47<1>D         g86<8,8,1>D     g12<16,8,2>W
+       */
+      if (type_sz(inst->src[i].type) < type_sz(entry->dst.type)) {
+         if (type_sz(inst->src[i].type) != 2 || type_sz(entry->dst.type) != 4)
+            continue;
+
+         assert(inst->src[i].subnr == 0 || inst->src[i].subnr == 2);
+
+         /* When subnr is 0, we want the lower 16-bits, and when it's 2, we
+          * want the upper 16-bits. No other values of subnr are valid for a
+          * UD source.
+          */
+         const uint16_t v = inst->src[i].subnr == 2 ? val.ud >> 16 : val.ud;
+
+         val.ud = v | (uint32_t(v) << 16);
+      }
+
       val.type = inst->src[i].type;
 
       if (inst->src[i].abs) {
-         if ((devinfo->gen >= 8 && is_logic_op(inst->opcode)) ||
+         if ((devinfo->ver >= 8 && is_logic_op(inst->opcode)) ||
              !brw_abs_immediate(val.type, &val.as_brw_reg())) {
             continue;
          }
       }
 
       if (inst->src[i].negate) {
-         if ((devinfo->gen >= 8 && is_logic_op(inst->opcode)) ||
+         if ((devinfo->ver >= 8 && is_logic_op(inst->opcode)) ||
              !brw_negate_immediate(val.type, &val.as_brw_reg())) {
             continue;
          }
@@ -741,17 +899,17 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
       case SHADER_OPCODE_INT_QUOTIENT:
       case SHADER_OPCODE_INT_REMAINDER:
          /* FINISHME: Promote non-float constants and remove this. */
-         if (devinfo->gen < 8)
+         if (devinfo->ver < 8)
             break;
-         /* fallthrough */
+         FALLTHROUGH;
       case SHADER_OPCODE_POW:
          /* Allow constant propagation into src1 (except on Gen 6 which
           * doesn't support scalar source math), and let constant combining
           * promote the constant on Gen < 8.
           */
-         if (devinfo->gen == 6)
+         if (devinfo->ver == 6)
             break;
-         /* fallthrough */
+         FALLTHROUGH;
       case BRW_OPCODE_BFI1:
       case BRW_OPCODE_ASR:
       case BRW_OPCODE_SHL:
@@ -775,6 +933,33 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
             inst->src[i] = val;
             progress = true;
          } else if (i == 0 && inst->src[1].file != IMM) {
+            /* Don't copy propagate the constant in situations like
+             *
+             *    mov(8)          g8<1>D          0x7fffffffD
+             *    mul(8)          g16<1>D         g8<8,8,1>D      g15<16,8,2>W
+             *
+             * On platforms that only have a 32x16 multiplier, this will
+             * result in lowering the multiply to
+             *
+             *    mul(8)          g15<1>D         g14<8,8,1>D     0xffffUW
+             *    mul(8)          g16<1>D         g14<8,8,1>D     0x7fffUW
+             *    add(8)          g15.1<2>UW      g15.1<16,8,2>UW g16<16,8,2>UW
+             *
+             * On Gfx8 and Gfx9, which have the full 32x32 multiplier, it
+             * results in
+             *
+             *    mul(8)          g16<1>D         g15<16,8,2>W    0x7fffffffD
+             *
+             * Volume 2a of the Skylake PRM says:
+             *
+             *    When multiplying a DW and any lower precision integer, the
+             *    DW operand must on src0.
+             */
+            if (inst->opcode == BRW_OPCODE_MUL &&
+                type_sz(inst->src[1].type) < 4 &&
+                type_sz(val.type) == 4)
+               break;
+
             /* Fit this constant in by commuting the operands.
              * Exception: we can't do this for 32-bit integer MUL/MACH
              * because it's asymmetric.
@@ -796,6 +981,30 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
             inst->src[1] = val;
             progress = true;
          }
+         break;
+
+      case BRW_OPCODE_ADD3:
+         /* add3 can have a single imm16 source. Proceed if the source type is
+          * already W or UW or the value can be coerced to one of those types.
+          */
+         if (val.type == BRW_REGISTER_TYPE_W || val.type == BRW_REGISTER_TYPE_UW)
+            ; /* Nothing to do. */
+         else if (val.ud <= 0xffff)
+            val = brw_imm_uw(val.ud);
+         else if (val.d >= -0x8000 && val.d <= 0x7fff)
+            val = brw_imm_w(val.d);
+         else
+            break;
+
+         if (i == 2) {
+            inst->src[i] = val;
+            progress = true;
+         } else if (inst->src[2].file != IMM) {
+            inst->src[i] = inst->src[2];
+            inst->src[2] = val;
+            progress = true;
+         }
+
          break;
 
       case BRW_OPCODE_CMP:
@@ -861,6 +1070,7 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
       case FS_OPCODE_TXB_LOGICAL:
       case SHADER_OPCODE_TXF_CMS_LOGICAL:
       case SHADER_OPCODE_TXF_CMS_W_LOGICAL:
+      case SHADER_OPCODE_TXF_CMS_W_GFX12_LOGICAL:
       case SHADER_OPCODE_TXF_UMS_LOGICAL:
       case SHADER_OPCODE_TXF_MCS_LOGICAL:
       case SHADER_OPCODE_LOD_LOGICAL:
@@ -869,7 +1079,6 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
       case SHADER_OPCODE_SAMPLEINFO_LOGICAL:
       case SHADER_OPCODE_IMAGE_SIZE_LOGICAL:
       case SHADER_OPCODE_UNTYPED_ATOMIC_LOGICAL:
-      case SHADER_OPCODE_UNTYPED_ATOMIC_FLOAT_LOGICAL:
       case SHADER_OPCODE_UNTYPED_SURFACE_READ_LOGICAL:
       case SHADER_OPCODE_UNTYPED_SURFACE_WRITE_LOGICAL:
       case SHADER_OPCODE_TYPED_ATOMIC_LOGICAL:
@@ -877,24 +1086,27 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
       case SHADER_OPCODE_TYPED_SURFACE_WRITE_LOGICAL:
       case SHADER_OPCODE_BYTE_SCATTERED_WRITE_LOGICAL:
       case SHADER_OPCODE_BYTE_SCATTERED_READ_LOGICAL:
-         inst->src[i] = val;
-         progress = true;
-         break;
-
       case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
       case SHADER_OPCODE_BROADCAST:
-         inst->src[i] = val;
-         progress = true;
-         break;
-
       case BRW_OPCODE_MAD:
       case BRW_OPCODE_LRP:
+      case FS_OPCODE_PACK_HALF_2x16_SPLIT:
+      case SHADER_OPCODE_SHUFFLE:
          inst->src[i] = val;
          progress = true;
          break;
 
       default:
          break;
+      }
+   }
+
+   /* ADD3 can only have the immediate as src0. */
+   if (progress && inst->opcode == BRW_OPCODE_ADD3) {
+      if (inst->src[2].file == IMM) {
+         const auto src0 = inst->src[0];
+         inst->src[0] = inst->src[2];
+         inst->src[2] = src0;
       }
    }
 
@@ -907,15 +1119,18 @@ can_propagate_from(fs_inst *inst)
    return (inst->opcode == BRW_OPCODE_MOV &&
            inst->dst.file == VGRF &&
            ((inst->src[0].file == VGRF &&
-             !regions_overlap(inst->dst, inst->size_written,
-                              inst->src[0], inst->size_read(0))) ||
+             !grf_regions_overlap(inst->dst, inst->size_written,
+                                  inst->src[0], inst->size_read(0))) ||
             inst->src[0].file == ATTR ||
             inst->src[0].file == UNIFORM ||
             inst->src[0].file == IMM ||
             (inst->src[0].file == FIXED_GRF &&
              inst->src[0].is_contiguous())) &&
            inst->src[0].type == inst->dst.type &&
-           !inst->is_partial_write()) ||
+           !inst->saturate &&
+           /* Subset of !is_partial_write() conditions. */
+           !((inst->predicate && inst->opcode != BRW_OPCODE_SEL) ||
+             !inst->dst.is_contiguous())) ||
           is_identity_payload(FIXED_GRF, inst);
 }
 
@@ -945,8 +1160,8 @@ fs_visitor::opt_copy_propagation_local(void *copy_prop_ctx, bblock_t *block,
       /* kill the destination from the ACP */
       if (inst->dst.file == VGRF || inst->dst.file == FIXED_GRF) {
          foreach_in_list_safe(acp_entry, entry, &acp[inst->dst.nr % ACP_HASH_SIZE]) {
-            if (regions_overlap(entry->dst, entry->size_written,
-                                inst->dst, inst->size_written))
+            if (grf_regions_overlap(entry->dst, entry->size_written,
+                                    inst->dst, inst->size_written))
                entry->remove();
          }
 
@@ -958,8 +1173,8 @@ fs_visitor::opt_copy_propagation_local(void *copy_prop_ctx, bblock_t *block,
                /* Make sure we kill the entry if this instruction overwrites
                 * _any_ of the registers that it reads
                 */
-               if (regions_overlap(entry->src, entry->size_read,
-                                   inst->dst, inst->size_written))
+               if (grf_regions_overlap(entry->src, entry->size_read,
+                                       inst->dst, inst->size_written))
                   entry->remove();
             }
 	 }
@@ -976,25 +1191,28 @@ fs_visitor::opt_copy_propagation_local(void *copy_prop_ctx, bblock_t *block,
          for (unsigned i = 0; i < inst->sources; i++)
             entry->size_read += inst->size_read(i);
          entry->opcode = inst->opcode;
-         entry->saturate = inst->saturate;
+         entry->is_partial_write = inst->is_partial_write();
+         entry->force_writemask_all = inst->force_writemask_all;
          acp[entry->dst.nr % ACP_HASH_SIZE].push_tail(entry);
       } else if (inst->opcode == SHADER_OPCODE_LOAD_PAYLOAD &&
                  inst->dst.file == VGRF) {
          int offset = 0;
          for (int i = 0; i < inst->sources; i++) {
             int effective_width = i < inst->header_size ? 8 : inst->exec_size;
-            assert(effective_width * type_sz(inst->src[i].type) % REG_SIZE == 0);
             const unsigned size_written = effective_width *
                                           type_sz(inst->src[i].type);
             if (inst->src[i].file == VGRF ||
                 (inst->src[i].file == FIXED_GRF &&
                  inst->src[i].is_contiguous())) {
+               const brw_reg_type t = i < inst->header_size ?
+                  BRW_REGISTER_TYPE_UD : inst->src[i].type;
                acp_entry *entry = rzalloc(copy_prop_ctx, acp_entry);
-               entry->dst = byte_offset(inst->dst, offset);
-               entry->src = inst->src[i];
+               entry->dst = byte_offset(retype(inst->dst, t), offset);
+               entry->src = retype(inst->src[i], t);
                entry->size_written = size_written;
                entry->size_read = inst->size_read(i);
                entry->opcode = inst->opcode;
+               entry->force_writemask_all = inst->force_writemask_all;
                if (!entry->dst.equals(inst->src[i])) {
                   acp[entry->dst.nr % ACP_HASH_SIZE].push_tail(entry);
                } else {
@@ -1058,7 +1276,8 @@ fs_visitor::opt_copy_propagation()
       exec_list in_acp[ACP_HASH_SIZE];
 
       for (int i = 0; i < dataflow.num_acp; i++) {
-         if (BITSET_TEST(dataflow.bd[block->num].livein, i)) {
+         if (BITSET_TEST(dataflow.bd[block->num].livein, i) &&
+             !BITSET_TEST(dataflow.bd[block->num].exec_mismatch, i)) {
             struct acp_entry *entry = dataflow.acp[i];
             in_acp[entry->dst.nr % ACP_HASH_SIZE].push_tail(entry);
          }

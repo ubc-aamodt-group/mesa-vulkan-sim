@@ -28,6 +28,7 @@
 
 #include "tgsi/tgsi_dump.h"
 #include "compiler/nir/nir.h"
+#include "compiler/nir/nir_serialize.h"
 #include "nir/tgsi_to_nir.h"
 
 #include "pipe/p_state.h"
@@ -37,7 +38,7 @@
 #include "lima_job.h"
 #include "lima_program.h"
 #include "lima_bo.h"
-#include "lima_format.h"
+#include "lima_disk_cache.h"
 
 #include "ir/lima_ir.h"
 
@@ -58,6 +59,12 @@ static const nir_shader_compiler_options vs_nir_options = {
    .lower_rotate = true,
    .lower_sincos = true,
    .lower_fceil = true,
+   .lower_insert_byte = true,
+   .lower_insert_word = true,
+   .force_indirect_unrolling = nir_var_all,
+   .force_indirect_unrolling_sampler = true,
+   .lower_varying_from_uniform = true,
+   .max_unroll_iterations = 32,
 };
 
 static const nir_shader_compiler_options fs_nir_options = {
@@ -73,8 +80,14 @@ static const nir_shader_compiler_options fs_nir_options = {
    .lower_rotate = true,
    .lower_fdot = true,
    .lower_fdph = true,
+   .lower_insert_byte = true,
+   .lower_insert_word = true,
    .lower_bitops = true,
    .lower_vector_cmp = true,
+   .force_indirect_unrolling = (nir_var_shader_out | nir_var_function_temp),
+   .force_indirect_unrolling_sampler = true,
+   .lower_varying_from_uniform = true,
+   .max_unroll_iterations = 32,
 };
 
 const void *
@@ -115,7 +128,7 @@ lima_program_optimize_vs_nir(struct nir_shader *s)
 
       NIR_PASS_V(s, nir_lower_vars_to_ssa);
       NIR_PASS(progress, s, nir_lower_alu_to_scalar, NULL, NULL);
-      NIR_PASS(progress, s, nir_lower_phis_to_scalar);
+      NIR_PASS(progress, s, nir_lower_phis_to_scalar, false);
       NIR_PASS(progress, s, nir_copy_prop);
       NIR_PASS(progress, s, nir_opt_remove_phis);
       NIR_PASS(progress, s, nir_opt_dce);
@@ -126,21 +139,21 @@ lima_program_optimize_vs_nir(struct nir_shader *s)
       NIR_PASS(progress, s, lima_nir_lower_ftrunc);
       NIR_PASS(progress, s, nir_opt_constant_folding);
       NIR_PASS(progress, s, nir_opt_undef);
-      NIR_PASS(progress, s, nir_opt_loop_unroll,
-               nir_var_shader_in |
-               nir_var_shader_out |
-               nir_var_function_temp);
+      NIR_PASS(progress, s, nir_lower_undef_to_zero);
+      NIR_PASS(progress, s, nir_opt_loop_unroll);
+      NIR_PASS(progress, s, nir_lower_undef_to_zero);
    } while (progress);
 
    NIR_PASS_V(s, nir_lower_int_to_float);
    /* int_to_float pass generates ftrunc, so lower it */
    NIR_PASS(progress, s, lima_nir_lower_ftrunc);
-   NIR_PASS_V(s, nir_lower_bool_to_float);
+   NIR_PASS_V(s, nir_lower_bool_to_float, true);
 
    NIR_PASS_V(s, nir_copy_prop);
    NIR_PASS_V(s, nir_opt_dce);
-   NIR_PASS_V(s, nir_lower_locals_to_regs);
+   NIR_PASS_V(s, lima_nir_split_loads);
    NIR_PASS_V(s, nir_convert_from_ssa, true);
+   NIR_PASS_V(s, nir_opt_dce);
    NIR_PASS_V(s, nir_remove_dead_variables, nir_var_function_temp, NULL);
    nir_sweep(s);
 }
@@ -154,6 +167,10 @@ lima_alu_to_scalar_filter_cb(const nir_instr *instr, const void *data)
    nir_alu_instr *alu = nir_instr_as_alu(instr);
    switch (alu->op) {
    case nir_op_frcp:
+   /* nir_op_idiv is lowered to frcp by lower_int_to_floats which
+    * will be run later, so lower idiv here
+    */
+   case nir_op_idiv:
    case nir_op_frsq:
    case nir_op_flog2:
    case nir_op_fexp2:
@@ -209,8 +226,8 @@ lima_program_optimize_fs_nir(struct nir_shader *s,
    NIR_PASS_V(s, nir_lower_fragcoord_wtrans);
    NIR_PASS_V(s, nir_lower_io,
 	      nir_var_shader_in | nir_var_shader_out, type_size, 0);
-   NIR_PASS_V(s, nir_lower_regs_to_ssa);
    NIR_PASS_V(s, nir_lower_tex, tex_options);
+   NIR_PASS_V(s, lima_nir_lower_txp);
 
    do {
       progress = false;
@@ -231,15 +248,12 @@ lima_program_optimize_fs_nir(struct nir_shader *s,
       NIR_PASS(progress, s, nir_opt_algebraic);
       NIR_PASS(progress, s, nir_opt_constant_folding);
       NIR_PASS(progress, s, nir_opt_undef);
-      NIR_PASS(progress, s, nir_opt_loop_unroll,
-               nir_var_shader_in |
-               nir_var_shader_out |
-               nir_var_function_temp);
+      NIR_PASS(progress, s, nir_opt_loop_unroll);
       NIR_PASS(progress, s, lima_nir_split_load_input);
    } while (progress);
 
    NIR_PASS_V(s, nir_lower_int_to_float);
-   NIR_PASS_V(s, nir_lower_bool_to_float);
+   NIR_PASS_V(s, nir_lower_bool_to_float, true);
 
    /* Some ops must be lowered after being converted from int ops,
     * so re-run nir_opt_algebraic after int lowering. */
@@ -256,12 +270,12 @@ lima_program_optimize_fs_nir(struct nir_shader *s,
    NIR_PASS_V(s, nir_copy_prop);
    NIR_PASS_V(s, nir_opt_dce);
 
-   NIR_PASS_V(s, nir_lower_locals_to_regs);
    NIR_PASS_V(s, nir_convert_from_ssa, true);
    NIR_PASS_V(s, nir_remove_dead_variables, nir_var_function_temp, NULL);
 
    NIR_PASS_V(s, nir_move_vec_src_uses_to_dest);
    NIR_PASS_V(s, nir_lower_vec_to_movs, lima_vec_to_movs_filter_cb, NULL);
+   NIR_PASS_V(s, nir_opt_dce); /* clean up any new dead code from vec to movs */
 
    NIR_PASS_V(s, lima_nir_duplicate_load_uniforms);
    NIR_PASS_V(s, lima_nir_duplicate_load_inputs);
@@ -273,25 +287,20 @@ lima_program_optimize_fs_nir(struct nir_shader *s,
 static bool
 lima_fs_compile_shader(struct lima_context *ctx,
                        struct lima_fs_key *key,
-                       struct lima_fs_shader_state *fs)
+                       struct lima_fs_uncompiled_shader *ufs,
+                       struct lima_fs_compiled_shader *fs)
 {
    struct lima_screen *screen = lima_screen(ctx->base.screen);
-   nir_shader *nir = nir_shader_clone(fs, key->shader_state->base.ir.nir);
+   nir_shader *nir = nir_shader_clone(fs, ufs->base.ir.nir);
 
    struct nir_lower_tex_options tex_options = {
-      .lower_txp = ~0u,
-      .swizzle_result = 0,
+      .swizzle_result = ~0u,
+      .lower_invalid_implicit_lod = true,
    };
 
-   uint8_t identity[4] = { PIPE_SWIZZLE_X, PIPE_SWIZZLE_Y,
-                           PIPE_SWIZZLE_Z, PIPE_SWIZZLE_W };
-
-   for (int i = 0; i < PIPE_MAX_SAMPLERS; i++) {
+   for (int i = 0; i < ARRAY_SIZE(key->tex); i++) {
       for (int j = 0; j < 4; j++)
-         tex_options.swizzles[i][j] = key->swizzles[i][j];
-
-      if (memcmp(tex_options.swizzles[i], identity, 4) != 0)
-         tex_options.swizzle_result |= (1 << i);
+         tex_options.swizzles[i][j] = key->tex[i].swizzle[j];
    }
 
    lima_program_optimize_fs_nir(nir, &tex_options);
@@ -299,15 +308,83 @@ lima_fs_compile_shader(struct lima_context *ctx,
    if (lima_debug & LIMA_DEBUG_PP)
       nir_print_shader(nir, stdout);
 
-   if (!ppir_compile_nir(fs, nir, screen->pp_ra, &ctx->debug)) {
+   if (!ppir_compile_nir(fs, nir, screen->pp_ra, &ctx->base.debug)) {
       ralloc_free(nir);
       return false;
    }
 
-   fs->uses_discard = nir->info.fs.uses_discard;
+   fs->state.uses_discard = nir->info.fs.uses_discard;
    ralloc_free(nir);
 
    return true;
+}
+
+static bool
+lima_fs_upload_shader(struct lima_context *ctx,
+                      struct lima_fs_compiled_shader *fs)
+{
+   struct lima_screen *screen = lima_screen(ctx->base.screen);
+
+   fs->bo = lima_bo_create(screen, fs->state.shader_size, 0);
+   if (!fs->bo) {
+      fprintf(stderr, "lima: create fs shader bo fail\n");
+      return false;
+   }
+
+   memcpy(lima_bo_map(fs->bo), fs->shader, fs->state.shader_size);
+
+   return true;
+}
+
+static struct lima_fs_compiled_shader *
+lima_get_compiled_fs(struct lima_context *ctx,
+                     struct lima_fs_uncompiled_shader *ufs,
+                     struct lima_fs_key *key)
+{
+   struct lima_screen *screen = lima_screen(ctx->base.screen);
+   struct hash_table *ht;
+   uint32_t key_size;
+
+   ht = ctx->fs_cache;
+   key_size = sizeof(struct lima_fs_key);
+
+   struct hash_entry *entry = _mesa_hash_table_search(ht, key);
+   if (entry)
+      return entry->data;
+
+   /* Not on memory cache, try disk cache */
+   struct lima_fs_compiled_shader *fs =
+      lima_fs_disk_cache_retrieve(screen->disk_cache, key);
+
+   if (!fs) {
+      /* Not on disk cache, compile and insert into disk cache*/
+      fs = rzalloc(NULL, struct lima_fs_compiled_shader);
+      if (!fs)
+         return NULL;
+
+      if (!lima_fs_compile_shader(ctx, key, ufs, fs))
+         goto err;
+
+      lima_fs_disk_cache_store(screen->disk_cache, key, fs);
+   }
+
+   if (!lima_fs_upload_shader(ctx, fs))
+      goto err;
+
+   ralloc_free(fs->shader);
+   fs->shader = NULL;
+
+   /* Insert into memory cache */
+   struct lima_key *dup_key;
+   dup_key = rzalloc_size(fs, key_size);
+   memcpy(dup_key, key, key_size);
+   _mesa_hash_table_insert(ht, dup_key, fs);
+
+   return fs;
+
+err:
+   ralloc_free(fs);
+   return NULL;
 }
 
 static void *
@@ -315,7 +392,7 @@ lima_create_fs_state(struct pipe_context *pctx,
                      const struct pipe_shader_state *cso)
 {
    struct lima_context *ctx = lima_context(pctx);
-   struct lima_fs_bind_state *so = rzalloc(NULL, struct lima_fs_bind_state);
+   struct lima_fs_uncompiled_shader *so = rzalloc(NULL, struct lima_fs_uncompiled_shader);
 
    if (!so)
       return NULL;
@@ -334,10 +411,28 @@ lima_create_fs_state(struct pipe_context *pctx,
    so->base.type = PIPE_SHADER_IR_NIR;
    so->base.ir.nir = nir;
 
-   /* Trigger initial compilation with default settings */
-   ctx->bind_fs = so;
-   ctx->dirty |= LIMA_CONTEXT_DIRTY_UNCOMPILED_FS;
-   lima_update_fs_state(ctx);
+   /* Serialize the NIR to a binary blob that we can hash for the disk
+    * cache.  Drop unnecessary information (like variable names)
+    * so the serialized NIR is smaller, and also to let us detect more
+    * isomorphic shaders when hashing, increasing cache hits.
+    */
+   struct blob blob;
+   blob_init(&blob);
+   nir_serialize(&blob, nir, true);
+   _mesa_sha1_compute(blob.data, blob.size, so->nir_sha1);
+   blob_finish(&blob);
+
+   if (lima_debug & LIMA_DEBUG_PRECOMPILE) {
+      /* Trigger initial compilation with default settings */
+      struct lima_fs_key key;
+      memset(&key, 0, sizeof(key));
+      memcpy(key.nir_sha1, so->nir_sha1, sizeof(so->nir_sha1));
+      for (int i = 0; i < ARRAY_SIZE(key.tex); i++) {
+         for (int j = 0; j < 4; j++)
+            key.tex[i].swizzle[j] = j;
+      }
+      lima_get_compiled_fs(ctx, so, &key);
+   }
 
    return so;
 }
@@ -347,7 +442,7 @@ lima_bind_fs_state(struct pipe_context *pctx, void *hwcso)
 {
    struct lima_context *ctx = lima_context(pctx);
 
-   ctx->bind_fs = hwcso;
+   ctx->uncomp_fs = hwcso;
    ctx->dirty |= LIMA_CONTEXT_DIRTY_UNCOMPILED_FS;
 }
 
@@ -355,12 +450,12 @@ static void
 lima_delete_fs_state(struct pipe_context *pctx, void *hwcso)
 {
    struct lima_context *ctx = lima_context(pctx);
-   struct lima_fs_bind_state *so = hwcso;
+   struct lima_fs_uncompiled_shader *so = hwcso;
 
    hash_table_foreach(ctx->fs_cache, entry) {
       const struct lima_fs_key *key = entry->key;
-      if (key->shader_state == so) {
-         struct lima_fs_shader_state *fs = entry->data;
+      if (!memcmp(key->nir_sha1, so->nir_sha1, sizeof(so->nir_sha1))) {
+         struct lima_fs_compiled_shader *fs = entry->data;
          _mesa_hash_table_remove(ctx->fs_cache, entry);
          if (fs->bo)
             lima_bo_unreference(fs->bo);
@@ -379,28 +474,48 @@ lima_delete_fs_state(struct pipe_context *pctx, void *hwcso)
 static bool
 lima_vs_compile_shader(struct lima_context *ctx,
                        struct lima_vs_key *key,
-                       struct lima_vs_shader_state *vs)
+                       struct lima_vs_uncompiled_shader *uvs,
+                       struct lima_vs_compiled_shader *vs)
 {
-   nir_shader *nir = nir_shader_clone(vs, key->shader_state->base.ir.nir);
+   nir_shader *nir = nir_shader_clone(vs, uvs->base.ir.nir);
 
    lima_program_optimize_vs_nir(nir);
 
    if (lima_debug & LIMA_DEBUG_GP)
       nir_print_shader(nir, stdout);
 
-   if (!gpir_compile_nir(vs, nir, &ctx->debug)) {
+   if (!gpir_compile_nir(vs, nir, &ctx->base.debug)) {
       ralloc_free(nir);
       return false;
    }
 
    ralloc_free(nir);
+
    return true;
 }
 
-static struct lima_vs_shader_state *
+static bool
+lima_vs_upload_shader(struct lima_context *ctx,
+                      struct lima_vs_compiled_shader *vs)
+{
+   struct lima_screen *screen = lima_screen(ctx->base.screen);
+   vs->bo = lima_bo_create(screen, vs->state.shader_size, 0);
+   if (!vs->bo) {
+      fprintf(stderr, "lima: create vs shader bo fail\n");
+      return false;
+   }
+
+   memcpy(lima_bo_map(vs->bo), vs->shader, vs->state.shader_size);
+
+   return true;
+}
+
+static struct lima_vs_compiled_shader *
 lima_get_compiled_vs(struct lima_context *ctx,
+                     struct lima_vs_uncompiled_shader *uvs,
                      struct lima_vs_key *key)
 {
+   struct lima_screen *screen = lima_screen(ctx->base.screen);
    struct hash_table *ht;
    uint32_t key_size;
 
@@ -411,13 +526,26 @@ lima_get_compiled_vs(struct lima_context *ctx,
    if (entry)
       return entry->data;
 
-   /* not on cache, compile and insert into the cache */
-   struct lima_vs_shader_state *vs = rzalloc(NULL, struct lima_vs_shader_state);
-   if (!vs)
-      return NULL;
+   /* Not on memory cache, try disk cache */
+   struct lima_vs_compiled_shader *vs =
+      lima_vs_disk_cache_retrieve(screen->disk_cache, key);
 
-   if (!lima_vs_compile_shader(ctx, key, vs))
-      return NULL;
+   if (!vs) {
+      /* Not on disk cache, compile and insert into disk cache */
+      vs = rzalloc(NULL, struct lima_vs_compiled_shader);
+      if (!vs)
+         return NULL;
+      if (!lima_vs_compile_shader(ctx, key, uvs, vs))
+         goto err;
+
+      lima_vs_disk_cache_store(screen->disk_cache, key, vs);
+   }
+
+   if (!lima_vs_upload_shader(ctx, vs))
+      goto err;
+
+   ralloc_free(vs->shader);
+   vs->shader = NULL;
 
    struct lima_key *dup_key;
    dup_key = rzalloc_size(vs, key_size);
@@ -425,6 +553,10 @@ lima_get_compiled_vs(struct lima_context *ctx,
    _mesa_hash_table_insert(ht, dup_key, vs);
 
    return vs;
+
+err:
+   ralloc_free(vs);
+   return NULL;
 }
 
 bool
@@ -437,63 +569,22 @@ lima_update_vs_state(struct lima_context *ctx)
    struct lima_vs_key local_key;
    struct lima_vs_key *key = &local_key;
    memset(key, 0, sizeof(*key));
-   key->shader_state = ctx->bind_vs;
+   memcpy(key->nir_sha1, ctx->uncomp_vs->nir_sha1,
+          sizeof(ctx->uncomp_vs->nir_sha1));
 
-   struct lima_vs_shader_state *old_vs = ctx->vs;
-
-   struct lima_vs_shader_state *vs = lima_get_compiled_vs(ctx, key);
+   struct lima_vs_compiled_shader *old_vs = ctx->vs;
+   struct lima_vs_compiled_shader *vs = lima_get_compiled_vs(ctx,
+                                                             ctx->uncomp_vs,
+                                                             key);
    if (!vs)
       return false;
 
    ctx->vs = vs;
 
-   if (!vs->bo) {
-      struct lima_screen *screen = lima_screen(ctx->base.screen);
-      vs->bo = lima_bo_create(screen, vs->shader_size, 0);
-      if (!vs->bo) {
-         fprintf(stderr, "lima: create vs shader bo fail\n");
-         return false;
-      }
-
-      memcpy(lima_bo_map(vs->bo), vs->shader, vs->shader_size);
-      ralloc_free(vs->shader);
-      vs->shader = NULL;
-   }
-
    if (ctx->vs != old_vs)
       ctx->dirty |= LIMA_CONTEXT_DIRTY_COMPILED_VS;
 
    return true;
-}
-
-static struct lima_fs_shader_state *
-lima_get_compiled_fs(struct lima_context *ctx,
-                     struct lima_fs_key *key)
-{
-   struct hash_table *ht;
-   uint32_t key_size;
-
-   ht = ctx->fs_cache;
-   key_size = sizeof(struct lima_fs_key);
-
-   struct hash_entry *entry = _mesa_hash_table_search(ht, key);
-   if (entry)
-      return entry->data;
-
-   /* not on cache, compile and insert into the cache */
-   struct lima_fs_shader_state *fs = rzalloc(NULL, struct lima_fs_shader_state);
-   if (!fs)
-      return NULL;
-
-   if (!lima_fs_compile_shader(ctx, key, fs))
-      return NULL;
-
-   struct lima_key *dup_key;
-   dup_key = rzalloc_size(fs, key_size);
-   memcpy(dup_key, key, key_size);
-   _mesa_hash_table_insert(ht, dup_key, fs);
-
-   return fs;
 }
 
 bool
@@ -508,45 +599,34 @@ lima_update_fs_state(struct lima_context *ctx)
    struct lima_fs_key local_key;
    struct lima_fs_key *key = &local_key;
    memset(key, 0, sizeof(*key));
-   key->shader_state = ctx->bind_fs;
+   memcpy(key->nir_sha1, ctx->uncomp_fs->nir_sha1,
+          sizeof(ctx->uncomp_fs->nir_sha1));
 
-   if (((ctx->dirty & LIMA_CONTEXT_DIRTY_TEXTURES) &&
-       lima_tex->num_samplers &&
-       lima_tex->num_textures)) {
-      for (int i = 0; i < lima_tex->num_samplers; i++) {
-         struct lima_sampler_view *texture = lima_sampler_view(lima_tex->textures[i]);
-         struct pipe_resource *prsc = texture->base.texture;
-         const uint8_t *swizzle = lima_format_get_texel_swizzle(prsc->format);
-         memcpy(key->swizzles[i], swizzle, 4);
+   uint8_t identity[4] = { PIPE_SWIZZLE_X, PIPE_SWIZZLE_Y,
+                           PIPE_SWIZZLE_Z, PIPE_SWIZZLE_W };
+   for (int i = 0; i < lima_tex->num_textures; i++) {
+      struct lima_sampler_view *sampler = lima_sampler_view(lima_tex->textures[i]);
+      if (!sampler) {
+         memcpy(key->tex[i].swizzle, identity, 4);
+         continue;
       }
+      for (int j = 0; j < 4; j++)
+         key->tex[i].swizzle[j] = sampler->swizzle[j];
    }
 
    /* Fill rest with identity swizzle */
-   uint8_t identity[4] = { PIPE_SWIZZLE_X, PIPE_SWIZZLE_Y,
-                           PIPE_SWIZZLE_Z, PIPE_SWIZZLE_W };
-   for (int i = lima_tex->num_samplers; i < PIPE_MAX_SAMPLERS; i++)
-      memcpy(key->swizzles[i], identity, 4);
+   for (int i = lima_tex->num_textures; i < ARRAY_SIZE(key->tex); i++)
+      memcpy(key->tex[i].swizzle, identity, 4);
 
-   struct lima_fs_shader_state *old_fs = ctx->fs;
+   struct lima_fs_compiled_shader *old_fs = ctx->fs;
 
-   struct lima_fs_shader_state *fs = lima_get_compiled_fs(ctx, key);
+   struct lima_fs_compiled_shader *fs = lima_get_compiled_fs(ctx,
+                                                             ctx->uncomp_fs,
+                                                             key);
    if (!fs)
       return false;
 
    ctx->fs = fs;
-
-   if (!fs->bo) {
-      struct lima_screen *screen = lima_screen(ctx->base.screen);
-      fs->bo = lima_bo_create(screen, fs->shader_size, 0);
-      if (!fs->bo) {
-         fprintf(stderr, "lima: create fs shader bo fail\n");
-         return false;
-      }
-
-      memcpy(lima_bo_map(fs->bo), fs->shader, fs->shader_size);
-      ralloc_free(fs->shader);
-      fs->shader = NULL;
-   }
 
    if (ctx->fs != old_fs)
       ctx->dirty |= LIMA_CONTEXT_DIRTY_COMPILED_FS;
@@ -559,7 +639,7 @@ lima_create_vs_state(struct pipe_context *pctx,
                      const struct pipe_shader_state *cso)
 {
    struct lima_context *ctx = lima_context(pctx);
-   struct lima_vs_bind_state *so = rzalloc(NULL, struct lima_vs_bind_state);
+   struct lima_vs_uncompiled_shader *so = rzalloc(NULL, struct lima_vs_uncompiled_shader);
 
    if (!so)
       return NULL;
@@ -578,10 +658,24 @@ lima_create_vs_state(struct pipe_context *pctx,
    so->base.type = PIPE_SHADER_IR_NIR;
    so->base.ir.nir = nir;
 
-   /* Trigger initial compilation with default settings */
-   ctx->bind_vs = so;
-   ctx->dirty |= LIMA_CONTEXT_DIRTY_UNCOMPILED_VS;
-   lima_update_vs_state(ctx);
+   /* Serialize the NIR to a binary blob that we can hash for the disk
+    * cache.  Drop unnecessary information (like variable names)
+    * so the serialized NIR is smaller, and also to let us detect more
+    * isomorphic shaders when hashing, increasing cache hits.
+    */
+   struct blob blob;
+   blob_init(&blob);
+   nir_serialize(&blob, nir, true);
+   _mesa_sha1_compute(blob.data, blob.size, so->nir_sha1);
+   blob_finish(&blob);
+
+   if (lima_debug & LIMA_DEBUG_PRECOMPILE) {
+      /* Trigger initial compilation with default settings */
+      struct lima_vs_key key;
+      memset(&key, 0, sizeof(key));
+      memcpy(key.nir_sha1, so->nir_sha1, sizeof(so->nir_sha1));
+      lima_get_compiled_vs(ctx, so, &key);
+   }
 
    return so;
 }
@@ -591,7 +685,7 @@ lima_bind_vs_state(struct pipe_context *pctx, void *hwcso)
 {
    struct lima_context *ctx = lima_context(pctx);
 
-   ctx->bind_vs = hwcso;
+   ctx->uncomp_vs = hwcso;
    ctx->dirty |= LIMA_CONTEXT_DIRTY_UNCOMPILED_VS;
 }
 
@@ -599,12 +693,12 @@ static void
 lima_delete_vs_state(struct pipe_context *pctx, void *hwcso)
 {
    struct lima_context *ctx = lima_context(pctx);
-   struct lima_vs_bind_state *so = hwcso;
+   struct lima_vs_uncompiled_shader *so = hwcso;
 
    hash_table_foreach(ctx->vs_cache, entry) {
       const struct lima_vs_key *key = entry->key;
-      if (key->shader_state == so) {
-         struct lima_vs_shader_state *vs = entry->data;
+      if (!memcmp(key->nir_sha1, so->nir_sha1, sizeof(so->nir_sha1))) {
+         struct lima_vs_compiled_shader *vs = entry->data;
          _mesa_hash_table_remove(ctx->vs_cache, entry);
          if (vs->bo)
             lima_bo_unreference(vs->bo);
@@ -665,7 +759,7 @@ void
 lima_program_fini(struct lima_context *ctx)
 {
    hash_table_foreach(ctx->vs_cache, entry) {
-      struct lima_vs_shader_state *vs = entry->data;
+      struct lima_vs_compiled_shader *vs = entry->data;
       if (vs->bo)
          lima_bo_unreference(vs->bo);
       ralloc_free(vs);
@@ -673,7 +767,7 @@ lima_program_fini(struct lima_context *ctx)
    }
 
    hash_table_foreach(ctx->fs_cache, entry) {
-      struct lima_fs_shader_state *fs = entry->data;
+      struct lima_fs_compiled_shader *fs = entry->data;
       if (fs->bo)
          lima_bo_unreference(fs->bo);
       ralloc_free(fs);

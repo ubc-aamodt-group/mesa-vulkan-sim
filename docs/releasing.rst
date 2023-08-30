@@ -112,37 +112,37 @@ good contact point.
    then they should be squashed together. The commit messages and the
    "``cherry picked from``"-tags must be preserved.
 
-::
+   .. code-block:: console
 
-   git show b10859ec41d09c57663a258f43fe57c12332698e
+      git show b10859ec41d09c57663a258f43fe57c12332698e
 
-   commit b10859ec41d09c57663a258f43fe57c12332698e
-   Author: Jonas Pfeil <pfeiljonas@gmx.de>
-   Date:   Wed Mar 1 18:11:10 2017 +0100
+      commit b10859ec41d09c57663a258f43fe57c12332698e
+      Author: Jonas Pfeil <pfeiljonas@gmx.de>
+      Date:   Wed Mar 1 18:11:10 2017 +0100
 
-       ralloc: Make sure ralloc() allocations match malloc()'s alignment.
+         ralloc: Make sure ralloc() allocations match malloc()'s alignment.
 
-       The header of ralloc needs to be aligned, because the compiler assumes
-       ...
+         The header of ralloc needs to be aligned, because the compiler assumes
+         ...
 
-       (cherry picked from commit cd2b55e536dc806f9358f71db438dd9c246cdb14)
+         (cherry picked from commit cd2b55e536dc806f9358f71db438dd9c246cdb14)
 
-       Squashed with commit:
+         Squashed with commit:
 
-       ralloc: don't leave out the alignment factor
+         ralloc: don't leave out the alignment factor
 
-       Experimentation shows that without alignment factor GCC and Clang choose
-       ...
+         Experimentation shows that without alignment factor GCC and Clang choose
+         ...
 
-       (cherry picked from commit ff494fe999510ea40e3ed5827e7818550b6de126)
+         (cherry picked from commit ff494fe999510ea40e3ed5827e7818550b6de126)
 
 Regression/functionality testing
 --------------------------------
 
 -  *no regressions should be observed for Piglit/dEQP/CTS/Vulkan on
    Intel platforms*
--  *no regressions should be observed for Piglit using the swrast,
-   softpipe and llvmpipe drivers*
+-  *no regressions should be observed for Piglit using the Softpipe
+   and LLVMpipe drivers*
 
 .. _stagingbranch:
 
@@ -175,22 +175,54 @@ to stabilization and bugfixing.
    testing is done and there are little to-no issues. Ideally all of those
    should be tackled already.
 
-Check if the version number is going to remain as, alternatively
-``git mv docs/relnotes/{current,new}.rst`` as appropriate.
+Setup the branchpoint:
 
-To setup the branchpoint:
+.. code-block:: console
 
-::
+   # Make sure main can carry on at the new version
+   $EDITOR VERSION # bump the version number, keeping in mind the wrap around at the end of the year
+   git commit -asm 'VERSION: bump to X.(Y+1)'
+   truncate -s0 docs/relnotes/new_features.txt
+   git commit -asm 'docs: reset new_features.txt'
+   git push YOUR_FORK
 
-   git checkout master # make sure we're in master first
-   git tag -s X.Y-branchpoint -m "Mesa X.Y branchpoint"
-   git checkout -b X.Y
-   git checkout master
-   $EDITOR VERSION # bump the version number
-   git commit -as
-   truncate docs/relnotes/new_features.txt
-   git commit -a
-   git push origin X.Y-branchpoint X.Y
+Make a merge request with what you just pushed, and assign it straight
+to ``@Marge-bot``. Keep an eye on it, as you'll need to wait for it to
+be merged.
+
+Once it has been merged, note the last commit *before* your "VERSION:
+bump to X.Y" as this is the branchpoint. This is ``$LAST_COMMIT`` in the
+command below:
+
+.. code-block:: console
+
+   VERSION=X.Y
+
+   git tag -s $VERSION-branchpoint -m "Mesa $VERSION branchpoint" $LAST_COMMIT
+
+   # Double-check that you tagged the correct commit
+   git show $VERSION-branchpoint
+
+Now that we have an official branchpoint, let's push the tag and create
+the branches:
+
+.. code-block:: console
+
+   git push origin $VERSION-branchpoint
+   git checkout $VERSION-branchpoint
+   git push origin HEAD:refs/heads/$VERSION
+   git push origin HEAD:refs/heads/staging/$VERSION
+   git checkout staging/$VERSION
+
+You are now on the :ref:`staging branch <stagingbranch>`, where you
+will be doing your release maintainer work. This branch can be rebased
+and altered in way necessary, with the caveat that anything pushed to
+the ``X.Y`` branch must not be altered anymore. A convenient command
+to perform an interactive rebase over everything since the last release is:
+
+.. code-block:: console
+
+   git rebase -i mesa-$(cat VERSION)
 
 Now go to
 `GitLab <https://gitlab.freedesktop.org/mesa/mesa/-/milestones>`__ and
@@ -209,7 +241,7 @@ These are the instructions for making a new Mesa release.
 Get latest source files
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Ensure the latest code is available - both in your local master and the
+Ensure the latest code is available - both in your local main and the
 relevant branch.
 
 Perform basic testing
@@ -219,12 +251,11 @@ Most of the testing should already be done during the
 :ref:`cherry-pick <pickntest>` So we do a quick 'touch test'
 
 -  meson dist
--  scons (from release tarball)
 -  the produced binaries work
 
 Here is one solution:
 
-::
+.. code-block:: console
 
    __glxgears_cmd='glxgears 2>&1 | grep -v "configuration file"'
    __es2info_cmd='es2_info 2>&1 | egrep "GL_VERSION|GL_RENDERER|.*dri\.so"'
@@ -265,18 +296,18 @@ Create release notes for the new release
 The release notes are completely generated by the
 ``bin/gen_release_notes.py`` script. Simply run this script **before**
 bumping the version. You'll need to come back to this file once the
-tarball is generated to add its ``sha256sum``.
+tarball is generated to add its SHA256 checksum.
 
 Increment the version contained in the file ``VERSION`` at Mesa's top-level,
 then commit this change and **push the branch** (if you forget to do
 this, ``release.sh`` below will fail).
 
-Use the release.sh script from xorg `util-modular <https://cgit.freedesktop.org/xorg/util/modular/>`__
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Use the release.sh script from X.Org `util-modular <https://gitlab.freedesktop.org/xorg/util/modular>`__
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Start the release process.
 
-::
+.. code-block:: console
 
    ../relative/path/to/release.sh . # append --dist if you've already done distcheck above
 
@@ -289,25 +320,34 @@ release notes, and is published in `release-maintainers-keys.asc
 <release-maintainers-keys.asc>`__.
 
 
-Add the sha256sums to the release notes
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Add the SHA256 checksums to the release notes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Edit ``docs/relnotes/X.Y.Z.rst`` to add the ``sha256sum`` as available in the
-``mesa-X.Y.Z.announce`` template. Commit this change.
+Edit ``docs/relnotes/X.Y.Z.rst`` to add the SHA256 checksums as available
+in the ``mesa-X.Y.Z.announce`` template. Commit this change.
 
-Back on mesa master, add the new release notes into the tree
+Don't forget to push the commits to both the ``staging/X.Y`` branch and
+the ``X.Y`` branch:
+
+.. code-block:: console
+
+   git push origin HEAD:staging/X.Y
+   git push origin HEAD:X.Y
+
+
+Back on mesa main, add the new release notes into the tree
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Something like the following steps will do the trick:
 
-::
+.. code-block:: console
 
    git cherry-pick -x X.Y~1
    git cherry-pick -x X.Y
 
 Then run the
 
-::
+.. code-block:: console
 
    ./bin/post_version.py X.Y.Z
 
@@ -316,9 +356,9 @@ docs/relnotes.rst and docs/release-calendar.csv. It will then generate
 a Git commit automatically. Check that everything looks correct and
 push:
 
-::
+.. code-block:: console
 
-      git push origin master X.Y
+      git push origin main X.Y
 
 Announce the release
 --------------------

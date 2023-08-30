@@ -102,12 +102,20 @@ struct dxil_func {
 
 struct dxil_attrib {
    enum {
-      DXIL_ATTR_ENUM
+      DXIL_ATTR_ENUM,
+      DXIL_ATTR_ENUM_VALUE,
+      DXIL_ATTR_STRING = 3,
+      DXIL_ATTR_STRING_VALUE,
    } type;
 
    union {
       enum dxil_attr_kind kind;
-   };
+      const char *str;
+   } key;
+   union {
+      uint64_t integer;
+      const char *str;
+   } value;
 };
 
 struct attrib_set {
@@ -163,7 +171,7 @@ struct dxil_instr_phi {
    struct dxil_phi_src {
       const struct dxil_value *value;
       unsigned block;
-   } incoming[127];
+   } *incoming;
    size_t num_incoming;
 };
 
@@ -260,6 +268,8 @@ struct dxil_const {
       intmax_t int_value;
       double float_value;
       const struct dxil_value **array_values;
+      const struct dxil_value **struct_values;
+      const struct dxil_value **vector_values;
    };
 
    struct list_head head;

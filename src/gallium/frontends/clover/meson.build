@@ -44,10 +44,6 @@ if with_opencl_icd
   clover_cpp_args += '-DHAVE_CLOVER_ICD'
 endif
 
-if with_opencl_native
-  clover_spirv_cpp_args += '-DHAVE_CLOVER_NATIVE'
-endif
-
 if with_opencl_spirv
   clover_spirv_cpp_args += '-DHAVE_CLOVER_SPIRV'
 endif
@@ -92,7 +88,7 @@ libclnir = static_library(
   'clnir',
   files('nir/invocation.cpp', 'nir/invocation.hpp'),
   include_directories : [clover_incs, inc_mesa],
-  dependencies : idep_nir,
+  dependencies : [idep_nir, idep_vtn, idep_mesaclc],
   cpp_args : [clover_opencl_cpp_args, clover_spirv_cpp_args],
   gnu_symbol_visibility : 'hidden',
 )
@@ -113,6 +109,8 @@ clover_files = files(
   'api/sampler.cpp',
   'api/transfer.cpp',
   'api/util.hpp',
+  'core/binary.cpp',
+  'core/binary.hpp',
   'core/compiler.hpp',
   'core/context.cpp',
   'core/context.hpp',
@@ -127,8 +125,6 @@ clover_files = files(
   'core/kernel.hpp',
   'core/memory.cpp',
   'core/memory.hpp',
-  'core/module.cpp',
-  'core/module.hpp',
   'core/object.hpp',
   'core/platform.cpp',
   'core/platform.hpp',
@@ -148,6 +144,7 @@ clover_files = files(
   'util/adaptor.hpp',
   'util/algebra.hpp',
   'util/algorithm.hpp',
+  'util/compat.hpp',
   'util/factor.hpp',
   'util/functional.hpp',
   'util/lazy.hpp',
@@ -167,5 +164,5 @@ libclover = static_library(
   ],
   gnu_symbol_visibility : 'hidden',
   link_with : [libclllvm, libclspirv, libclnir],
-  dependencies : idep_mesautil,
+  dependencies : [idep_mesautil, idep_nir],
 )

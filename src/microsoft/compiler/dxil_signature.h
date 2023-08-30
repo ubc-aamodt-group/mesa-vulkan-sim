@@ -59,6 +59,7 @@ struct dxil_signature_record {
    unsigned num_elements;
    const char *sysvalue;
    char *name;
+   uint8_t sig_comp_type;
 };
 
 struct dxil_psv_sem_index_table {
@@ -84,6 +85,19 @@ struct dxil_psv_runtime_info_0 {
       struct {
          char output_position_present;
       } vs;
+
+      struct {
+         uint32_t input_control_point_count;
+         uint32_t output_control_point_count;
+         uint32_t tessellator_domain;
+         uint32_t tessellator_output_primitive;
+      } hs;
+
+      struct {
+         uint32_t input_control_point_count;
+         char output_position_present;
+         uint32_t tessellator_domain;
+      } ds;
 
       struct {
          uint32_t input_primitive;
@@ -127,11 +141,21 @@ struct dxil_psv_runtime_info_1 {
    uint8_t sig_output_vectors[4];
 };
 
+struct dxil_psv_runtime_info_2 {
+   struct dxil_psv_runtime_info_1 psv1;
+   uint32_t num_threads_x;
+   uint32_t num_threads_y;
+   uint32_t num_threads_z;
+};
+
 struct dxil_mdnode;
 struct dxil_module;
 
+void
+preprocess_signatures(struct dxil_module *mod, nir_shader *s, unsigned input_clip_size);
+
 const struct dxil_mdnode *
-get_signatures(struct dxil_module *mod, nir_shader *s);
+get_signatures(struct dxil_module *mod);
 
 #ifdef __cplusplus
 }

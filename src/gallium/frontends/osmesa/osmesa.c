@@ -51,6 +51,9 @@
 
 #include <stdio.h>
 #include <c11/threads.h>
+
+#include "state_tracker/st_context.h"
+
 #include "GL/osmesa.h"
 
 #include "glapi/glapi.h"  /* for OSMesaGetProcAddress below */
@@ -70,7 +73,6 @@
 #include "postprocess/postprocess.h"
 
 #include "frontend/api.h"
-#include "state_tracker/st_gl_api.h"
 
 
 
@@ -81,7 +83,7 @@ osmesa_create_screen(void);
 
 struct osmesa_buffer
 {
-   struct st_framebuffer_iface *stfb;
+   struct pipe_frontend_drawable base;
    struct st_visual visual;
    unsigned width, height;
 
@@ -95,7 +97,7 @@ struct osmesa_buffer
 
 struct osmesa_context
 {
-   struct st_context_iface *stctx;
+   struct st_context *st;
 
    boolean ever_used;     /*< Has this context ever been current? */
 
@@ -125,26 +127,21 @@ struct osmesa_context
  * Called from the ST manager.
  */
 static int
-osmesa_st_get_param(struct st_manager *smapi, enum st_manager_param param)
+osmesa_st_get_param(struct pipe_frontend_screen *fscreen, enum st_manager_param param)
 {
    /* no-op */
    return 0;
 }
 
-static struct st_manager *stmgr = NULL;
-static struct st_api *stapi = NULL;
+static struct pipe_frontend_screen *global_fscreen = NULL;
 
 static void
 destroy_st_manager(void)
 {
-   if (stmgr) {
-      if (stmgr->screen)
-         stmgr->screen->destroy(stmgr->screen);
-      FREE(stmgr);
-   }
-
-   if (stapi && stapi->destroy) {
-      stapi->destroy(stapi);
+   if (global_fscreen) {
+      if (global_fscreen->screen)
+         global_fscreen->screen->destroy(global_fscreen->screen);
+      FREE(global_fscreen);
    }
 }
 
@@ -154,37 +151,25 @@ create_st_manager(void)
    if (atexit(destroy_st_manager) != 0)
       return;
 
-   stmgr = CALLOC_STRUCT(st_manager);
-   if (stmgr) {
-      stmgr->screen = osmesa_create_screen();
-      stmgr->get_param = osmesa_st_get_param;
-      stmgr->get_egl_image = NULL;
+   global_fscreen = CALLOC_STRUCT(pipe_frontend_screen);
+   if (global_fscreen) {
+      global_fscreen->screen = osmesa_create_screen();
+      global_fscreen->get_param = osmesa_st_get_param;
+      global_fscreen->get_egl_image = NULL;
    }
-
-   stapi = st_gl_api_create();
 }
 
 /**
  * Create/return a singleton st_manager object.
  */
-static struct st_manager *
+static struct pipe_frontend_screen *
 get_st_manager(void)
 {
    static once_flag create_once_flag = ONCE_FLAG_INIT;
 
    call_once(&create_once_flag, create_st_manager);
 
-   return stmgr;
-}
-
-/**
- * Create/return singleton st_api object.
- */
-static struct st_api *
-get_st_api(void)
-{
-   get_st_manager();
-   return stapi;
+   return global_fscreen;
 }
 
 /* Reads the color or depth buffer from the backing context to either the user storage
@@ -194,13 +179,13 @@ static void
 osmesa_read_buffer(OSMesaContext osmesa, struct pipe_resource *res, void *dst,
                    int dst_stride, bool y_up)
 {
-   struct pipe_context *pipe = osmesa->stctx->pipe;
+   struct pipe_context *pipe = osmesa->st->pipe;
 
    struct pipe_box box;
    u_box_2d(0, 0, res->width0, res->height0, &box);
 
    struct pipe_transfer *transfer = NULL;
-   ubyte *src = pipe->transfer_map(pipe, res, 0, PIPE_MAP_READ, &box,
+   ubyte *src = pipe->texture_map(pipe, res, 0, PIPE_MAP_READ, &box,
                                    &transfer);
 
    /*
@@ -221,7 +206,7 @@ osmesa_read_buffer(OSMesaContext osmesa, struct pipe_resource *res, void *dst,
       src += transfer->stride;
    }
 
-   pipe->transfer_unmap(pipe, transfer);
+   pipe->texture_unmap(pipe, transfer);
 }
 
 
@@ -313,9 +298,8 @@ osmesa_choose_format(GLenum format, GLenum type)
          return PIPE_FORMAT_NONE;
       return PIPE_FORMAT_B5G6R5_UNORM;
    default:
-      ; /* fall-through */
+      return PIPE_FORMAT_NONE;
    }
-   return PIPE_FORMAT_NONE;
 }
 
 
@@ -339,17 +323,16 @@ osmesa_init_st_visual(struct st_visual *vis,
    vis->depth_stencil_format = ds_format;
    vis->accum_format = accum_format;
    vis->samples = 1;
-   vis->render_buffer = ST_ATTACHMENT_FRONT_LEFT;
 }
 
 
 /**
- * Return the osmesa_buffer that corresponds to an st_framebuffer_iface.
+ * Return the osmesa_buffer that corresponds to an pipe_frontend_drawable.
  */
 static inline struct osmesa_buffer *
-stfbi_to_osbuffer(struct st_framebuffer_iface *stfbi)
+drawable_to_osbuffer(struct pipe_frontend_drawable *drawable)
 {
-   return (struct osmesa_buffer *) stfbi->st_manager_private;
+   return (struct osmesa_buffer *)drawable;
 }
 
 
@@ -358,15 +341,18 @@ stfbi_to_osbuffer(struct st_framebuffer_iface *stfbi)
  * of the driver's color buffer into the user-specified buffer.
  */
 static bool
-osmesa_st_framebuffer_flush_front(struct st_context_iface *stctx,
-                                  struct st_framebuffer_iface *stfbi,
+osmesa_st_framebuffer_flush_front(struct st_context *st,
+                                  struct pipe_frontend_drawable *drawable,
                                   enum st_attachment_type statt)
 {
    OSMesaContext osmesa = OSMesaGetCurrentContext();
-   struct osmesa_buffer *osbuffer = stfbi_to_osbuffer(stfbi);
+   struct osmesa_buffer *osbuffer = drawable_to_osbuffer(drawable);
    struct pipe_resource *res = osbuffer->textures[statt];
    unsigned bpp;
    int dst_stride;
+
+   if (statt != ST_ATTACHMENT_FRONT_LEFT)
+      return false;
 
    if (osmesa->pp) {
       struct pipe_resource *zsbuf = NULL;
@@ -414,15 +400,16 @@ osmesa_st_framebuffer_flush_front(struct st_context_iface *stctx,
  * its resources).
  */
 static bool
-osmesa_st_framebuffer_validate(struct st_context_iface *stctx,
-                               struct st_framebuffer_iface *stfbi,
+osmesa_st_framebuffer_validate(struct st_context *st,
+                               struct pipe_frontend_drawable *drawable,
                                const enum st_attachment_type *statts,
                                unsigned count,
-                               struct pipe_resource **out)
+                               struct pipe_resource **out,
+                               struct pipe_resource **resolve)
 {
    struct pipe_screen *screen = get_st_manager()->screen;
    enum st_attachment_type i;
-   struct osmesa_buffer *osbuffer = stfbi_to_osbuffer(stfbi);
+   struct osmesa_buffer *osbuffer = drawable_to_osbuffer(drawable);
    struct pipe_resource templat;
 
    memset(&templat, 0, sizeof(templat));
@@ -475,20 +462,6 @@ osmesa_st_framebuffer_validate(struct st_context_iface *stctx,
 
 static uint32_t osmesa_fb_ID = 0;
 
-static struct st_framebuffer_iface *
-osmesa_create_st_framebuffer(void)
-{
-   struct st_framebuffer_iface *stfbi = CALLOC_STRUCT(st_framebuffer_iface);
-   if (stfbi) {
-      stfbi->flush_front = osmesa_st_framebuffer_flush_front;
-      stfbi->validate = osmesa_st_framebuffer_validate;
-      p_atomic_set(&stfbi->stamp, 1);
-      stfbi->ID = p_atomic_inc_return(&osmesa_fb_ID);
-      stfbi->state_manager = get_st_manager();
-   }
-   return stfbi;
-}
-
 
 /**
  * Create new buffer and add to linked list.
@@ -500,10 +473,12 @@ osmesa_create_buffer(enum pipe_format color_format,
 {
    struct osmesa_buffer *osbuffer = CALLOC_STRUCT(osmesa_buffer);
    if (osbuffer) {
-      osbuffer->stfb = osmesa_create_st_framebuffer();
-
-      osbuffer->stfb->st_manager_private = osbuffer;
-      osbuffer->stfb->visual = &osbuffer->visual;
+      osbuffer->base.flush_front = osmesa_st_framebuffer_flush_front;
+      osbuffer->base.validate = osmesa_st_framebuffer_validate;
+      p_atomic_set(&osbuffer->base.stamp, 1);
+      osbuffer->base.ID = p_atomic_inc_return(&osmesa_fb_ID);
+      osbuffer->base.fscreen = get_st_manager();
+      osbuffer->base.visual = &osbuffer->visual;
 
       osmesa_init_st_visual(&osbuffer->visual, color_format,
                             ds_format, accum_format);
@@ -520,9 +495,8 @@ osmesa_destroy_buffer(struct osmesa_buffer *osbuffer)
     * Notify the state manager that the associated framebuffer interface
     * is no longer valid.
     */
-   stapi->destroy_drawable(stapi, osbuffer->stfb);
+   st_api_destroy_drawable(&osbuffer->base);
 
-   FREE(osbuffer->stfb);
    FREE(osbuffer);
 }
 
@@ -583,17 +557,16 @@ GLAPI OSMesaContext GLAPIENTRY
 OSMesaCreateContextAttribs(const int *attribList, OSMesaContext sharelist)
 {
    OSMesaContext osmesa;
-   struct st_context_iface *st_shared;
+   struct st_context *st_shared;
    enum st_context_error st_error = 0;
    struct st_context_attribs attribs;
-   struct st_api *stapi = get_st_api();
    GLenum format = GL_RGBA;
    int depthBits = 0, stencilBits = 0, accumBits = 0;
    int profile = OSMESA_COMPAT_PROFILE, version_major = 1, version_minor = 0;
    int i;
 
    if (sharelist) {
-      st_shared = sharelist->stctx;
+      st_shared = sharelist->st;
    }
    else {
       st_shared = NULL;
@@ -683,7 +656,7 @@ OSMesaCreateContextAttribs(const int *attribList, OSMesaContext sharelist)
     */
    memset(&attribs, 0, sizeof(attribs));
    attribs.profile = (profile == OSMESA_CORE_PROFILE)
-      ? ST_PROFILE_OPENGL_CORE : ST_PROFILE_DEFAULT;
+      ? API_OPENGL_CORE : API_OPENGL_COMPAT;
    attribs.major = version_major;
    attribs.minor = version_minor;
    attribs.flags = 0;  /* ST_CONTEXT_FLAG_x */
@@ -697,14 +670,14 @@ OSMesaCreateContextAttribs(const int *attribList, OSMesaContext sharelist)
                          osmesa->depth_stencil_format,
                          osmesa->accum_format);
 
-   osmesa->stctx = stapi->create_context(stapi, get_st_manager(),
+   osmesa->st = st_api_create_context(get_st_manager(),
                                          &attribs, &st_error, st_shared);
-   if (!osmesa->stctx) {
+   if (!osmesa->st) {
       FREE(osmesa);
       return NULL;
    }
 
-   osmesa->stctx->st_manager_private = osmesa;
+   osmesa->st->frontend_context = osmesa;
 
    osmesa->format = format;
    osmesa->user_row_length = 0;
@@ -725,7 +698,7 @@ OSMesaDestroyContext(OSMesaContext osmesa)
 {
    if (osmesa) {
       pp_free(osmesa->pp);
-      osmesa->stctx->destroy(osmesa->stctx);
+      st_destroy_context(osmesa->st);
       free(osmesa->zs);
       FREE(osmesa);
    }
@@ -758,11 +731,10 @@ GLAPI GLboolean GLAPIENTRY
 OSMesaMakeCurrent(OSMesaContext osmesa, void *buffer, GLenum type,
                   GLsizei width, GLsizei height)
 {
-   struct st_api *stapi = get_st_api();
    enum pipe_format color_format;
 
    if (!osmesa && !buffer) {
-      stapi->make_current(stapi, NULL, NULL, NULL);
+      st_api_make_current(NULL, NULL, NULL);
       return GL_TRUE;
    }
 
@@ -780,8 +752,11 @@ OSMesaMakeCurrent(OSMesaContext osmesa, void *buffer, GLenum type,
    if (osmesa->current_buffer &&
        (osmesa->current_buffer->visual.color_format != color_format ||
         osmesa->current_buffer->visual.depth_stencil_format != osmesa->depth_stencil_format ||
-        osmesa->current_buffer->visual.accum_format != osmesa->accum_format)) {
+        osmesa->current_buffer->visual.accum_format != osmesa->accum_format ||
+        osmesa->current_buffer->width != width ||
+        osmesa->current_buffer->height != height)) {
       osmesa_destroy_buffer(osmesa->current_buffer);
+      osmesa->current_buffer = NULL;
    }
 
    if (!osmesa->current_buffer) {
@@ -798,7 +773,7 @@ OSMesaMakeCurrent(OSMesaContext osmesa, void *buffer, GLenum type,
 
    osmesa->type = type;
 
-   stapi->make_current(stapi, osmesa->stctx, osbuffer->stfb, osbuffer->stfb);
+   st_api_make_current(osmesa->st, &osbuffer->base, &osbuffer->base);
 
    /* XXX: We should probably load the current color value into the buffer here
     * to match classic swrast behavior (context's fb starts with the contents of
@@ -818,10 +793,11 @@ OSMesaMakeCurrent(OSMesaContext osmesa, void *buffer, GLenum type,
       }
 
       if (any_pp_enabled) {
-         osmesa->pp = pp_init(osmesa->stctx->pipe,
+         osmesa->pp = pp_init(osmesa->st->pipe,
                               osmesa->pp_enabled,
-                              osmesa->stctx->cso_context,
-                              osmesa->stctx);
+                              osmesa->st->cso_context,
+                              osmesa->st,
+                              st_context_invalidate_state);
 
          pp_init_fbos(osmesa->pp, width, height);
       }
@@ -837,9 +813,8 @@ OSMesaMakeCurrent(OSMesaContext osmesa, void *buffer, GLenum type,
 GLAPI OSMesaContext GLAPIENTRY
 OSMesaGetCurrentContext(void)
 {
-   struct st_api *stapi = get_st_api();
-   struct st_context_iface *st = stapi->get_current(stapi);
-   return st ? (OSMesaContext) st->st_manager_private : NULL;
+   struct st_context *st = st_api_get_current();
+   return st ? (OSMesaContext) st->frontend_context : NULL;
 }
 
 
@@ -890,7 +865,7 @@ OSMesaGetIntegerv(GLint pname, GLint *value)
       *value = osmesa->y_up;
       return;
    case OSMESA_MAX_WIDTH:
-      /* fall-through */
+      FALLTHROUGH;
    case OSMESA_MAX_HEIGHT:
       {
          struct pipe_screen *screen = get_st_manager()->screen;

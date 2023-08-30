@@ -78,9 +78,9 @@ def commit(message: str) -> None:
 
 
 def _calculate_release_start(major: str, minor: str) -> datetime.date:
-    """Calclulate the start of the release for release candidates.
+    """Calculate the start of the release for release candidates.
 
-    This is quarterly, on the second wednesday, in Januray, April, July, and Octobor.
+    This is quarterly, on the second wednesday, in January, April, July, and October.
     """
     quarter = datetime.date.fromisoformat(f'20{major}-0{[1, 4, 7, 10][int(minor)]}-01')
 
@@ -105,7 +105,7 @@ def release_candidate(args: RCArguments) -> None:
 
     data = read_calendar()
 
-    with CALENDAR_CSV.open('w') as f:
+    with CALENDAR_CSV.open('w', newline='') as f:
         writer = csv.writer(f)
         writer.writerows(data)
 
@@ -147,7 +147,7 @@ def final_release(args: FinalArguments) -> None:
     data = read_calendar()
     date = _calculate_next_release_date(not args.zero_released)
 
-    with CALENDAR_CSV.open('w') as f:
+    with CALENDAR_CSV.open('w', newline='') as f:
         writer = csv.writer(f)
         writer.writerows(data)
 
@@ -199,7 +199,7 @@ def extend(args: ExtendArguments) -> None:
 
     current = read_calendar()
 
-    with CALENDAR_CSV.open('w') as f:
+    with CALENDAR_CSV.open('w', newline='') as f:
         writer = csv.writer(f)
         with write_existing(writer, current) as row:
             # Get rid of -rcX as well

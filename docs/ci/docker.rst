@@ -1,17 +1,16 @@
 Docker CI
 =========
 
-For llvmpipe and swrast CI, we run tests in a container containing
+For LLVMpipe and Softpipe CI, we run tests in a container containing
 VK-GL-CTS, on the shared GitLab runners provided by `freedesktop
-<http://freedesktop.org>`_
+<https://freedesktop.org>`__
 
 Software architecture
 ---------------------
 
-The Docker containers are rebuilt from the debian-install.sh script
-when DEBIAN\_TAG is changed in .gitlab-ci.yml, and
-debian-test-install.sh when DEBIAN\_ARM64\_TAG is changed in
-.gitlab-ci.yml.  The resulting images are around 500MB, and are
+The Docker containers are rebuilt using the shell scripts under
+.gitlab-ci/container/ when the FDO\_DISTRIBUTION\_TAG changes in
+.gitlab-ci.yml. The resulting images are around 1 GB, and are
 expected to change approximately weekly (though an individual
 developer working on them may produce many more images while trying to
 come up with a working MR!).
@@ -54,7 +53,7 @@ step across multiple test runs.  Since the images are large and change
 approximately weekly, the DUTs also need to be running some script to
 prune stale Docker images periodically in order to not run out of disk
 space as we rev those containers (perhaps `this script
-<https://gitlab.com/gitlab-org/gitlab-runner/issues/2980#note_169233611>`_).
+<https://gitlab.com/gitlab-org/gitlab-runner/-/issues/2980#note_169233611>`__).
 
 Note that Docker doesn't allow containers to be stored on NFS, and
 doesn't allow multiple Docker daemons to interact with the same
@@ -68,7 +67,7 @@ anyone on the internet run code on your device.  Docker containers may
 provide some limited protection, but how much you trust that and what
 you do to mitigate hostile access is up to you.
 
-* DUTs must expose the dri device nodes to the containers.
+* DUTs must expose the DRI device nodes to the containers.
 
 Obviously, to get access to the HW, we need to pass the render node
 through.  This is done by adding ``devices = ["/dev/dri"]`` to the

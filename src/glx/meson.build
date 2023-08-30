@@ -122,16 +122,11 @@ else
   )
 endif
 
-gl_lib_cargs = [
-  '-D_REENTRANT',
-]
-
 libglx = static_library(
   'glx',
   [files_libglx, glx_generated],
   include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux, inc_glapi, inc_loader],
   c_args : [
-    gl_lib_cargs,
     '-DGL_LIB_NAME="lib@0@.so.@1@"'.format(gl_lib_name, gl_lib_version.split('.')[0]),
   ],
   gnu_symbol_visibility : 'hidden',
@@ -141,7 +136,7 @@ libglx = static_library(
   ],
   dependencies : [
     idep_mesautil, idep_xmlconfig,
-    dep_libdrm, dep_dri2proto, dep_glproto, dep_x11, dep_glvnd,
+    dep_libdrm, dep_dri2proto, dep_glproto, dep_x11, dep_glvnd, dep_xxf86vm, dep_xshmfence
   ],
 )
 
@@ -157,6 +152,7 @@ libgl = shared_library(
     dep_xcb_shm, extra_deps_libgl,
   ],
   version : gl_lib_version,
+  darwin_versions : '4.0.0',
   install : true,
 )
 

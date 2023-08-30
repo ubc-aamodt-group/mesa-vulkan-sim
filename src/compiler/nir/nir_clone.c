@@ -23,6 +23,7 @@
 
 #include "nir.h"
 #include "nir_control_flow.h"
+#include "nir_xfb_info.h"
 
 /* Secret Decoder Ring:
  *   clone_foo():
@@ -135,6 +136,7 @@ nir_constant_clone(const nir_constant *c, nir_variable *nvar)
    nir_constant *nc = ralloc(nvar, nir_constant);
 
    memcpy(nc->values, c->values, sizeof(nc->values));
+   nc->is_null_constant = c->is_null_constant;
    nc->num_elements = c->num_elements;
    nc->elements = ralloc_array(nvar, nir_constant *, c->num_elements);
    for (unsigned i = 0; i < c->num_elements; i++) {
@@ -212,12 +214,10 @@ clone_register(clone_state *state, const nir_register *reg)
    nreg->bit_size = reg->bit_size;
    nreg->num_array_elems = reg->num_array_elems;
    nreg->index = reg->index;
-   nreg->name = ralloc_strdup(nreg, reg->name);
 
-   /* reconstructing uses/defs/if_uses handled by nir_instr_insert() */
+   /* reconstructing uses/defs handled by nir_instr_insert() */
    list_inithead(&nreg->uses);
    list_inithead(&nreg->defs);
-   list_inithead(&nreg->if_uses);
 
    return nreg;
 }
@@ -244,7 +244,7 @@ __clone_src(clone_state *state, void *ninstr_or_if,
    } else {
       nsrc->reg.reg = remap_reg(state, src->reg.reg);
       if (src->reg.indirect) {
-         nsrc->reg.indirect = ralloc(ninstr_or_if, nir_src);
+         nsrc->reg.indirect = gc_alloc(state->ns->gctx, nir_src, 1);
          __clone_src(state, ninstr_or_if, nsrc->reg.indirect, src->reg.indirect);
       }
       nsrc->reg.base_offset = src->reg.base_offset;
@@ -258,13 +258,13 @@ __clone_dst(clone_state *state, nir_instr *ninstr,
    ndst->is_ssa = dst->is_ssa;
    if (dst->is_ssa) {
       nir_ssa_dest_init(ninstr, ndst, dst->ssa.num_components,
-                        dst->ssa.bit_size, dst->ssa.name);
+                        dst->ssa.bit_size);
       if (likely(state->remap_table))
          add_remap(state, &ndst->ssa, &dst->ssa);
    } else {
       ndst->reg.reg = remap_reg(state, dst->reg.reg);
       if (dst->reg.indirect) {
-         ndst->reg.indirect = ralloc(ninstr, nir_src);
+         ndst->reg.indirect = gc_alloc(state->ns->gctx, nir_src, 1);
          __clone_src(state, ninstr, ndst->reg.indirect, dst->reg.indirect);
       }
       ndst->reg.base_offset = dst->reg.base_offset;
@@ -331,6 +331,7 @@ clone_deref_instr(clone_state *state, const nir_deref_instr *deref)
    case nir_deref_type_ptr_as_array:
       __clone_src(state, &nderef->instr,
                   &nderef->arr.index, &deref->arr.index);
+      nderef->arr.in_bounds = deref->arr.in_bounds;
       break;
 
    case nir_deref_type_array_wildcard:
@@ -411,6 +412,7 @@ clone_tex(clone_state *state, const nir_tex_instr *tex)
    }
    ntex->coord_components = tex->coord_components;
    ntex->is_array = tex->is_array;
+   ntex->array_is_lowered_cube = tex->array_is_lowered_cube;
    ntex->is_shadow = tex->is_shadow;
    ntex->is_new_style_shadow = tex->is_new_style_shadow;
    ntex->is_sparse = tex->is_sparse;
@@ -447,24 +449,13 @@ clone_phi(clone_state *state, const nir_phi_instr *phi, nir_block *nblk)
     */
    nir_instr_insert_after_block(nblk, &nphi->instr);
 
-   foreach_list_typed(nir_phi_src, src, node, &phi->srcs) {
-      nir_phi_src *nsrc = ralloc(nphi, nir_phi_src);
-
-      /* Just copy the old source for now. */
-      memcpy(nsrc, src, sizeof(*src));
-
-      /* Since we're not letting nir_insert_instr handle use/def stuff for us,
-       * we have to set the parent_instr manually.  It doesn't really matter
-       * when we do it, so we might as well do it here.
-       */
-      nsrc->src.parent_instr = &nphi->instr;
+   nir_foreach_phi_src(src, phi) {
+      nir_phi_src *nsrc = nir_phi_instr_add_src(nphi, src->pred, src->src);
 
       /* Stash it in the list of phi sources.  We'll walk this list and fix up
        * sources at the very end of clone_function_impl.
        */
       list_add(&nsrc->src.use_link, &state->phi_srcs);
-
-      exec_list_push_tail(&nphi->srcs, &nsrc->node);
    }
 
    return nphi;
@@ -533,6 +524,18 @@ nir_instr_clone(nir_shader *shader, const nir_instr *orig)
    return clone_instr(&state, orig);
 }
 
+nir_instr *
+nir_instr_clone_deep(nir_shader *shader, const nir_instr *orig,
+                     struct hash_table *remap_table)
+{
+   clone_state state = {
+      .allow_remap_fallback = true,
+      .ns = shader,
+      .remap_table = remap_table,
+   };
+   return clone_instr(&state, orig);
+}
+
 static nir_block *
 clone_block(clone_state *state, struct exec_list *cf_list, const nir_block *blk)
 {
@@ -595,6 +598,10 @@ clone_loop(clone_state *state, struct exec_list *cf_list, const nir_loop *loop)
    nir_cf_node_insert_end(cf_list, &nloop->cf_node);
 
    clone_cf_list(state, &nloop->body, &loop->body);
+   if (nir_loop_has_continue_construct(loop)) {
+      nir_loop_add_continue_construct(nloop);
+      clone_cf_list(state, &nloop->continue_list, &loop->continue_list);
+   }
 
    return nloop;
 }
@@ -682,6 +689,9 @@ clone_function_impl(clone_state *state, const nir_function_impl *fi)
 {
    nir_function_impl *nfi = nir_function_impl_create_bare(state->ns);
 
+   if (fi->preamble)
+      nfi->preamble = remap_global(state, fi->preamble);
+
    clone_var_list(state, &nfi->locals, &fi->locals);
    clone_reg_list(state, &nfi->registers, &fi->registers);
    nfi->reg_alloc = fi->reg_alloc;
@@ -728,6 +738,7 @@ clone_function(clone_state *state, const nir_function *fxn, nir_shader *ns)
            memcpy(nfxn->params, fxn->params, sizeof(nir_parameter) * fxn->num_params);
    }
    nfxn->is_entrypoint = fxn->is_entrypoint;
+   nfxn->is_preamble = fxn->is_preamble;
 
    /* At first glance, it looks like we should clone the function_impl here.
     * However, call instructions need to be able to reference at least the
@@ -754,9 +765,9 @@ nir_shader_clone(void *mem_ctx, const nir_shader *s)
       clone_function(&state, fxn, ns);
 
    /* Only after all functions are cloned can we clone the actual function
-    * implementations.  This is because nir_call_instrs need to reference the
-    * functions of other functions and we don't know what order the functions
-    * will have in the list.
+    * implementations.  This is because nir_call_instrs and preambles need to
+    * reference the functions of other functions and we don't know what order
+    * the functions will have in the list.
     */
    nir_foreach_function(fxn, s) {
       nir_function *nfxn = remap_global(&state, fxn);
@@ -772,13 +783,18 @@ nir_shader_clone(void *mem_ctx, const nir_shader *s)
    ns->num_inputs = s->num_inputs;
    ns->num_uniforms = s->num_uniforms;
    ns->num_outputs = s->num_outputs;
-   ns->shared_size = s->shared_size;
    ns->scratch_size = s->scratch_size;
 
    ns->constant_data_size = s->constant_data_size;
    if (s->constant_data_size > 0) {
       ns->constant_data = ralloc_size(ns, s->constant_data_size);
       memcpy(ns->constant_data, s->constant_data, s->constant_data_size);
+   }
+
+   if (s->xfb_info) {
+      size_t size = nir_xfb_info_size(s->xfb_info->output_count);
+      ns->xfb_info = ralloc_size(ns, size);
+      memcpy(ns->xfb_info, s->xfb_info, size);
    }
 
    free_clone_state(&state);

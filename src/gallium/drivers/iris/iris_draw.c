@@ -32,11 +32,13 @@
 #include "pipe/p_state.h"
 #include "pipe/p_context.h"
 #include "pipe/p_screen.h"
+#include "util/u_draw.h"
 #include "util/u_inlines.h"
 #include "util/u_transfer.h"
 #include "util/u_upload_mgr.h"
 #include "intel/compiler/brw_compiler.h"
 #include "intel/compiler/brw_eu_defines.h"
+#include "compiler/shader_info.h"
 #include "iris_context.h"
 #include "iris_defines.h"
 
@@ -46,10 +48,10 @@ prim_is_points_or_lines(const struct pipe_draw_info *draw)
    /* We don't need to worry about adjacency - it can only be used with
     * geometry shaders, and we don't care about this info when GS is on.
     */
-   return draw->mode == PIPE_PRIM_POINTS ||
-          draw->mode == PIPE_PRIM_LINES ||
-          draw->mode == PIPE_PRIM_LINE_LOOP ||
-          draw->mode == PIPE_PRIM_LINE_STRIP;
+   return draw->mode == MESA_PRIM_POINTS ||
+          draw->mode == MESA_PRIM_LINES ||
+          draw->mode == MESA_PRIM_LINE_LOOP ||
+          draw->mode == MESA_PRIM_LINE_STRIP;
 }
 
 /**
@@ -64,6 +66,7 @@ iris_update_draw_info(struct iris_context *ice,
                       const struct pipe_draw_info *info)
 {
    struct iris_screen *screen = (struct iris_screen *)ice->ctx.screen;
+   const struct intel_device_info *devinfo = screen->devinfo;
    const struct brw_compiler *compiler = screen->compiler;
 
    if (ice->state.prim_mode != info->mode) {
@@ -79,30 +82,36 @@ iris_update_draw_info(struct iris_context *ice,
       }
    }
 
-   if (info->mode == PIPE_PRIM_PATCHES &&
-       ice->state.vertices_per_patch != info->vertices_per_patch) {
-      ice->state.vertices_per_patch = info->vertices_per_patch;
+   if (info->mode == MESA_PRIM_PATCHES &&
+       ice->state.vertices_per_patch != ice->state.patch_vertices) {
+      ice->state.vertices_per_patch = ice->state.patch_vertices;
       ice->state.dirty |= IRIS_DIRTY_VF_TOPOLOGY;
 
-      /* 8_PATCH TCS needs this for key->input_vertices */
-      if (compiler->use_tcs_8_patch)
+      /* MULTI_PATCH TCS needs this for key->input_vertices */
+      if (compiler->use_tcs_multi_patch)
          ice->state.stage_dirty |= IRIS_STAGE_DIRTY_UNCOMPILED_TCS;
 
       /* Flag constants dirty for gl_PatchVerticesIn if needed. */
       const struct shader_info *tcs_info =
          iris_get_shader_info(ice, MESA_SHADER_TESS_CTRL);
       if (tcs_info &&
-          tcs_info->system_values_read & (1ull << SYSTEM_VALUE_VERTICES_IN)) {
+          BITSET_TEST(tcs_info->system_values_read, SYSTEM_VALUE_VERTICES_IN)) {
          ice->state.stage_dirty |= IRIS_STAGE_DIRTY_CONSTANTS_TCS;
          ice->state.shaders[MESA_SHADER_TESS_CTRL].sysvals_need_upload = true;
       }
    }
 
+   /* Track restart_index changes only if primitive_restart is true */
+   const unsigned cut_index = info->primitive_restart ? info->restart_index :
+                                                        ice->state.cut_index;
    if (ice->state.primitive_restart != info->primitive_restart ||
-       ice->state.cut_index != info->restart_index) {
+       ice->state.cut_index != cut_index) {
       ice->state.dirty |= IRIS_DIRTY_VF;
+      ice->state.cut_index = cut_index;
+      ice->state.dirty |=
+         ((ice->state.primitive_restart != info->primitive_restart) &&
+          devinfo->verx10 >= 125) ? IRIS_DIRTY_VFG : 0;
       ice->state.primitive_restart = info->primitive_restart;
-      ice->state.cut_index = info->restart_index;
    }
 }
 
@@ -112,8 +121,9 @@ iris_update_draw_info(struct iris_context *ice,
 static void
 iris_update_draw_parameters(struct iris_context *ice,
                             const struct pipe_draw_info *info,
+                            unsigned drawid_offset,
                             const struct pipe_draw_indirect_info *indirect,
-                            const struct pipe_draw_start_count *draw)
+                            const struct pipe_draw_start_count_bias *draw)
 {
    bool changed = false;
 
@@ -128,7 +138,7 @@ iris_update_draw_parameters(struct iris_context *ice,
          changed = true;
          ice->draw.params_valid = false;
       } else {
-         int firstvertex = info->index_size ? info->index_bias : draw->start;
+         int firstvertex = info->index_size ? draw->index_bias : draw->start;
 
          if (!ice->draw.params_valid ||
              ice->draw.params.firstvertex != firstvertex ||
@@ -139,7 +149,7 @@ iris_update_draw_parameters(struct iris_context *ice,
             ice->draw.params.baseinstance = info->start_instance;
             ice->draw.params_valid = true;
 
-            u_upload_data(ice->ctx.stream_uploader, 0,
+            u_upload_data(ice->ctx.const_uploader, 0,
                           sizeof(ice->draw.params), 4, &ice->draw.params,
                           &draw_params->offset, &draw_params->res);
          }
@@ -150,14 +160,14 @@ iris_update_draw_parameters(struct iris_context *ice,
       struct iris_state_ref *derived_params = &ice->draw.derived_draw_params;
       int is_indexed_draw = info->index_size ? -1 : 0;
 
-      if (ice->draw.derived_params.drawid != info->drawid ||
+      if (ice->draw.derived_params.drawid != drawid_offset ||
           ice->draw.derived_params.is_indexed_draw != is_indexed_draw) {
 
          changed = true;
-         ice->draw.derived_params.drawid = info->drawid;
+         ice->draw.derived_params.drawid = drawid_offset;
          ice->draw.derived_params.is_indexed_draw = is_indexed_draw;
 
-         u_upload_data(ice->ctx.stream_uploader, 0,
+         u_upload_data(ice->ctx.const_uploader, 0,
                        sizeof(ice->draw.derived_params), 4,
                        &ice->draw.derived_params,
                        &derived_params->offset, &derived_params->res);
@@ -174,30 +184,38 @@ iris_update_draw_parameters(struct iris_context *ice,
 static void
 iris_indirect_draw_vbo(struct iris_context *ice,
                        const struct pipe_draw_info *dinfo,
+                       unsigned drawid_offset,
                        const struct pipe_draw_indirect_info *dindirect,
-                       const struct pipe_draw_start_count *draw)
+                       const struct pipe_draw_start_count_bias *draw)
 {
    struct iris_batch *batch = &ice->batches[IRIS_BATCH_RENDER];
    struct pipe_draw_info info = *dinfo;
    struct pipe_draw_indirect_info indirect = *dindirect;
 
-   if (indirect.indirect_draw_count &&
-       ice->state.predicate == IRIS_PREDICATE_STATE_USE_BIT) {
-      /* Upload MI_PREDICATE_RESULT to GPR15.*/
-      batch->screen->vtbl.load_register_reg64(batch, CS_GPR(15), MI_PREDICATE_RESULT);
+   iris_emit_buffer_barrier_for(batch, iris_resource_bo(indirect.buffer),
+                                IRIS_DOMAIN_VF_READ);
+
+   if (indirect.indirect_draw_count) {
+      struct iris_bo *draw_count_bo =
+         iris_resource_bo(indirect.indirect_draw_count);
+      iris_emit_buffer_barrier_for(batch, draw_count_bo,
+                                   IRIS_DOMAIN_OTHER_READ);
+
+      if (ice->state.predicate == IRIS_PREDICATE_STATE_USE_BIT) {
+         /* Upload MI_PREDICATE_RESULT to GPR15.*/
+         batch->screen->vtbl.load_register_reg64(batch, CS_GPR(15), MI_PREDICATE_RESULT);
+      }
    }
 
    const uint64_t orig_dirty = ice->state.dirty;
    const uint64_t orig_stage_dirty = ice->state.stage_dirty;
 
    for (int i = 0; i < indirect.draw_count; i++) {
-      info.drawid = i;
-
       iris_batch_maybe_flush(batch, 1500);
 
-      iris_update_draw_parameters(ice, &info, &indirect, draw);
+      iris_update_draw_parameters(ice, &info, drawid_offset + i, &indirect, draw);
 
-      batch->screen->vtbl.upload_render_state(ice, batch, &info, &indirect, draw);
+      batch->screen->vtbl.upload_render_state(ice, batch, &info, drawid_offset + i, &indirect, draw);
 
       ice->state.dirty &= ~IRIS_ALL_DIRTY_FOR_RENDER;
       ice->state.stage_dirty &= ~IRIS_ALL_STAGE_DIRTY_FOR_RENDER;
@@ -219,16 +237,17 @@ iris_indirect_draw_vbo(struct iris_context *ice,
 static void
 iris_simple_draw_vbo(struct iris_context *ice,
                      const struct pipe_draw_info *draw,
+                     unsigned drawid_offset,
                      const struct pipe_draw_indirect_info *indirect,
-                     const struct pipe_draw_start_count *sc)
+                     const struct pipe_draw_start_count_bias *sc)
 {
    struct iris_batch *batch = &ice->batches[IRIS_BATCH_RENDER];
 
    iris_batch_maybe_flush(batch, 1500);
 
-   iris_update_draw_parameters(ice, draw, indirect, sc);
+   iris_update_draw_parameters(ice, draw, drawid_offset, indirect, sc);
 
-   batch->screen->vtbl.upload_render_state(ice, batch, draw, indirect, sc);
+   batch->screen->vtbl.upload_render_state(ice, batch, draw, drawid_offset, indirect, sc);
 }
 
 /**
@@ -236,18 +255,13 @@ iris_simple_draw_vbo(struct iris_context *ice,
  */
 void
 iris_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info,
+              unsigned drawid_offset,
               const struct pipe_draw_indirect_info *indirect,
-              const struct pipe_draw_start_count *draws,
+              const struct pipe_draw_start_count_bias *draws,
               unsigned num_draws)
 {
    if (num_draws > 1) {
-      struct pipe_draw_info tmp_info = *info;
-
-      for (unsigned i = 0; i < num_draws; i++) {
-         iris_draw_vbo(ctx, &tmp_info, indirect, &draws[i], 1);
-         if (tmp_info.increment_draw_id)
-            tmp_info.drawid++;
-      }
+      util_draw_multi(ctx, info, drawid_offset, indirect, draws, num_draws);
       return;
    }
 
@@ -256,24 +270,21 @@ iris_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info,
 
    struct iris_context *ice = (struct iris_context *) ctx;
    struct iris_screen *screen = (struct iris_screen*)ice->ctx.screen;
-   const struct gen_device_info *devinfo = &screen->devinfo;
+   const struct intel_device_info *devinfo = screen->devinfo;
    struct iris_batch *batch = &ice->batches[IRIS_BATCH_RENDER];
 
    if (ice->state.predicate == IRIS_PREDICATE_STATE_DONT_RENDER)
       return;
 
-   /* We can't safely re-emit 3DSTATE_SO_BUFFERS because it may zero the
-    * write offsets, changing the behavior.
-    */
-   if (INTEL_DEBUG & DEBUG_REEMIT) {
-      ice->state.dirty |= IRIS_ALL_DIRTY_FOR_RENDER & ~IRIS_DIRTY_SO_BUFFERS;
+   if (INTEL_DEBUG(DEBUG_REEMIT)) {
+      ice->state.dirty |= IRIS_ALL_DIRTY_FOR_RENDER;
       ice->state.stage_dirty |= IRIS_ALL_STAGE_DIRTY_FOR_RENDER;
    }
 
    iris_update_draw_info(ice, info);
 
-   if (devinfo->gen == 9)
-      gen9_toggle_preemption(ice, batch, info);
+   if (devinfo->ver == 9)
+      gfx9_toggle_preemption(ice, batch, info);
 
    iris_update_compiled_shaders(ice);
 
@@ -287,20 +298,25 @@ iris_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info,
       iris_predraw_resolve_framebuffer(ice, batch, draw_aux_buffer_disabled);
    }
 
+   if (ice->state.dirty & IRIS_DIRTY_RENDER_MISC_BUFFER_FLUSHES) {
+      for (gl_shader_stage stage = 0; stage < MESA_SHADER_COMPUTE; stage++)
+         iris_predraw_flush_buffers(ice, batch, stage);
+   }
+
    iris_binder_reserve_3d(ice);
 
-   batch->screen->vtbl.update_surface_base_address(batch, &ice->state.binder);
+   batch->screen->vtbl.update_binder_address(batch, &ice->state.binder);
 
    iris_handle_always_flush_cache(batch);
 
    if (indirect && indirect->buffer)
-      iris_indirect_draw_vbo(ice, info, indirect, &draws[0]);
+      iris_indirect_draw_vbo(ice, info, drawid_offset, indirect, &draws[0]);
    else
-      iris_simple_draw_vbo(ice, info, indirect, &draws[0]);
+      iris_simple_draw_vbo(ice, info, drawid_offset, indirect, &draws[0]);
 
    iris_handle_always_flush_cache(batch);
 
-   iris_postdraw_update_resolve_tracking(ice, batch);
+   iris_postdraw_update_resolve_tracking(ice);
 
    ice->state.dirty &= ~IRIS_ALL_DIRTY_FOR_RENDER;
    ice->state.stage_dirty &= ~IRIS_ALL_STAGE_DIRTY_FOR_RENDER;
@@ -352,7 +368,7 @@ iris_update_grid_size_resource(struct iris_context *ice,
    state_ref->offset +=
       iris_bo_offset_from_base_address(iris_resource_bo(state_ref->res));
    isl_buffer_fill_state(&screen->isl_dev, surf_map,
-                         .address = grid_ref->offset + grid_bo->gtt_offset,
+                         .address = grid_ref->offset + grid_bo->address,
                          .size_B = sizeof(grid->grid),
                          .format = ISL_FORMAT_RAW,
                          .stride_B = 1,
@@ -366,18 +382,23 @@ void
 iris_launch_grid(struct pipe_context *ctx, const struct pipe_grid_info *grid)
 {
    struct iris_context *ice = (struct iris_context *) ctx;
+   struct iris_screen *screen = (struct iris_screen *) ctx->screen;
+   const struct intel_device_info *devinfo = screen->devinfo;
    struct iris_batch *batch = &ice->batches[IRIS_BATCH_COMPUTE];
 
    if (ice->state.predicate == IRIS_PREDICATE_STATE_DONT_RENDER)
       return;
 
-   if (INTEL_DEBUG & DEBUG_REEMIT) {
+   if (INTEL_DEBUG(DEBUG_REEMIT)) {
       ice->state.dirty |= IRIS_ALL_DIRTY_FOR_COMPUTE;
       ice->state.stage_dirty |= IRIS_ALL_STAGE_DIRTY_FOR_COMPUTE;
    }
 
    if (ice->state.dirty & IRIS_DIRTY_COMPUTE_RESOLVES_AND_FLUSHES)
       iris_predraw_resolve_inputs(ice, batch, NULL, MESA_SHADER_COMPUTE, false);
+
+   if (ice->state.dirty & IRIS_DIRTY_COMPUTE_MISC_BUFFER_FLUSHES)
+      iris_predraw_flush_buffers(ice, batch, MESA_SHADER_COMPUTE);
 
    iris_batch_maybe_flush(batch, 1500);
 
@@ -389,10 +410,16 @@ iris_launch_grid(struct pipe_context *ctx, const struct pipe_grid_info *grid)
       ice->state.shaders[MESA_SHADER_COMPUTE].sysvals_need_upload = true;
    }
 
+   if (ice->state.last_grid_dim != grid->work_dim) {
+      ice->state.last_grid_dim = grid->work_dim;
+      ice->state.stage_dirty |= IRIS_STAGE_DIRTY_CONSTANTS_CS;
+      ice->state.shaders[MESA_SHADER_COMPUTE].sysvals_need_upload = true;
+   }
+
    iris_update_grid_size_resource(ice, grid);
 
    iris_binder_reserve_compute(ice);
-   batch->screen->vtbl.update_surface_base_address(batch, &ice->state.binder);
+   batch->screen->vtbl.update_binder_address(batch, &ice->state.binder);
 
    if (ice->state.compute_predicate) {
       batch->screen->vtbl.load_register_mem64(batch, MI_PREDICATE_RESULT,
@@ -409,7 +436,6 @@ iris_launch_grid(struct pipe_context *ctx, const struct pipe_grid_info *grid)
    ice->state.dirty &= ~IRIS_ALL_DIRTY_FOR_COMPUTE;
    ice->state.stage_dirty &= ~IRIS_ALL_STAGE_DIRTY_FOR_COMPUTE;
 
-   /* Note: since compute shaders can't access the framebuffer, there's
-    * no need to call iris_postdraw_update_resolve_tracking.
-    */
+   if (devinfo->ver >= 12)
+      iris_postdraw_update_image_resolve_tracking(ice, MESA_SHADER_COMPUTE);
 }

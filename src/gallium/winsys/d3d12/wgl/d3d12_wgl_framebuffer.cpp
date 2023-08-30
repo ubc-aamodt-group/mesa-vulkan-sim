@@ -23,10 +23,13 @@
 
 #include "d3d12_wgl_public.h"
 
-#include <Windows.h>
+#include <new>
+
+#include <windows.h>
 #include <dxgi1_4.h>
 #include <directx/d3d12.h>
 #include <wrl.h>
+#include <dxguids/dxguids.h>
 
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
@@ -42,6 +45,7 @@
 #include "d3d12/d3d12_screen.h"
 
 using Microsoft::WRL::ComPtr;
+constexpr uint32_t num_buffers = 2;
 
 struct d3d12_wgl_framebuffer {
    struct stw_winsys_framebuffer base;
@@ -50,7 +54,7 @@ struct d3d12_wgl_framebuffer {
    enum pipe_format pformat;
    HWND window;
    ComPtr<IDXGISwapChain3> swapchain;
-   struct pipe_resource *buffers[2];
+   struct pipe_resource *buffers[num_buffers];
 };
 
 static struct d3d12_wgl_framebuffer *
@@ -60,9 +64,29 @@ d3d12_wgl_framebuffer(struct stw_winsys_framebuffer *fb)
 }
 
 static void
-d3d12_wgl_framebuffer_destroy(struct stw_winsys_framebuffer *fb)
+d3d12_wgl_framebuffer_destroy(struct stw_winsys_framebuffer *fb,
+                              pipe_context *ctx)
 {
-   FREE(fb);
+   struct d3d12_wgl_framebuffer *framebuffer = d3d12_wgl_framebuffer(fb);
+   struct pipe_fence_handle *fence = NULL;
+
+   if (ctx) {
+      /* Ensure all resources are flushed */
+      ctx->flush(ctx, &fence, PIPE_FLUSH_HINT_FINISH);
+      if (fence) {
+         ctx->screen->fence_finish(ctx->screen, ctx, fence, OS_TIMEOUT_INFINITE);
+         ctx->screen->fence_reference(ctx->screen, &fence, NULL);
+      }
+   }
+
+   for (int i = 0; i < num_buffers; ++i) {
+      if (framebuffer->buffers[i]) {
+         d3d12_resource_release(d3d12_resource(framebuffer->buffers[i]));
+         pipe_resource_reference(&framebuffer->buffers[i], NULL);
+      }
+   }
+
+   delete framebuffer;
 }
 
 static void
@@ -74,7 +98,7 @@ d3d12_wgl_framebuffer_resize(stw_winsys_framebuffer *fb,
    struct d3d12_dxgi_screen *screen = d3d12_dxgi_screen(framebuffer->screen);
 
    DXGI_SWAP_CHAIN_DESC1 desc = {};
-   desc.BufferCount = 2;
+   desc.BufferCount = num_buffers;
    desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_SHADER_INPUT;
    desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
    desc.Format = d3d12_get_format(templ->format);
@@ -109,24 +133,24 @@ d3d12_wgl_framebuffer_resize(stw_winsys_framebuffer *fb,
       /* Ensure all resources are flushed */
       ctx->flush(ctx, &fence, PIPE_FLUSH_HINT_FINISH);
       if (fence) {
-         ctx->screen->fence_finish(ctx->screen, ctx, fence, PIPE_TIMEOUT_INFINITE);
+         ctx->screen->fence_finish(ctx->screen, ctx, fence, OS_TIMEOUT_INFINITE);
          ctx->screen->fence_reference(ctx->screen, &fence, NULL);
       }
 
-      for (int i = 0; i < 2; ++i) {
+      for (int i = 0; i < num_buffers; ++i) {
          if (framebuffer->buffers[i]) {
             d3d12_resource_release(d3d12_resource(framebuffer->buffers[i]));
             pipe_resource_reference(&framebuffer->buffers[i], NULL);
          }
       }
-      if (FAILED(framebuffer->swapchain->ResizeBuffers(2, desc.Width, desc.Height, desc.Format, desc.Flags))) {
+      if (FAILED(framebuffer->swapchain->ResizeBuffers(num_buffers, desc.Width, desc.Height, desc.Format, desc.Flags))) {
          debug_printf("D3D12: failed to resize swapchain");
       }
    }
 }
 
 static boolean
-d3d12_wgl_framebuffer_present(stw_winsys_framebuffer *fb)
+d3d12_wgl_framebuffer_present(stw_winsys_framebuffer *fb, int interval)
 {
    auto framebuffer = d3d12_wgl_framebuffer(fb);
    if (!framebuffer->swapchain) {
@@ -134,10 +158,10 @@ d3d12_wgl_framebuffer_present(stw_winsys_framebuffer *fb)
       return false;
    }
 
-   if (stw_dev->swap_interval < 1)
+   if (interval < 1)
       return S_OK == framebuffer->swapchain->Present(0, DXGI_PRESENT_ALLOW_TEARING);
    else
-       return S_OK == framebuffer->swapchain->Present(stw_dev->swap_interval, 0);
+      return S_OK == framebuffer->swapchain->Present(interval, 0);
 }
 
 static struct pipe_resource *
@@ -167,9 +191,10 @@ d3d12_wgl_framebuffer_get_resource(struct stw_winsys_framebuffer *pframebuffer,
    struct winsys_handle handle;
    memset(&handle, 0, sizeof(handle));
    handle.type = WINSYS_HANDLE_TYPE_D3D12_RES;
+   handle.format = framebuffer->pformat;
    handle.com_obj = res;
 
-   D3D12_RESOURCE_DESC res_desc = res->GetDesc();
+   D3D12_RESOURCE_DESC res_desc = GetDesc(res);
 
    struct pipe_resource templ;
    memset(&templ, 0, sizeof(templ));
@@ -193,7 +218,7 @@ d3d12_wgl_framebuffer_get_resource(struct stw_winsys_framebuffer *pframebuffer,
 
 struct stw_winsys_framebuffer *
 d3d12_wgl_create_framebuffer(struct pipe_screen *screen,
-                             HDC hDC,
+                             HWND hWnd,
                              int iPixelFormat)
 {
    const struct stw_pixelformat_info *pfi =
@@ -202,11 +227,19 @@ d3d12_wgl_create_framebuffer(struct pipe_screen *screen,
        (pfi->pfd.dwFlags & PFD_SUPPORT_GDI))
       return NULL;
 
+   if (pfi->stvis.color_format != PIPE_FORMAT_B8G8R8A8_UNORM &&
+       pfi->stvis.color_format != PIPE_FORMAT_R8G8B8A8_UNORM &&
+       pfi->stvis.color_format != PIPE_FORMAT_R10G10B10A2_UNORM &&
+       pfi->stvis.color_format != PIPE_FORMAT_R16G16B16A16_FLOAT)
+      return NULL;
+
    struct d3d12_wgl_framebuffer *fb = CALLOC_STRUCT(d3d12_wgl_framebuffer);
    if (!fb)
       return NULL;
 
-   fb->window = WindowFromDC(hDC);
+   new (fb) struct d3d12_wgl_framebuffer();
+
+   fb->window = hWnd;
    fb->screen = d3d12_screen(screen);
    fb->base.destroy = d3d12_wgl_framebuffer_destroy;
    fb->base.resize = d3d12_wgl_framebuffer_resize;

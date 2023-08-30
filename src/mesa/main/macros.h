@@ -35,7 +35,7 @@
 #include "util/u_math.h"
 #include "util/rounding.h"
 #include "util/compiler.h"
-#include "main/glheader.h"
+#include "util/glheader.h"
 #include "mesa_private.h"
 
 
@@ -687,13 +687,6 @@ INTERP_4F(GLfloat t, GLfloat dst[4], const GLfloat out[4], const GLfloat in[4])
 
 /*@}*/
 
-
-
-static inline unsigned
-minify(unsigned value, unsigned levels)
-{
-    return MAX2(1, value >> levels);
-}
 
 
 /** Cross product of two 3-element vectors */

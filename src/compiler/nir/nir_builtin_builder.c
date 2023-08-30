@@ -33,10 +33,10 @@ nir_cross3(nir_builder *b, nir_ssa_def *x, nir_ssa_def *y)
    unsigned yzx[3] = { 1, 2, 0 };
    unsigned zxy[3] = { 2, 0, 1 };
 
-   return nir_fsub(b, nir_fmul(b, nir_swizzle(b, x, yzx, 3),
-                                  nir_swizzle(b, y, zxy, 3)),
-                      nir_fmul(b, nir_swizzle(b, x, zxy, 3),
-                                  nir_swizzle(b, y, yzx, 3)));
+   return nir_ffma(b, nir_swizzle(b, x, yzx, 3),
+                      nir_swizzle(b, y, zxy, 3),
+                      nir_fneg(b, nir_fmul(b, nir_swizzle(b, x, zxy, 3),
+                                              nir_swizzle(b, y, yzx, 3))));
 }
 
 nir_ssa_def*
@@ -54,16 +54,7 @@ nir_cross4(nir_builder *b, nir_ssa_def *x, nir_ssa_def *y)
 nir_ssa_def*
 nir_fast_length(nir_builder *b, nir_ssa_def *vec)
 {
-   switch (vec->num_components) {
-   case 1: return nir_fsqrt(b, nir_fmul(b, vec, vec));
-   case 2: return nir_fsqrt(b, nir_fdot2(b, vec, vec));
-   case 3: return nir_fsqrt(b, nir_fdot3(b, vec, vec));
-   case 4: return nir_fsqrt(b, nir_fdot4(b, vec, vec));
-   case 8: return nir_fsqrt(b, nir_fdot8(b, vec, vec));
-   case 16: return nir_fsqrt(b, nir_fdot16(b, vec, vec));
-   default:
-      unreachable("Invalid number of components");
-   }
+   return nir_fsqrt(b, nir_fdot(b, vec, vec));
 }
 
 nir_ssa_def*
@@ -76,7 +67,7 @@ nir_nextafter(nir_builder *b, nir_ssa_def *x, nir_ssa_def *y)
    nir_ssa_def *conddir = nir_flt(b, x, y);
    nir_ssa_def *condzero = nir_feq(b, x, zero);
 
-   uint64_t sign_mask = 1 << (x->bit_size - 1);
+   uint64_t sign_mask = 1ull << (x->bit_size - 1);
    uint64_t min_abs = 1;
 
    if (nir_is_denorm_flush_to_zero(b->shader->info.float_controls_execution_mode, x->bit_size)) {
@@ -93,7 +84,7 @@ nir_nextafter(nir_builder *b, nir_ssa_def *x, nir_ssa_def *y)
       }
 
       /* Flush denorm to zero to avoid returning a denorm when condeq is true. */
-      x = nir_fmul(b, x, nir_imm_floatN_t(b, 1.0, x->bit_size));
+      x = nir_fmul_imm(b, x, 1.0);
    }
 
    /* beware of: +/-0.0 - 1 == NaN */
@@ -149,7 +140,7 @@ nir_smoothstep(nir_builder *b, nir_ssa_def *edge0, nir_ssa_def *edge1, nir_ssa_d
                               nir_fsub(b, edge1, edge0)));
 
    /* result = t * t * (3 - 2 * t) */
-   return nir_fmul(b, t, nir_fmul(b, t, nir_fsub(b, f3, nir_fmul(b, f2, t))));
+   return nir_fmul(b, t, nir_fmul(b, t, nir_a_minus_bc(b, f3, f2, t)));
 }
 
 nir_ssa_def*
@@ -226,12 +217,34 @@ nir_atan(nir_builder *b, nir_ssa_def *y_over_x)
       build_fsum(b, polynomial_terms, ARRAY_SIZE(polynomial_terms));
 
    /* range-reduction fixup */
-   tmp = nir_fadd(b, tmp,
-                  nir_fmul(b, nir_b2f(b, nir_flt(b, one, abs_y_over_x), bit_size),
-                           nir_fadd_imm(b, nir_fmul_imm(b, tmp, -2.0f), M_PI_2)));
+   tmp = nir_ffma(b,
+                  nir_b2fN(b, nir_flt(b, one, abs_y_over_x), bit_size),
+                  nir_ffma_imm12(b, tmp, -2.0f, M_PI_2),
+                  tmp);
 
    /* sign fixup */
-   return nir_fmul(b, tmp, nir_fsign(b, y_over_x));
+   nir_ssa_def *result = nir_fmul(b, tmp, nir_fsign(b, y_over_x));
+
+   /* The fmin and fmax above will filter out NaN values.  This leads to
+    * non-NaN results for NaN inputs.  Work around this by doing
+    *
+    *    !isnan(y_over_x) ? ... : y_over_x;
+    */
+   if (b->exact ||
+       nir_is_float_control_signed_zero_inf_nan_preserve(b->shader->info.float_controls_execution_mode, bit_size)) {
+      const bool exact = b->exact;
+
+      b->exact = true;
+      nir_ssa_def *is_not_nan = nir_feq(b, y_over_x, y_over_x);
+      b->exact = exact;
+
+      /* The extra 1.0*y_over_x ensures that subnormal results are flushed to
+       * zero.
+       */
+      result = nir_bcsel(b, is_not_nan, result, nir_fmul_imm(b, y_over_x, 1.0));
+   }
+
+   return result;
 }
 
 nir_ssa_def *
@@ -272,8 +285,7 @@ nir_atan2(nir_builder *b, nir_ssa_def *y, nir_ssa_def *x)
     * 24-bit representation.
     */
    const double huge_val = bit_size >= 32 ? 1e18 : 16384;
-   nir_ssa_def *huge = nir_imm_floatN_t(b,  huge_val, bit_size);
-   nir_ssa_def *scale = nir_bcsel(b, nir_fge(b, nir_fabs(b, t), huge),
+   nir_ssa_def *scale = nir_bcsel(b, nir_fge_imm(b, nir_fabs(b, t), huge_val),
                                   nir_imm_floatN_t(b, 0.25, bit_size), one);
    nir_ssa_def *rcp_scaled_t = nir_frcp(b, nir_fmul(b, t, scale));
    nir_ssa_def *s_over_t = nir_fmul(b, nir_fmul(b, s, scale), rcp_scaled_t);
@@ -302,8 +314,7 @@ nir_atan2(nir_builder *b, nir_ssa_def *y, nir_ssa_def *x)
     * coordinate system.
     */
    nir_ssa_def *arc =
-      nir_fadd(b, nir_fmul_imm(b, nir_b2f(b, flip, bit_size), M_PI_2),
-                  nir_atan(b, tan));
+      nir_ffma_imm1(b, nir_b2fN(b, flip, bit_size), M_PI_2, nir_atan(b, tan));
 
    /* Rather convoluted calculation of the sign of the result.  When x < 0 we
     * cannot use fsign because we need to be able to distinguish between
@@ -344,7 +355,7 @@ nir_get_texture_size(nir_builder *b, nir_tex_instr *tex)
    txs->is_new_style_shadow = tex->is_new_style_shadow;
    txs->texture_index = tex->texture_index;
    txs->sampler_index = tex->sampler_index;
-   txs->dest_type = nir_type_int;
+   txs->dest_type = nir_type_int32;
 
    unsigned idx = 0;
    for (unsigned i = 0; i < tex->num_srcs; i++) {
@@ -354,17 +365,16 @@ nir_get_texture_size(nir_builder *b, nir_tex_instr *tex)
           tex->src[i].src_type == nir_tex_src_sampler_offset ||
           tex->src[i].src_type == nir_tex_src_texture_handle ||
           tex->src[i].src_type == nir_tex_src_sampler_handle) {
-         nir_src_copy(&txs->src[idx].src, &tex->src[i].src, txs);
+         nir_src_copy(&txs->src[idx].src, &tex->src[i].src, &txs->instr);
          txs->src[idx].src_type = tex->src[i].src_type;
          idx++;
       }
    }
    /* Add in an LOD because some back-ends require it */
-   txs->src[idx].src = nir_src_for_ssa(nir_imm_int(b, 0));
-   txs->src[idx].src_type = nir_tex_src_lod;
+   txs->src[idx] = nir_tex_src_for_ssa(nir_tex_src_lod, nir_imm_int(b, 0));
 
-   nir_ssa_dest_init(&txs->instr, &txs->dest,
-                     nir_tex_instr_dest_size(txs), 32, NULL);
+   nir_ssa_dest_init(&txs->instr, &txs->dest, nir_tex_instr_dest_size(txs),
+                     32);
    nir_builder_instr_insert(b, &txs->instr);
 
    return &txs->dest.ssa;
@@ -398,7 +408,7 @@ nir_get_texture_lod(nir_builder *b, nir_tex_instr *tex)
    tql->is_new_style_shadow = tex->is_new_style_shadow;
    tql->texture_index = tex->texture_index;
    tql->sampler_index = tex->sampler_index;
-   tql->dest_type = nir_type_float;
+   tql->dest_type = nir_type_float32;
 
    unsigned idx = 0;
    for (unsigned i = 0; i < tex->num_srcs; i++) {
@@ -409,13 +419,13 @@ nir_get_texture_lod(nir_builder *b, nir_tex_instr *tex)
           tex->src[i].src_type == nir_tex_src_sampler_offset ||
           tex->src[i].src_type == nir_tex_src_texture_handle ||
           tex->src[i].src_type == nir_tex_src_sampler_handle) {
-         nir_src_copy(&tql->src[idx].src, &tex->src[i].src, tql);
+         nir_src_copy(&tql->src[idx].src, &tex->src[i].src, &tql->instr);
          tql->src[idx].src_type = tex->src[i].src_type;
          idx++;
       }
    }
 
-   nir_ssa_dest_init(&tql->instr, &tql->dest, 2, 32, NULL);
+   nir_ssa_dest_init(&tql->instr, &tql->dest, 2, 32);
    nir_builder_instr_insert(b, &tql->instr);
 
    /* The LOD is the y component of the result */

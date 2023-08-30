@@ -37,13 +37,13 @@ nv50_constbufs_validate(struct nv50_context *nv50)
    struct nouveau_pushbuf *push = nv50->base.pushbuf;
    unsigned s;
 
-   for (s = 0; s < 3; ++s) {
+   for (s = 0; s < NV50_MAX_3D_SHADER_STAGES; ++s) {
       unsigned p;
 
-      if (s == PIPE_SHADER_FRAGMENT)
+      if (s == NV50_SHADER_STAGE_FRAGMENT)
          p = NV50_3D_SET_PROGRAM_CB_PROGRAM_FRAGMENT;
       else
-      if (s == PIPE_SHADER_GEOMETRY)
+      if (s == NV50_SHADER_STAGE_GEOMETRY)
          p = NV50_3D_SET_PROGRAM_CB_PROGRAM_GEOMETRY;
       else
          p = NV50_3D_SET_PROGRAM_CB_PROGRAM_VERTEX;
@@ -109,6 +109,11 @@ nv50_constbufs_validate(struct nv50_context *nv50)
          }
       }
    }
+
+   /* Invalidate all COMPUTE constbufs because they are aliased with 3D. */
+   nv50->dirty_cp |= NV50_NEW_CP_CONSTBUF;
+   nv50->constbuf_dirty[NV50_SHADER_STAGE_COMPUTE] |= nv50->constbuf_valid[NV50_SHADER_STAGE_COMPUTE];
+   nv50->state.uniform_buffer_bound[NV50_SHADER_STAGE_COMPUTE] = false;
 }
 
 static bool
@@ -123,6 +128,7 @@ nv50_program_validate(struct nv50_context *nv50, struct nv50_program *prog)
    if (prog->mem)
       return true;
 
+   simple_mtx_assert_locked(&nv50->screen->state_lock);
    return nv50_program_upload_code(nv50, prog);
 }
 
@@ -712,7 +718,7 @@ nv50_stream_output_validate(struct nv50_context *nv50)
          PUSH_DATA(push, targ->pipe.buffer_size);
          if (!targ->clean) {
             assert(targ->pq);
-            nv50_hw_query_pushbuf_submit(push, NVA0_3D_STRMOUT_OFFSET(i),
+            nv50_hw_query_pushbuf_submit(nv50, NVA0_3D_STRMOUT_OFFSET(i),
                                          nv50_query(targ->pq), 0x4);
          } else {
             BEGIN_NV04(push, NVA0_3D(STRMOUT_OFFSET(i)), 1);

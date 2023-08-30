@@ -120,10 +120,10 @@ static void sort_cpb(struct rvce_encoder *enc)
 	struct rvce_cpb_slot *i, *l0 = NULL, *l1 = NULL;
 
 	LIST_FOR_EACH_ENTRY(i, &enc->cpb_slots, list) {
-		if (i->frame_num == enc->pic.ref_idx_l0)
+		if (i->frame_num == enc->pic.ref_idx_l0_list[0])
 			l0 = i;
 
-		if (i->frame_num == enc->pic.ref_idx_l1)
+		if (i->frame_num == enc->pic.ref_idx_l1_list[0])
 			l1 = i;
 
 		if (enc->pic.picture_type == PIPE_H2645_ENC_PICTURE_TYPE_P && l0)
@@ -204,7 +204,7 @@ static unsigned get_cpb_num(struct rvce_encoder *enc)
  */
 struct rvce_cpb_slot *current_slot(struct rvce_encoder *enc)
 {
-	return LIST_ENTRY(struct rvce_cpb_slot, enc->cpb_slots.prev, list);
+	return list_entry(enc->cpb_slots.prev, struct rvce_cpb_slot, list);
 }
 
 /**
@@ -212,7 +212,7 @@ struct rvce_cpb_slot *current_slot(struct rvce_encoder *enc)
  */
 struct rvce_cpb_slot *l0_slot(struct rvce_encoder *enc)
 {
-	return LIST_ENTRY(struct rvce_cpb_slot, enc->cpb_slots.next, list);
+	return list_entry(enc->cpb_slots.next, struct rvce_cpb_slot, list);
 }
 
 /**
@@ -220,7 +220,7 @@ struct rvce_cpb_slot *l0_slot(struct rvce_encoder *enc)
  */
 struct rvce_cpb_slot *l1_slot(struct rvce_encoder *enc)
 {
-	return LIST_ENTRY(struct rvce_cpb_slot, enc->cpb_slots.next->next, list);
+	return list_entry(enc->cpb_slots.next->next, struct rvce_cpb_slot, list);
 }
 
 /**
@@ -270,7 +270,7 @@ static void rvce_begin_frame(struct pipe_video_codec *encoder,
 	struct pipe_h264_enc_picture_desc *pic = (struct pipe_h264_enc_picture_desc *)picture;
 
 	bool need_rate_control =
-		enc->pic.rate_ctrl.rate_ctrl_method != pic->rate_ctrl.rate_ctrl_method ||
+		enc->pic.rate_ctrl[0].rate_ctrl_method != pic->rate_ctrl[0].rate_ctrl_method ||
 		enc->pic.quant_i_frames != pic->quant_i_frames ||
 		enc->pic.quant_p_frames != pic->quant_p_frames ||
 		enc->pic.quant_b_frames != pic->quant_b_frames;
@@ -334,8 +334,9 @@ static void rvce_end_frame(struct pipe_video_codec *encoder,
 			   struct pipe_picture_desc *picture)
 {
 	struct rvce_encoder *enc = (struct rvce_encoder*)encoder;
-	struct rvce_cpb_slot *slot = LIST_ENTRY(
-		struct rvce_cpb_slot, enc->cpb_slots.prev, list);
+	struct rvce_cpb_slot *slot = list_entry(enc->cpb_slots.prev,
+	                                        struct rvce_cpb_slot,
+	                                        list);
 
 	if (!enc->dual_inst || enc->bs_idx > 1)
 		flush(enc);
@@ -357,7 +358,7 @@ static void rvce_get_feedback(struct pipe_video_codec *encoder,
 	struct rvid_buffer *fb = feedback;
 
 	if (size) {
-		uint32_t *ptr = enc->ws->buffer_map(
+		uint32_t *ptr = enc->ws->buffer_map(enc->ws,
 			fb->res->buf, &enc->cs,
 			PIPE_MAP_READ_WRITE | RADEON_MAP_TEMPORARY);
 
@@ -367,7 +368,7 @@ static void rvce_get_feedback(struct pipe_video_codec *encoder,
 			*size = 0;
 		}
 
-		enc->ws->buffer_unmap(fb->res->buf);
+		enc->ws->buffer_unmap(enc->ws, fb->res->buf);
 	}
 	//dump_feedback(enc, fb);
 	rvid_destroy_buffer(fb);
@@ -415,8 +416,7 @@ struct pipe_video_codec *rvce_create_encoder(struct pipe_context *context,
 	if (!enc)
 		return NULL;
 
-	if (rscreen->info.drm_minor >= 42)
-		enc->use_vui = true;
+	enc->use_vui = true;
 
 	enc->base = *templ;
 	enc->base.context = context;
@@ -432,7 +432,7 @@ struct pipe_video_codec *rvce_create_encoder(struct pipe_context *context,
 	enc->screen = context->screen;
 	enc->ws = ws;
 
-	if (!ws->cs_create(&enc->cs, rctx->ctx, RING_VCE, rvce_cs_flush, enc, false)) {
+	if (!ws->cs_create(&enc->cs, rctx->ctx, AMD_IP_VCE, rvce_cs_flush, enc, false)) {
 		RVID_ERR("Can't get command submission context.\n");
 		goto error;
 	}
@@ -513,13 +513,13 @@ bool rvce_is_fw_version_supported(struct r600_common_screen *rscreen)
  * Add the buffer as relocation to the current command submission
  */
 void rvce_add_buffer(struct rvce_encoder *enc, struct pb_buffer *buf,
-                     enum radeon_bo_usage usage, enum radeon_bo_domain domain,
+                     unsigned usage, enum radeon_bo_domain domain,
                      signed offset)
 {
 	int reloc_idx;
 
 	reloc_idx = enc->ws->cs_add_buffer(&enc->cs, buf, usage | RADEON_USAGE_SYNCHRONIZED,
-					   domain, 0);
+					   domain);
 	if (enc->use_vm) {
 		uint64_t addr;
 		addr = enc->ws->buffer_get_virtual_address(buf);

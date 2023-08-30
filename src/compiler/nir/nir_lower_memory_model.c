@@ -44,16 +44,8 @@ get_intrinsic_info(nir_intrinsic_instr *intrin, nir_variable_mode *modes,
       *modes = nir_src_as_deref(intrin->src[0])->modes;
       *writes = true;
       break;
-   case nir_intrinsic_image_deref_atomic_add:
-   case nir_intrinsic_image_deref_atomic_umin:
-   case nir_intrinsic_image_deref_atomic_imin:
-   case nir_intrinsic_image_deref_atomic_umax:
-   case nir_intrinsic_image_deref_atomic_imax:
-   case nir_intrinsic_image_deref_atomic_and:
-   case nir_intrinsic_image_deref_atomic_or:
-   case nir_intrinsic_image_deref_atomic_xor:
-   case nir_intrinsic_image_deref_atomic_exchange:
-   case nir_intrinsic_image_deref_atomic_comp_swap:
+   case nir_intrinsic_image_deref_atomic:
+   case nir_intrinsic_image_deref_atomic_swap:
       *modes = nir_src_as_deref(intrin->src[0])->modes;
       *reads = true;
       *writes = true;
@@ -66,16 +58,8 @@ get_intrinsic_info(nir_intrinsic_instr *intrin, nir_variable_mode *modes,
       *modes = nir_var_mem_ssbo;
       *writes = true;
       break;
-   case nir_intrinsic_ssbo_atomic_add:
-   case nir_intrinsic_ssbo_atomic_imin:
-   case nir_intrinsic_ssbo_atomic_umin:
-   case nir_intrinsic_ssbo_atomic_imax:
-   case nir_intrinsic_ssbo_atomic_umax:
-   case nir_intrinsic_ssbo_atomic_and:
-   case nir_intrinsic_ssbo_atomic_or:
-   case nir_intrinsic_ssbo_atomic_xor:
-   case nir_intrinsic_ssbo_atomic_exchange:
-   case nir_intrinsic_ssbo_atomic_comp_swap:
+   case nir_intrinsic_ssbo_atomic:
+   case nir_intrinsic_ssbo_atomic_swap:
       *modes = nir_var_mem_ssbo;
       *reads = true;
       *writes = true;
@@ -88,16 +72,8 @@ get_intrinsic_info(nir_intrinsic_instr *intrin, nir_variable_mode *modes,
       *modes = nir_var_mem_global;
       *writes = true;
       break;
-   case nir_intrinsic_global_atomic_add:
-   case nir_intrinsic_global_atomic_imin:
-   case nir_intrinsic_global_atomic_umin:
-   case nir_intrinsic_global_atomic_imax:
-   case nir_intrinsic_global_atomic_umax:
-   case nir_intrinsic_global_atomic_and:
-   case nir_intrinsic_global_atomic_or:
-   case nir_intrinsic_global_atomic_xor:
-   case nir_intrinsic_global_atomic_exchange:
-   case nir_intrinsic_global_atomic_comp_swap:
+   case nir_intrinsic_global_atomic:
+   case nir_intrinsic_global_atomic_swap:
       *modes = nir_var_mem_global;
       *reads = true;
       *writes = true;
@@ -110,16 +86,8 @@ get_intrinsic_info(nir_intrinsic_instr *intrin, nir_variable_mode *modes,
       *modes = nir_src_as_deref(intrin->src[0])->modes;
       *writes = true;
       break;
-   case nir_intrinsic_deref_atomic_add:
-   case nir_intrinsic_deref_atomic_imin:
-   case nir_intrinsic_deref_atomic_umin:
-   case nir_intrinsic_deref_atomic_imax:
-   case nir_intrinsic_deref_atomic_umax:
-   case nir_intrinsic_deref_atomic_and:
-   case nir_intrinsic_deref_atomic_or:
-   case nir_intrinsic_deref_atomic_xor:
-   case nir_intrinsic_deref_atomic_exchange:
-   case nir_intrinsic_deref_atomic_comp_swap:
+   case nir_intrinsic_deref_atomic:
+   case nir_intrinsic_deref_atomic_swap:
       *modes = nir_src_as_deref(intrin->src[0])->modes;
       *reads = true;
       *writes = true;
@@ -200,6 +168,7 @@ lower_make_visible(nir_cf_node *cf_node, uint32_t *cur_modes)
    }
    case nir_cf_node_loop: {
       nir_loop *loop = nir_cf_node_as_loop(cf_node);
+      assert(!nir_loop_has_continue_construct(loop));
       bool loop_progress;
       do {
          loop_progress = false;
@@ -239,6 +208,7 @@ lower_make_available(nir_cf_node *cf_node, uint32_t *cur_modes)
    }
    case nir_cf_node_loop: {
       nir_loop *loop = nir_cf_node_as_loop(cf_node);
+      assert(!nir_loop_has_continue_construct(loop));
       bool loop_progress;
       do {
          loop_progress = false;
@@ -259,7 +229,8 @@ nir_lower_memory_model(nir_shader *shader)
 {
    bool progress = false;
 
-   struct exec_list *cf_list = &nir_shader_get_entrypoint(shader)->body;
+   nir_function_impl *impl = nir_shader_get_entrypoint(shader);
+   struct exec_list *cf_list = &impl->body;
 
    uint32_t modes = 0;
    foreach_list_typed(nir_cf_node, cf_node, node, cf_list)
@@ -268,6 +239,11 @@ nir_lower_memory_model(nir_shader *shader)
    modes = 0;
    foreach_list_typed_reverse(nir_cf_node, cf_node, node, cf_list)
       progress |= lower_make_available(cf_node, &modes);
+
+   if (progress)
+      nir_metadata_preserve(impl, nir_metadata_block_index | nir_metadata_dominance);
+   else
+      nir_metadata_preserve(impl, nir_metadata_all);
 
    return progress;
 }

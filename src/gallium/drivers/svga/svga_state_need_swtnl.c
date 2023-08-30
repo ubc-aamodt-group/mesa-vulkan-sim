@@ -69,24 +69,24 @@ update_need_pipeline(struct svga_context *svga, uint64_t dirty)
    if (svga->curr.rast &&
        (svga->curr.rast->need_pipeline & (1 << svga->curr.reduced_prim))) {
       SVGA_DBG(DEBUG_SWTNL, "%s: rast need_pipeline (0x%x) & prim (0x%x)\n",
-                 __FUNCTION__,
+                 __func__,
                  svga->curr.rast->need_pipeline,
                  (1 << svga->curr.reduced_prim) );
       SVGA_DBG(DEBUG_SWTNL, "%s: rast need_pipeline tris (%s), lines (%s), points (%s)\n",
-                 __FUNCTION__,
+                 __func__,
                  svga->curr.rast->need_pipeline_tris_str,
                  svga->curr.rast->need_pipeline_lines_str,
                  svga->curr.rast->need_pipeline_points_str);
       need_pipeline = TRUE;
 
       switch (svga->curr.reduced_prim) {
-      case PIPE_PRIM_POINTS:
+      case MESA_PRIM_POINTS:
          reason = svga->curr.rast->need_pipeline_points_str;
          break;
-      case PIPE_PRIM_LINES:
+      case MESA_PRIM_LINES:
          reason = svga->curr.rast->need_pipeline_lines_str;
          break;
-      case PIPE_PRIM_TRIANGLES:
+      case MESA_PRIM_TRIANGLES:
          reason = svga->curr.rast->need_pipeline_tris_str;
          break;
       default:
@@ -97,14 +97,14 @@ update_need_pipeline(struct svga_context *svga, uint64_t dirty)
    /* EDGEFLAGS
     */
     if (vs && vs->base.info.writes_edgeflag) {
-      SVGA_DBG(DEBUG_SWTNL, "%s: edgeflags\n", __FUNCTION__);
+      SVGA_DBG(DEBUG_SWTNL, "%s: edgeflags\n", __func__);
       need_pipeline = TRUE;
       reason = "edge flags";
    }
 
    /* SVGA_NEW_FS, SVGA_NEW_RAST, SVGA_NEW_REDUCED_PRIMITIVE
     */
-   if (svga->curr.rast && svga->curr.reduced_prim == PIPE_PRIM_POINTS) {
+   if (svga->curr.rast && svga->curr.reduced_prim == MESA_PRIM_POINTS) {
       unsigned sprite_coord_gen = svga->curr.rast->templ.sprite_coord_enable;
       unsigned generic_inputs =
          svga->curr.fs ? svga->curr.fs->generic_inputs : 0;
@@ -136,7 +136,7 @@ update_need_pipeline(struct svga_context *svga, uint64_t dirty)
 
    if (svga->state.sw.need_pipeline) {
       assert(reason);
-      pipe_debug_message(&svga->debug.callback, FALLBACK,
+      util_debug_message(&svga->debug.callback, FALLBACK,
                          "Using semi-fallback for %s", reason);
    }
 
@@ -183,7 +183,7 @@ update_need_swtnl(struct svga_context *svga, uint64_t dirty)
    if (need_swtnl != svga->state.sw.need_swtnl) {
       SVGA_DBG(DEBUG_SWTNL|DEBUG_PERF,
                "%s: need_swvfetch %s, need_pipeline %s\n",
-               __FUNCTION__,
+               __func__,
                svga->state.sw.need_swvfetch ? "true" : "false",
                svga->state.sw.need_pipeline ? "true" : "false");
 

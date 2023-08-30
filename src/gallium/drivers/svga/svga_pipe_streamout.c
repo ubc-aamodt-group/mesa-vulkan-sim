@@ -61,7 +61,7 @@ svga_define_stream_output(struct svga_context *svga,
 {
    unsigned i;
 
-   SVGA_DBG(DEBUG_STREAMOUT, "%s: id=%d\n", __FUNCTION__, soid);
+   SVGA_DBG(DEBUG_STREAMOUT, "%s: id=%d\n", __func__, soid);
    SVGA_DBG(DEBUG_STREAMOUT,
             "numOutputStreamEntires=%d\n", numOutputStreamEntries);
 
@@ -141,7 +141,7 @@ svga_create_stream_output(struct svga_context *svga,
    unsigned i;
    enum pipe_error ret;
    unsigned id;
-   ASSERTED unsigned maxDecls;
+   ASSERTED unsigned maxDecls = 0;
 
    assert(info->num_outputs <= PIPE_MAX_SO_OUTPUTS);
 
@@ -181,13 +181,13 @@ svga_create_stream_output(struct svga_context *svga,
    memset(dstOffset, 0, sizeof(dstOffset));
 
    SVGA_DBG(DEBUG_STREAMOUT, "%s: num_outputs=%d\n",
-            __FUNCTION__, info->num_outputs);
+            __func__, info->num_outputs);
 
    for (i = 0, numDecls = 0; i < info->num_outputs; i++, numDecls++) {
       unsigned reg_idx = info->output[i].register_index;
       unsigned buf_idx = info->output[i].output_buffer;
       const enum tgsi_semantic sem_name =
-         shader->info.output_semantic_name[reg_idx];
+         shader->tgsi_info.output_semantic_name[reg_idx];
 
       assert(buf_idx <= PIPE_MAX_SO_BUFFERS);
 
@@ -238,7 +238,7 @@ svga_create_stream_output(struct svga_context *svga,
           * Check if streaming out POSITION. If so, replace the
           * register index with the index for NON_ADJUSTED POSITION.
           */
-         decls[numDecls].registerIndex = shader->info.num_outputs;
+         decls[numDecls].registerIndex = shader->tgsi_info.num_outputs;
 
          /* Save this output index, so we can tell later if this stream output
           * includes an output of a vertex position
@@ -253,8 +253,8 @@ svga_create_stream_output(struct svga_context *svga,
           * clip planes.
           */
          decls[numDecls].registerIndex =
-            shader->info.num_outputs + 1 +
-            shader->info.output_semantic_index[reg_idx];
+            shader->tgsi_info.num_outputs + 1 +
+            shader->tgsi_info.output_semantic_index[reg_idx];
       }
       else {
          decls[numDecls].registerIndex = reg_idx;
@@ -305,7 +305,7 @@ svga_set_stream_output(struct svga_context *svga,
       return PIPE_OK;
    }
 
-   SVGA_DBG(DEBUG_STREAMOUT, "%s streamout=0x%x id=%d\n", __FUNCTION__,
+   SVGA_DBG(DEBUG_STREAMOUT, "%s streamout=0x%x id=%d\n", __func__,
             streamout, id);
 
    if (svga->current_so != streamout) {
@@ -342,7 +342,7 @@ svga_delete_stream_output(struct svga_context *svga,
 {
    struct svga_winsys_screen *sws = svga_screen(svga->pipe.screen)->sws;
 
-   SVGA_DBG(DEBUG_STREAMOUT, "%s streamout=0x%x\n", __FUNCTION__, streamout);
+   SVGA_DBG(DEBUG_STREAMOUT, "%s streamout=0x%x\n", __func__, streamout);
 
    assert(svga_have_vgpu10(svga));
    assert(streamout != NULL);
@@ -380,7 +380,7 @@ svga_create_stream_output_target(struct pipe_context *pipe,
    struct svga_context *svga = svga_context(pipe);
    struct svga_stream_output_target *sot;
 
-   SVGA_DBG(DEBUG_STREAMOUT, "%s offset=%d size=%d\n", __FUNCTION__,
+   SVGA_DBG(DEBUG_STREAMOUT, "%s offset=%d size=%d\n", __func__,
             buffer_offset, buffer_size);
 
    assert(svga_have_vgpu10(svga));
@@ -406,7 +406,7 @@ svga_destroy_stream_output_target(struct pipe_context *pipe,
 {
    struct svga_stream_output_target *sot = svga_stream_output_target(target);
 
-   SVGA_DBG(DEBUG_STREAMOUT, "%s\n", __FUNCTION__);
+   SVGA_DBG(DEBUG_STREAMOUT, "%s\n", __func__);
 
    pipe_resource_reference(&sot->base.buffer, NULL);
    FREE(sot);
@@ -424,7 +424,7 @@ svga_set_stream_output_targets(struct pipe_context *pipe,
    unsigned num_so_targets;
    boolean begin_so_queries = num_targets > 0;
 
-   SVGA_DBG(DEBUG_STREAMOUT, "%s num_targets=%d\n", __FUNCTION__,
+   SVGA_DBG(DEBUG_STREAMOUT, "%s num_targets=%d\n", __func__,
             num_targets);
 
    assert(svga_have_vgpu10(svga));
@@ -450,6 +450,7 @@ svga_set_stream_output_targets(struct pipe_context *pipe,
    for (i = 0; i < num_targets; i++) {
       struct svga_stream_output_target *sot
          = svga_stream_output_target(targets[i]);
+      struct svga_buffer *sbuf = svga_buffer(sot->base.buffer);
       unsigned size;
 
       svga->so_surfaces[i] = svga_buffer_handle(svga, sot->base.buffer,
@@ -457,6 +458,10 @@ svga_set_stream_output_targets(struct pipe_context *pipe,
 
       assert(svga_buffer(sot->base.buffer)->key.flags
              & SVGA3D_SURFACE_BIND_STREAM_OUTPUT);
+
+      /* Mark the buffer surface as RENDERED */
+      assert(sbuf->bufsurf);
+      sbuf->bufsurf->surface_state = SVGA_SURFACE_STATE_RENDERED;
 
       svga->so_targets[i] = &sot->base;
       if (offsets[i] == -1) {

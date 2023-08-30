@@ -1,8 +1,8 @@
 /**************************************************************************
- * 
+ *
  * Copyright 2007 VMware, Inc.
  * All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
  * "Software"), to deal in the Software without restriction, including
@@ -10,11 +10,11 @@
  * distribute, sub license, and/or sell copies of the Software, and to
  * permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice (including the
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
@@ -22,17 +22,19 @@
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- * 
+ *
  **************************************************************************/
 
 #ifndef PIPE_CONTEXT_H
 #define PIPE_CONTEXT_H
 
 #include "p_compiler.h"
-#include "p_format.h"
+#include "util/format/u_formats.h"
 #include "p_video_enums.h"
 #include "p_defines.h"
+#include "util/u_debug.h"
 #include <stdio.h>
+#include "frontend/winsys_handle.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -44,13 +46,14 @@ struct pipe_blend_state;
 struct pipe_blit_info;
 struct pipe_box;
 struct pipe_clip_state;
+struct pipe_compute_state_object_info;
 struct pipe_constant_buffer;
-struct pipe_debug_callback;
 struct pipe_depth_stencil_alpha_state;
 struct pipe_device_reset_callback;
 struct pipe_draw_info;
 struct pipe_draw_indirect_info;
-struct pipe_draw_start_count;
+struct pipe_draw_start_count_bias;
+struct pipe_draw_vertex_state_info;
 struct pipe_grid_info;
 struct pipe_fence_handle;
 struct pipe_framebuffer_state;
@@ -71,6 +74,7 @@ struct pipe_surface;
 struct pipe_transfer;
 struct pipe_vertex_buffer;
 struct pipe_vertex_element;
+struct pipe_vertex_state;
 struct pipe_video_buffer;
 struct pipe_video_codec;
 struct pipe_viewport_state;
@@ -79,6 +83,8 @@ union pipe_color_union;
 union pipe_query_result;
 struct u_log_context;
 struct u_upload_mgr;
+struct util_debug_callback;
+struct u_vbuf;
 
 /**
  * Gallium rendering context.  Basically:
@@ -91,6 +97,7 @@ struct pipe_context {
 
    void *priv;  /**< context private data (for DRI for example) */
    void *draw;  /**< private, for draw module (temporary?) */
+   struct u_vbuf *vbuf; /**< for cso_context, don't use in drivers */
 
    /**
     * Stream uploaders created by the driver. All drivers, gallium frontends, and
@@ -102,7 +109,13 @@ struct pipe_context {
    struct u_upload_mgr *stream_uploader; /* everything but shader constants */
    struct u_upload_mgr *const_uploader;  /* shader constants only */
 
-   void (*destroy)( struct pipe_context * );
+   /**
+    * Debug callback set by u_default_set_debug_callback. Frontends should use
+    * set_debug_callback in case drivers need to flush compiler queues.
+    */
+   struct util_debug_callback debug;
+
+   void (*destroy)(struct pipe_context *);
 
    /**
     * VBO drawing
@@ -120,7 +133,7 @@ struct pipe_context {
     * - PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS: Indirect draw count
     *
     * Differences against glMultiDraw and glMultiMode:
-    * - "info->mode" and "info->index_bias" are always constant due to the lack
+    * - "info->mode" and "draws->index_bias" are always constant due to the lack
     *   of hardware support and CPU performance concerns. Only start and count
     *   vary.
     * - if "info->increment_draw_id" is false, draw_id doesn't change between
@@ -131,15 +144,57 @@ struct pipe_context {
     *
     * \param pipe          context
     * \param info          draw info
+    * \param drawid_offset offset to add for drawid param of each draw
     * \param indirect      indirect multi draws
     * \param draws         array of (start, count) pairs for direct draws
     * \param num_draws     number of direct draws; 1 for indirect multi draws
     */
    void (*draw_vbo)(struct pipe_context *pipe,
                     const struct pipe_draw_info *info,
+                    unsigned drawid_offset,
                     const struct pipe_draw_indirect_info *indirect,
-                    const struct pipe_draw_start_count *draws,
+                    const struct pipe_draw_start_count_bias *draws,
                     unsigned num_draws);
+
+   /**
+    * Multi draw for display lists.
+    *
+    * For more information, see pipe_vertex_state and
+    * pipe_draw_vertex_state_info.
+    *
+    * Explanation of partial_vertex_mask:
+    *
+    * 1. pipe_vertex_state::input::elements have a monotonic logical index
+    *    determined by pipe_vertex_state::input::full_velem_mask, specifically,
+    *    the position of the i-th bit set is the logical index of the i-th
+    *    vertex element, up to 31.
+    *
+    * 2. pipe_vertex_state::input::partial_velem_mask is a subset of
+    *    full_velem_mask where the bits set determine which vertex elements
+    *    should be bound contiguously. The vertex elements corresponding to
+    *    the bits not set in partial_velem_mask should be ignored.
+    *
+    * Those two allow creating pipe_vertex_state that has more vertex
+    * attributes than the vertex shader has inputs. The idea is that
+    * pipe_vertex_state can be used with any vertex shader that has the same
+    * number of inputs and same logical indices or less. This may sound like
+    * an overly complicated way to bind a subset of vertex elements, but it
+    * actually simplifies everything else:
+    *
+    * - In st/mesa, full_velem_mask is exactly the mask of enabled vertex
+    *   attributes (VERT_ATTRIB_x) in the display list VAO, while
+    *   partial_velem_mask is exactly the inputs_read mask of the vertex
+    *   shader (also VERT_ATTRIB_x).
+    *
+    * - In the driver, some bit ops and popcnt is needed to assemble vertex
+    *   elements very quickly.
+    */
+   void (*draw_vertex_state)(struct pipe_context *ctx,
+                             struct pipe_vertex_state *state,
+                             uint32_t partial_velem_mask,
+                             struct pipe_draw_vertex_state_info info,
+                             const struct pipe_draw_start_count_bias *draws,
+                             unsigned num_draws);
    /*@}*/
 
    /**
@@ -148,18 +203,28 @@ struct pipe_context {
     * \param condition whether to skip on FALSE or TRUE query results
     * \param mode  one of PIPE_RENDER_COND_x
     */
-   void (*render_condition)( struct pipe_context *pipe,
-                             struct pipe_query *query,
-                             bool condition,
-                             enum pipe_render_cond_flag mode );
+   void (*render_condition)(struct pipe_context *pipe,
+                            struct pipe_query *query,
+                            bool condition,
+                            enum pipe_render_cond_flag mode);
 
+   /**
+    * Predicate subsequent rendering on a value in a buffer
+    * \param buffer The buffer to query for the value
+    * \param offset Offset in the buffer to query 32-bit
+    * \param condition whether to skip on FALSE or TRUE query results
+    */
+   void (*render_condition_mem)(struct pipe_context *pipe,
+                                struct pipe_resource *buffer,
+                                uint32_t offset,
+                                bool condition);
    /**
     * Query objects
     */
    /*@{*/
-   struct pipe_query *(*create_query)( struct pipe_context *pipe,
-                                       unsigned query_type,
-                                       unsigned index );
+   struct pipe_query *(*create_query)(struct pipe_context *pipe,
+                                      unsigned query_type,
+                                      unsigned index);
 
    /**
     * Create a query object that queries all given query types simultaneously.
@@ -176,9 +241,9 @@ struct pipe_context {
     * \param query_types array of \p num_queries query types
     * \return a query object, or NULL on error.
     */
-   struct pipe_query *(*create_batch_query)( struct pipe_context *pipe,
-                                             unsigned num_queries,
-                                             unsigned *query_types );
+   struct pipe_query *(*create_batch_query)(struct pipe_context *pipe,
+                                            unsigned num_queries,
+                                            unsigned *query_types);
 
    void (*destroy_query)(struct pipe_context *pipe,
                          struct pipe_query *q);
@@ -211,7 +276,7 @@ struct pipe_context {
     */
    void (*get_query_result_resource)(struct pipe_context *pipe,
                                      struct pipe_query *q,
-                                     bool wait,
+                                     enum pipe_query_flags flags,
                                      enum pipe_query_value_type result_type,
                                      int index,
                                      struct pipe_resource *resource,
@@ -261,12 +326,28 @@ struct pipe_context {
 
    bool (*is_intel_perf_query_ready)(struct pipe_context *pipe, struct pipe_query *q);
 
-   void (*get_intel_perf_query_data)(struct pipe_context *pipe,
+   bool (*get_intel_perf_query_data)(struct pipe_context *pipe,
                                      struct pipe_query *q,
                                      size_t data_size,
                                      uint32_t *data,
                                      uint32_t *bytes_written);
 
+   /*@}*/
+
+   /**
+    * \name GLSL shader/program functions.
+    */
+   /*@{*/
+   /**
+    * Called when a shader program is linked.
+    * \param handles  Array of shader handles attached to this program.
+    *                 The size of the array is \c PIPE_SHADER_TYPES, and each
+    *                 position contains the corresponding \c pipe_shader_state*
+    *                 or \c pipe_compute_state*, or \c NULL.
+    *                 E.g. You can retrieve the fragment shader handle with
+    *                      \c handles[PIPE_SHADER_FRAGMENT]
+    */
+   void (*link_shader)(struct pipe_context *, void** handles);
    /*@}*/
 
    /**
@@ -327,30 +408,49 @@ struct pipe_context {
    void   (*bind_vertex_elements_state)(struct pipe_context *, void *);
    void   (*delete_vertex_elements_state)(struct pipe_context *, void *);
 
+   void * (*create_ts_state)(struct pipe_context *,
+                             const struct pipe_shader_state *);
+   void   (*bind_ts_state)(struct pipe_context *, void *);
+   void   (*delete_ts_state)(struct pipe_context *, void *);
+
+   void * (*create_ms_state)(struct pipe_context *,
+                             const struct pipe_shader_state *);
+   void   (*bind_ms_state)(struct pipe_context *, void *);
+   void   (*delete_ms_state)(struct pipe_context *, void *);
    /*@}*/
 
    /**
     * Parameter-like state (or properties)
     */
    /*@{*/
-   void (*set_blend_color)( struct pipe_context *,
-                            const struct pipe_blend_color * );
+   void (*set_blend_color)(struct pipe_context *,
+                           const struct pipe_blend_color *);
 
-   void (*set_stencil_ref)( struct pipe_context *,
-                            const struct pipe_stencil_ref ref);
+   void (*set_stencil_ref)(struct pipe_context *,
+                           const struct pipe_stencil_ref ref);
 
-   void (*set_sample_mask)( struct pipe_context *,
-                            unsigned sample_mask );
+   void (*set_sample_mask)(struct pipe_context *,
+                           unsigned sample_mask);
 
-   void (*set_min_samples)( struct pipe_context *,
-                            unsigned min_samples );
+   void (*set_min_samples)(struct pipe_context *,
+                           unsigned min_samples);
 
-   void (*set_clip_state)( struct pipe_context *,
-                            const struct pipe_clip_state * );
+   void (*set_clip_state)(struct pipe_context *,
+                          const struct pipe_clip_state *);
 
-   void (*set_constant_buffer)( struct pipe_context *,
-                                enum pipe_shader_type shader, uint index,
-                                const struct pipe_constant_buffer *buf );
+   /**
+    * Set constant buffer
+    *
+    * \param shader           Shader stage
+    * \param index            Buffer binding slot index within a shader stage
+    * \param take_ownership   The callee takes ownership of the buffer reference.
+    *                         (the callee shouldn't increment the ref count)
+    * \param buf              Constant buffer parameters
+    */
+   void (*set_constant_buffer)(struct pipe_context *,
+                               enum pipe_shader_type shader, uint index,
+                               bool take_ownership,
+                               const struct pipe_constant_buffer *buf);
 
    /**
     * Set inlinable constants for constant buffer 0.
@@ -368,12 +468,12 @@ struct pipe_context {
     * There is no PIPE_CAP for this. Drivers shouldn't set the shader_info
     * fields if they don't want this or if they don't implement this.
     */
-   void (*set_inlinable_constants)( struct pipe_context *,
-                                    enum pipe_shader_type shader,
-                                    uint num_values, uint32_t *values );
+   void (*set_inlinable_constants)(struct pipe_context *,
+                                   enum pipe_shader_type shader,
+                                   uint num_values, uint32_t *values);
 
-   void (*set_framebuffer_state)( struct pipe_context *,
-                                  const struct pipe_framebuffer_state * );
+   void (*set_framebuffer_state)(struct pipe_context *,
+                                 const struct pipe_framebuffer_state *);
 
    /**
     * Set the sample locations used during rasterization. When NULL or sized
@@ -399,30 +499,32 @@ struct pipe_context {
     * The pixel grid is used to vary sample locations across pixels and its
     * size can be queried with get_sample_pixel_grid().
     */
-   void (*set_sample_locations)( struct pipe_context *,
-                                 size_t size, const uint8_t *locations );
+   void (*set_sample_locations)(struct pipe_context *,
+                                size_t size, const uint8_t *locations);
 
-   void (*set_polygon_stipple)( struct pipe_context *,
-                                const struct pipe_poly_stipple * );
+   void (*set_polygon_stipple)(struct pipe_context *,
+                               const struct pipe_poly_stipple *);
 
-   void (*set_scissor_states)( struct pipe_context *,
+   void (*set_scissor_states)(struct pipe_context *,
+                              unsigned start_slot,
+                              unsigned num_scissors,
+                              const struct pipe_scissor_state *);
+
+   void (*set_window_rectangles)(struct pipe_context *,
+                                 bool include,
+                                 unsigned num_rectangles,
+                                 const struct pipe_scissor_state *);
+
+   void (*set_viewport_states)(struct pipe_context *,
                                unsigned start_slot,
-                               unsigned num_scissors,
-                               const struct pipe_scissor_state * );
-
-   void (*set_window_rectangles)( struct pipe_context *,
-                                  bool include,
-                                  unsigned num_rectangles,
-                                  const struct pipe_scissor_state * );
-
-   void (*set_viewport_states)( struct pipe_context *,
-                                unsigned start_slot,
-                                unsigned num_viewports,
-                                const struct pipe_viewport_state *);
+                               unsigned num_viewports,
+                               const struct pipe_viewport_state *);
 
    void (*set_sampler_views)(struct pipe_context *,
                              enum pipe_shader_type shader,
                              unsigned start_slot, unsigned num_views,
+                             unsigned unbind_num_trailing_slots,
+                             bool take_ownership,
                              struct pipe_sampler_view **views);
 
    void (*set_tess_state)(struct pipe_context *,
@@ -430,11 +532,16 @@ struct pipe_context {
                           const float default_inner_level[2]);
 
    /**
+    * Set the number of vertices per input patch for tessellation.
+    */
+   void (*set_patch_vertices)(struct pipe_context *ctx, uint8_t patch_vertices);
+
+   /**
     * Sets the debug callback. If the pointer is null, then no callback is
     * set, otherwise a copy of the data should be made.
     */
    void (*set_debug_callback)(struct pipe_context *,
-                              const struct pipe_debug_callback *);
+                              const struct util_debug_callback *);
 
    /**
     * Bind an array of shader buffers that will be used by a shader.
@@ -481,6 +588,8 @@ struct pipe_context {
     * \param shader     selects shader stage
     * \param start_slot first image slot to bind.
     * \param count      number of consecutive images to bind.
+    * \param unbind_num_trailing_slots  number of images to unbind after
+    *                                   the bound slot
     * \param buffers    array of the images to bind, it
     *                   should contain at least \a count elements
     *                   unless it's NULL, in which case no images will
@@ -489,12 +598,26 @@ struct pipe_context {
    void (*set_shader_images)(struct pipe_context *,
                              enum pipe_shader_type shader,
                              unsigned start_slot, unsigned count,
+                             unsigned unbind_num_trailing_slots,
                              const struct pipe_image_view *images);
 
-   void (*set_vertex_buffers)( struct pipe_context *,
-                               unsigned start_slot,
-                               unsigned num_buffers,
-                               const struct pipe_vertex_buffer * );
+   /**
+    * Bind an array of vertex buffers to the specified slots.
+    *
+    * \param start_slot      first vertex buffer slot
+    * \param count           number of consecutive vertex buffers to bind.
+    * \param unbind_num_trailing_slots  unbind slots after the bound slots
+    * \param take_ownership the caller holds buffer references and they
+    *                        should be taken over by the callee. This means
+    *                        that drivers shouldn't increment reference counts.
+    * \param buffers         array of the buffers to bind
+    */
+   void (*set_vertex_buffers)(struct pipe_context *,
+                              unsigned start_slot,
+                              unsigned num_buffers,
+                              unsigned unbind_num_trailing_slots,
+                              bool take_ownership,
+                              const struct pipe_vertex_buffer *);
 
    /*@}*/
 
@@ -723,25 +846,35 @@ struct pipe_context {
     *
     * out_transfer will contain the transfer object that must be passed
     * to all the other transfer functions. It also contains useful
-    * information (like texture strides).
+    * information (like texture strides for texture_map).
     */
-   void *(*transfer_map)(struct pipe_context *,
-                         struct pipe_resource *resource,
-                         unsigned level,
-                         unsigned usage,  /* a combination of PIPE_MAP_x */
-                         const struct pipe_box *,
-                         struct pipe_transfer **out_transfer);
+   void *(*buffer_map)(struct pipe_context *,
+                       struct pipe_resource *resource,
+                       unsigned level,
+                       unsigned usage,  /* a combination of PIPE_MAP_x */
+                       const struct pipe_box *,
+                       struct pipe_transfer **out_transfer);
 
    /* If transfer was created with WRITE|FLUSH_EXPLICIT, only the
     * regions specified with this call are guaranteed to be written to
     * the resource.
     */
-   void (*transfer_flush_region)( struct pipe_context *,
-				  struct pipe_transfer *transfer,
-				  const struct pipe_box *);
+   void (*transfer_flush_region)(struct pipe_context *,
+                                 struct pipe_transfer *transfer,
+                                 const struct pipe_box *);
 
-   void (*transfer_unmap)(struct pipe_context *,
-                          struct pipe_transfer *transfer);
+   void (*buffer_unmap)(struct pipe_context *,
+                        struct pipe_transfer *transfer);
+
+   void *(*texture_map)(struct pipe_context *,
+                        struct pipe_resource *resource,
+                        unsigned level,
+                        unsigned usage,  /* a combination of PIPE_MAP_x */
+                        const struct pipe_box *,
+                        struct pipe_transfer **out_transfer);
+
+   void (*texture_unmap)(struct pipe_context *,
+                         struct pipe_transfer *transfer);
 
    /* One-shot transfer operation with data supplied in a user
     * pointer.
@@ -760,7 +893,7 @@ struct pipe_context {
                            const struct pipe_box *,
                            const void *data,
                            unsigned stride,
-                           unsigned layer_stride);
+                           uintptr_t layer_stride);
 
    /**
     * Flush any pending framebuffer writes and invalidate texture caches.
@@ -788,14 +921,14 @@ struct pipe_context {
    /**
     * Creates a video codec for a specific video format/profile
     */
-   struct pipe_video_codec *(*create_video_codec)( struct pipe_context *context,
-                                                   const struct pipe_video_codec *templat );
+   struct pipe_video_codec *(*create_video_codec)(struct pipe_context *context,
+                                                  const struct pipe_video_codec *templat);
 
    /**
     * Creates a video buffer as decoding target
     */
-   struct pipe_video_buffer *(*create_video_buffer)( struct pipe_context *context,
-                                                     const struct pipe_video_buffer *templat );
+   struct pipe_video_buffer *(*create_video_buffer)(struct pipe_context *context,
+                                                    const struct pipe_video_buffer *templat);
 
    /**
     * Compute kernel execution
@@ -806,9 +939,12 @@ struct pipe_context {
     * pipe_context::launch_grid.
     */
    void *(*create_compute_state)(struct pipe_context *context,
-				 const struct pipe_compute_state *);
+                                 const struct pipe_compute_state *);
    void (*bind_compute_state)(struct pipe_context *, void *);
    void (*delete_compute_state)(struct pipe_context *, void *);
+
+   void (*get_compute_state_info)(struct pipe_context *, void *,
+                                  struct pipe_compute_state_object_info *);
 
    /**
     * Bind an array of shader resources that will be used by the
@@ -868,6 +1004,26 @@ struct pipe_context {
     */
    void (*launch_grid)(struct pipe_context *context,
                        const struct pipe_grid_info *info);
+
+   void (*draw_mesh_tasks)(struct pipe_context *context,
+                           const struct pipe_grid_info *info);
+   /*@}*/
+
+   /**
+    * SVM (Share Virtual Memory) helpers
+    */
+   /*@{*/
+   /**
+    * Migrate range of virtual address to device or host memory.
+    *
+    * \param to_device - true if the virtual memory is migrated to the device
+    *                    false if the virtual memory is migrated to the host
+    * \param content_undefined - whether the content of the migrated memory
+    *                            is undefined after migration
+    */
+   void (*svm_migrate)(struct pipe_context *context, unsigned num_ptrs,
+                       const void* const* ptrs, const size_t *sizes,
+                       bool to_device, bool content_undefined);
    /*@}*/
 
    /**
@@ -1048,6 +1204,23 @@ struct pipe_context {
    void (*set_context_param)(struct pipe_context *ctx,
                              enum pipe_context_param param,
                              unsigned value);
+
+   /**
+    * Creates a video buffer as decoding target, with modifiers.
+    */
+   struct pipe_video_buffer *(*create_video_buffer_with_modifiers)(struct pipe_context *context,
+                                                                   const struct pipe_video_buffer *templat,
+                                                                   const uint64_t *modifiers,
+                                                                   unsigned int modifiers_count);
+
+   /**
+    * Creates a video buffer as decoding target, from external memory
+    */
+   struct pipe_video_buffer *(*video_buffer_from_handle)( struct pipe_context *context,
+                                                     const struct pipe_video_buffer *templat,
+                                                     struct winsys_handle *handle,
+                                                     unsigned usage );
+
 };
 
 

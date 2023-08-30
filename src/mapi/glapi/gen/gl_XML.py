@@ -24,8 +24,6 @@
 # Authors:
 #    Ian Romanick <idr@us.ibm.com>
 
-from __future__ import print_function
-
 from collections import OrderedDict
 from decimal import Decimal
 import xml.etree.ElementTree as ET
@@ -510,7 +508,10 @@ class gl_parameter(object):
 
 
     def string(self):
-        return self.type_expr.original_string + " " + self.name
+        if self.type_expr.original_string[-1] == '*':
+            return self.type_expr.original_string + self.name
+        else:
+            return self.type_expr.original_string + " " + self.name
 
 
     def type_string(self):
@@ -617,6 +618,7 @@ class gl_function( gl_item ):
         self.initialized = 0
         self.images = []
         self.exec_flavor = 'mesa'
+        self.has_hw_select_variant = False
         self.desktop = True
         self.deprecated = None
         self.has_no_error_variant = False
@@ -653,6 +655,13 @@ class gl_function( gl_item ):
         name = element.get( "name" )
         alias = element.get( "alias" )
 
+        # marshal isn't allowed with alias
+        assert not alias or not element.get('marshal')
+        assert not alias or not element.get('marshal_count')
+        assert not alias or not element.get('marshal_sync')
+        assert not alias or not element.get('marshal_call_before')
+        assert not alias or not element.get('marshal_call_after')
+
         if name in static_data.functions:
             self.static_entry_points.append(name)
 
@@ -688,6 +697,8 @@ class gl_function( gl_item ):
         else:
             true_name = name
 
+            self.has_hw_select_variant = exec_flavor == 'beginend' and name[0:6] == 'Vertex'
+
             # Only try to set the offset when a non-alias entry-point
             # is being processed.
 
@@ -699,7 +710,7 @@ class gl_function( gl_item ):
             else:
                 if self.exec_flavor != "skip":
                     raise RuntimeError("Entry-point %s is missing offset in static_data.py. Add one at the bottom of the list." % (name))
-                self.assign_offset = self.exec_flavor != "skip" or name in static_data.unused_functions
+                self.assign_offset = False
 
         if not self.name:
             self.name = true_name

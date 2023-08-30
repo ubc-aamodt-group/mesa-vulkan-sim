@@ -31,8 +31,6 @@
 #ifndef EGLSURFACE_INCLUDED
 #define EGLSURFACE_INCLUDED
 
-#include "c99_compat.h"
-
 #include "egltypedefs.h"
 #include "egldisplay.h"
 
@@ -170,6 +168,8 @@ struct _egl_surface
    EGLBoolean PostSubBufferSupportedNV;
 
    EGLBoolean ProtectedContent;
+
+   EGLBoolean PresentOpaque;
 
    struct _egl_hdr_metadata HdrMetadata;
 

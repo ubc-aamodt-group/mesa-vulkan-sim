@@ -1,5 +1,5 @@
 /*
- * Copyright © 2020 Raspberry Pi
+ * Copyright © 2020 Raspberry Pi Ltd
  * based on intel anv code:
  * Copyright © 2015 Intel Corporation
 
@@ -25,15 +25,36 @@
 
 #include "v3dv_private.h"
 #include "drm-uapi/drm_fourcc.h"
-#include "vk_format_info.h"
+#include "wsi_common_entrypoints.h"
 #include "vk_util.h"
 #include "wsi_common.h"
+#include "wsi_common_drm.h"
 
-static PFN_vkVoidFunction
+static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
 v3dv_wsi_proc_addr(VkPhysicalDevice physicalDevice, const char *pName)
 {
-   V3DV_FROM_HANDLE(v3dv_physical_device, physical_device, physicalDevice);
-   return v3dv_lookup_entrypoint(&physical_device->devinfo, pName);
+   V3DV_FROM_HANDLE(v3dv_physical_device, pdevice, physicalDevice);
+   return vk_instance_get_proc_addr_unchecked(pdevice->vk.instance, pName);
+}
+
+static bool
+v3dv_wsi_can_present_on_device(VkPhysicalDevice _pdevice, int fd)
+{
+   V3DV_FROM_HANDLE(v3dv_physical_device, pdevice, _pdevice);
+
+   /* There are some instances with direct display extensions where this may be
+    * called before we have ever tried to create a swapchain, and therefore,
+    * before we have ever tried to acquire the display device, in which case we
+    * have to do it now.
+    */
+   if (unlikely(pdevice->display_fd < 0 && pdevice->master_fd >= 0)) {
+      VkResult result =
+         v3dv_physical_device_acquire_display(pdevice, NULL);
+      if (result != VK_SUCCESS)
+         return false;
+   }
+
+   return wsi_common_drm_devices_equal(fd, pdevice->display_fd);
 }
 
 VkResult
@@ -44,13 +65,18 @@ v3dv_wsi_init(struct v3dv_physical_device *physical_device)
    result = wsi_device_init(&physical_device->wsi_device,
                             v3dv_physical_device_to_handle(physical_device),
                             v3dv_wsi_proc_addr,
-                            &physical_device->instance->alloc,
-                            physical_device->master_fd, NULL, false);
+                            &physical_device->vk.instance->alloc,
+                            physical_device->master_fd, NULL,
+                            &(struct wsi_device_options){.sw_device = false});
 
    if (result != VK_SUCCESS)
       return result;
 
    physical_device->wsi_device.supports_modifiers = true;
+   physical_device->wsi_device.can_present_on_device =
+      v3dv_wsi_can_present_on_device;
+
+   physical_device->vk.wsi_device = &physical_device->wsi_device;
 
    return VK_SUCCESS;
 }
@@ -58,36 +84,9 @@ v3dv_wsi_init(struct v3dv_physical_device *physical_device)
 void
 v3dv_wsi_finish(struct v3dv_physical_device *physical_device)
 {
+   physical_device->vk.wsi_device = NULL;
    wsi_device_finish(&physical_device->wsi_device,
-                     &physical_device->instance->alloc);
-}
-
-void v3dv_DestroySurfaceKHR(
-    VkInstance                                   _instance,
-    VkSurfaceKHR                                 _surface,
-    const VkAllocationCallbacks*                 pAllocator)
-{
-   V3DV_FROM_HANDLE(v3dv_instance, instance, _instance);
-   ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, _surface);
-
-   if (!surface)
-      return;
-
-   vk_free2(&instance->alloc, pAllocator, surface);
-}
-
-VkResult v3dv_GetPhysicalDeviceSurfaceSupportKHR(
-    VkPhysicalDevice                            physicalDevice,
-    uint32_t                                    queueFamilyIndex,
-    VkSurfaceKHR                                surface,
-    VkBool32*                                   pSupported)
-{
-   V3DV_FROM_HANDLE(v3dv_physical_device, device, physicalDevice);
-
-   return wsi_common_get_surface_support(&device->wsi_device,
-                                         queueFamilyIndex,
-                                         surface,
-                                         pSupported);
+                     &physical_device->vk.instance->alloc);
 }
 
 static void
@@ -104,217 +103,56 @@ constraint_surface_capabilities(VkSurfaceCapabilitiesKHR *caps)
    caps->supportedUsageFlags &= ~VK_IMAGE_USAGE_SAMPLED_BIT;
 }
 
-VkResult v3dv_GetPhysicalDeviceSurfaceCapabilitiesKHR(
+VKAPI_ATTR VkResult VKAPI_CALL
+v3dv_GetPhysicalDeviceSurfaceCapabilitiesKHR(
     VkPhysicalDevice                            physicalDevice,
     VkSurfaceKHR                                surface,
     VkSurfaceCapabilitiesKHR*                   pSurfaceCapabilities)
 {
-   V3DV_FROM_HANDLE(v3dv_physical_device, device, physicalDevice);
-
    VkResult result;
-   result = wsi_common_get_surface_capabilities(&device->wsi_device,
-                                                surface,
-                                                pSurfaceCapabilities);
+   result = wsi_GetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice,
+                                                        surface,
+                                                        pSurfaceCapabilities);
    constraint_surface_capabilities(pSurfaceCapabilities);
    return result;
 }
 
-VkResult v3dv_GetPhysicalDeviceSurfaceCapabilities2KHR(
+VKAPI_ATTR VkResult VKAPI_CALL
+v3dv_GetPhysicalDeviceSurfaceCapabilities2KHR(
     VkPhysicalDevice                            physicalDevice,
     const VkPhysicalDeviceSurfaceInfo2KHR*      pSurfaceInfo,
     VkSurfaceCapabilities2KHR*                  pSurfaceCapabilities)
 {
-   V3DV_FROM_HANDLE(v3dv_physical_device, device, physicalDevice);
-
    VkResult result;
-   result = wsi_common_get_surface_capabilities2(&device->wsi_device,
-                                                 pSurfaceInfo,
-                                                 pSurfaceCapabilities);
+   result = wsi_GetPhysicalDeviceSurfaceCapabilities2KHR(physicalDevice,
+                                                         pSurfaceInfo,
+                                                         pSurfaceCapabilities);
    constraint_surface_capabilities(&pSurfaceCapabilities->surfaceCapabilities);
    return result;
 }
 
-VkResult v3dv_GetPhysicalDeviceSurfaceFormatsKHR(
-    VkPhysicalDevice                            physicalDevice,
-    VkSurfaceKHR                                surface,
-    uint32_t*                                   pSurfaceFormatCount,
-    VkSurfaceFormatKHR*                         pSurfaceFormats)
-{
-   V3DV_FROM_HANDLE(v3dv_physical_device, device, physicalDevice);
-
-   return wsi_common_get_surface_formats(&device->wsi_device, surface,
-                                         pSurfaceFormatCount, pSurfaceFormats);
-}
-
-VkResult v3dv_GetPhysicalDeviceSurfaceFormats2KHR(
-    VkPhysicalDevice                            physicalDevice,
-    const VkPhysicalDeviceSurfaceInfo2KHR*      pSurfaceInfo,
-    uint32_t*                                   pSurfaceFormatCount,
-    VkSurfaceFormat2KHR*                        pSurfaceFormats)
-{
-   V3DV_FROM_HANDLE(v3dv_physical_device, device, physicalDevice);
-
-   return wsi_common_get_surface_formats2(&device->wsi_device, pSurfaceInfo,
-                                          pSurfaceFormatCount, pSurfaceFormats);
-}
-
-VkResult v3dv_GetPhysicalDeviceSurfacePresentModesKHR(
-    VkPhysicalDevice                            physicalDevice,
-    VkSurfaceKHR                                surface,
-    uint32_t*                                   pPresentModeCount,
-    VkPresentModeKHR*                           pPresentModes)
-{
-   V3DV_FROM_HANDLE(v3dv_physical_device, device, physicalDevice);
-
-   return wsi_common_get_surface_present_modes(&device->wsi_device, surface,
-                                               pPresentModeCount,
-                                               pPresentModes);
-}
-
-VkResult v3dv_CreateSwapchainKHR(
+VKAPI_ATTR VkResult VKAPI_CALL
+v3dv_CreateSwapchainKHR(
     VkDevice                                     _device,
     const VkSwapchainCreateInfoKHR*              pCreateInfo,
     const VkAllocationCallbacks*                 pAllocator,
     VkSwapchainKHR*                              pSwapchain)
 {
    V3DV_FROM_HANDLE(v3dv_device, device, _device);
-   struct v3dv_instance *instance = device->instance;
-   struct v3dv_physical_device *pdevice = &instance->physicalDevice;
-   struct wsi_device *wsi_device = &pdevice->wsi_device;
+   struct v3dv_physical_device *pdevice = device->pdevice;
 
    ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, pCreateInfo->surface);
    VkResult result =
-      v3dv_physical_device_acquire_display(instance, pdevice, surface);
+      v3dv_physical_device_acquire_display(pdevice, surface);
    if (result != VK_SUCCESS)
       return result;
 
-   const VkAllocationCallbacks *alloc;
-   if (pAllocator)
-     alloc = pAllocator;
-   else
-     alloc = &device->vk.alloc;
-
-   return wsi_common_create_swapchain(wsi_device, _device,
-                                      pCreateInfo, alloc, pSwapchain);
+   return wsi_CreateSwapchainKHR(_device, pCreateInfo, pAllocator, pSwapchain);
 }
 
-void v3dv_DestroySwapchainKHR(
-    VkDevice                                     _device,
-    VkSwapchainKHR                               swapchain,
-    const VkAllocationCallbacks*                 pAllocator)
+struct v3dv_image *
+v3dv_wsi_get_image_from_swapchain(VkSwapchainKHR swapchain, uint32_t index)
 {
-   V3DV_FROM_HANDLE(v3dv_device, device, _device);
-   const VkAllocationCallbacks *alloc;
-
-   if (pAllocator)
-     alloc = pAllocator;
-   else
-     alloc = &device->vk.alloc;
-
-   wsi_common_destroy_swapchain(_device, swapchain, alloc);
-}
-
-VkResult v3dv_GetSwapchainImagesKHR(
-    VkDevice                                     device,
-    VkSwapchainKHR                               swapchain,
-    uint32_t*                                    pSwapchainImageCount,
-    VkImage*                                     pSwapchainImages)
-{
-   return wsi_common_get_images(swapchain,
-                                pSwapchainImageCount,
-                                pSwapchainImages);
-}
-
-VkResult v3dv_AcquireNextImageKHR(
-    VkDevice                                     device,
-    VkSwapchainKHR                               swapchain,
-    uint64_t                                     timeout,
-    VkSemaphore                                  semaphore,
-    VkFence                                      fence,
-    uint32_t*                                    pImageIndex)
-{
-   VkAcquireNextImageInfoKHR acquire_info = {
-      .sType = VK_STRUCTURE_TYPE_ACQUIRE_NEXT_IMAGE_INFO_KHR,
-      .swapchain = swapchain,
-      .timeout = timeout,
-      .semaphore = semaphore,
-      .fence = fence,
-      .deviceMask = 0,
-   };
-
-   return v3dv_AcquireNextImage2KHR(device, &acquire_info, pImageIndex);
-}
-
-VkResult v3dv_AcquireNextImage2KHR(
-    VkDevice                                     _device,
-    const VkAcquireNextImageInfoKHR*             pAcquireInfo,
-    uint32_t*                                    pImageIndex)
-{
-   V3DV_FROM_HANDLE(v3dv_device, device, _device);
-   V3DV_FROM_HANDLE(v3dv_fence, fence, pAcquireInfo->fence);
-   V3DV_FROM_HANDLE(v3dv_semaphore, semaphore, pAcquireInfo->semaphore);
-
-   struct v3dv_physical_device *pdevice = &device->instance->physicalDevice;
-
-   VkResult result;
-   result = wsi_common_acquire_next_image2(&pdevice->wsi_device, _device,
-                                           pAcquireInfo, pImageIndex);
-
-   if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
-      if (fence)
-         drmSyncobjSignal(pdevice->render_fd, &fence->sync, 1);
-      if (semaphore)
-         drmSyncobjSignal(pdevice->render_fd, &semaphore->sync, 1);
-   }
-
-   return result;
-}
-
-VkResult v3dv_QueuePresentKHR(
-    VkQueue                                  _queue,
-    const VkPresentInfoKHR*                  pPresentInfo)
-{
-   V3DV_FROM_HANDLE(v3dv_queue, queue, _queue);
-   struct v3dv_physical_device *pdevice =
-      &queue->device->instance->physicalDevice;
-
-   return wsi_common_queue_present(&pdevice->wsi_device,
-                                   v3dv_device_to_handle(queue->device),
-                                   _queue, 0,
-                                   pPresentInfo);
-}
-
-VkResult v3dv_GetDeviceGroupPresentCapabilitiesKHR(
-    VkDevice                                    device,
-    VkDeviceGroupPresentCapabilitiesKHR*        pCapabilities)
-{
-   memset(pCapabilities->presentMask, 0,
-          sizeof(pCapabilities->presentMask));
-   pCapabilities->presentMask[0] = 0x1;
-   pCapabilities->modes = VK_DEVICE_GROUP_PRESENT_MODE_LOCAL_BIT_KHR;
-
-   return VK_SUCCESS;
-}
-
-VkResult v3dv_GetDeviceGroupSurfacePresentModesKHR(
-    VkDevice                                    device,
-    VkSurfaceKHR                                surface,
-    VkDeviceGroupPresentModeFlagsKHR*           pModes)
-{
-   *pModes = VK_DEVICE_GROUP_PRESENT_MODE_LOCAL_BIT_KHR;
-
-   return VK_SUCCESS;
-}
-
-VkResult v3dv_GetPhysicalDevicePresentRectanglesKHR(
-    VkPhysicalDevice                            physicalDevice,
-    VkSurfaceKHR                                surface,
-    uint32_t*                                   pRectCount,
-    VkRect2D*                                   pRects)
-{
-   V3DV_FROM_HANDLE(v3dv_physical_device, device, physicalDevice);
-
-   return wsi_common_get_present_rectangles(&device->wsi_device,
-                                            surface,
-                                            pRectCount, pRects);
+   VkImage image = wsi_common_get_image(swapchain, index);
+   return v3dv_image_from_handle(image);
 }

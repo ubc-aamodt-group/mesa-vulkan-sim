@@ -32,6 +32,14 @@
 
 #else
 
+#include "util/fossilize_db.h"
+#include "util/mesa_cache_db.h"
+#include "util/mesa_cache_db_multipart.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Number of bits to mask off from a cache key to get an index. */
 #define CACHE_INDEX_KEY_BITS 16
 
@@ -41,6 +49,13 @@
 /* The number of keys that can be stored in the index. */
 #define CACHE_INDEX_MAX_KEYS (1 << CACHE_INDEX_KEY_BITS)
 
+enum disk_cache_type {
+   DISK_CACHE_NONE,
+   DISK_CACHE_MULTI_FILE,
+   DISK_CACHE_SINGLE_FILE,
+   DISK_CACHE_DATABASE,
+};
+
 struct disk_cache {
    /* The path to the cache directory. */
    char *path;
@@ -48,6 +63,12 @@ struct disk_cache {
 
    /* Thread queue for compressing and writing cache entries to disk */
    struct util_queue cache_queue;
+
+   struct foz_db foz_db;
+
+   struct mesa_cache_db_multipart cache_db;
+
+   enum disk_cache_type type;
 
    /* Seed for rand, which is used to pick a random directory */
    uint64_t seed_xorshift128plus[2];
@@ -57,7 +78,7 @@ struct disk_cache {
    size_t index_mmap_size;
 
    /* Pointer to total size of all objects in cache (within index_mmap) */
-   uint64_t *size;
+   p_atomic_uint64_t *size;
 
    /* Pointer to stored keys, (within index_mmap). */
    uint8_t *stored_keys;
@@ -71,6 +92,23 @@ struct disk_cache {
 
    disk_cache_put_cb blob_put_cb;
    disk_cache_get_cb blob_get_cb;
+
+   /* Don't compress cached data. This is for testing purposes only. */
+   bool compression_disabled;
+
+   struct {
+      bool enabled;
+      unsigned hits;
+      unsigned misses;
+   } stats;
+
+   /* Internal RO FOZ cache for combined use of RO and RW caches. */
+   struct disk_cache *foz_ro_cache;
+};
+
+struct cache_entry_file_data {
+   uint32_t crc32;
+   uint32_t uncompressed_size;
 };
 
 struct disk_cache_put_job {
@@ -89,13 +127,10 @@ struct disk_cache_put_job {
    struct cache_item_metadata cache_item_metadata;
 };
 
-struct cache_entry_file_data {
-   uint32_t crc32;
-   uint32_t uncompressed_size;
-};
-
 char *
-disk_cache_generate_cache_dir(void *mem_ctx);
+disk_cache_generate_cache_dir(void *mem_ctx, const char *gpu_name,
+                              const char *driver_id,
+                              enum disk_cache_type cache_type);
 
 void
 disk_cache_evict_lru_item(struct disk_cache *cache);
@@ -104,18 +139,27 @@ void
 disk_cache_evict_item(struct disk_cache *cache, char *filename);
 
 void *
+disk_cache_load_item_foz(struct disk_cache *cache, const cache_key key,
+                         size_t *size);
+
+void *
 disk_cache_load_item(struct disk_cache *cache, char *filename, size_t *size);
 
 char *
 disk_cache_get_cache_filename(struct disk_cache *cache, const cache_key key);
 
+bool
+disk_cache_write_item_to_disk_foz(struct disk_cache_put_job *dc_job);
+
 void
 disk_cache_write_item_to_disk(struct disk_cache_put_job *dc_job,
-                              struct cache_entry_file_data *cf_data,
                               char *filename);
 
 bool
 disk_cache_enabled(void);
+
+bool
+disk_cache_load_cache_index_foz(void *mem_ctx, struct disk_cache *cache);
 
 bool
 disk_cache_mmap_cache_index(void *mem_ctx, struct disk_cache *cache,
@@ -123,6 +167,20 @@ disk_cache_mmap_cache_index(void *mem_ctx, struct disk_cache *cache,
 
 void
 disk_cache_destroy_mmap(struct disk_cache *cache);
+
+void *
+disk_cache_db_load_item(struct disk_cache *cache, const cache_key key,
+                        size_t *size);
+
+bool
+disk_cache_db_write_item_to_disk(struct disk_cache_put_job *dc_job);
+
+bool
+disk_cache_db_load_cache_index(void *mem_ctx, struct disk_cache *cache);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 

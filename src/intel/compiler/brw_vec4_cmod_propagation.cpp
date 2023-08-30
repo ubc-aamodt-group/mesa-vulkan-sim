@@ -50,7 +50,7 @@ static bool
 opt_cmod_propagation_local(bblock_t *block, vec4_visitor *v)
 {
    bool progress = false;
-   int ip = block->end_ip + 1;
+   UNUSED int ip = block->end_ip + 1;
 
    foreach_inst_in_block_reverse_safe(vec4_instruction, inst, block) {
       ip--;
@@ -278,7 +278,7 @@ opt_cmod_propagation_local(bblock_t *block, vec4_visitor *v)
              */
             if (inst->conditional_mod == BRW_CONDITIONAL_NZ &&
                 !inst->src[0].negate &&
-                scan_inst->writes_flag()) {
+                scan_inst->writes_flag(v->devinfo)) {
                inst->remove(block);
                progress = true;
                break;
@@ -337,7 +337,7 @@ opt_cmod_propagation_local(bblock_t *block, vec4_visitor *v)
          }
 
       not_match:
-         if (scan_inst->writes_flag())
+         if (scan_inst->writes_flag(v->devinfo))
             break;
 
          read_flag = read_flag || scan_inst->reads_flag();

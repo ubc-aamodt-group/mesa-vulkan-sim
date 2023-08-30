@@ -52,21 +52,11 @@
  */
 static void
 llvmpipe_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
+                  unsigned drawid_offset,
                   const struct pipe_draw_indirect_info *indirect,
-                  const struct pipe_draw_start_count *draws,
+                  const struct pipe_draw_start_count_bias *draws,
                   unsigned num_draws)
 {
-   if (num_draws > 1) {
-      struct pipe_draw_info tmp_info = *info;
-
-      for (unsigned i = 0; i < num_draws; i++) {
-         llvmpipe_draw_vbo(pipe, &tmp_info, indirect, &draws[i], 1);
-         if (tmp_info.increment_draw_id)
-            tmp_info.drawid++;
-      }
-      return;
-   }
-
    if (!indirect && (!draws[0].count || !info->instance_count))
       return;
 
@@ -84,7 +74,7 @@ llvmpipe_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
    }
 
    if (lp->dirty)
-      llvmpipe_update_derived( lp );
+      llvmpipe_update_derived(lp);
 
    /*
     * Map vertex buffers
@@ -149,14 +139,16 @@ llvmpipe_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
       }
    }
    draw_collect_pipeline_statistics(draw,
-                                    lp->active_statistics_queries > 0);
+                                    lp->active_statistics_queries > 0 &&
+                                    !lp->queries_disabled);
 
    draw_collect_primitives_generated(draw,
                                      lp->active_primgen_queries &&
                                      !lp->queries_disabled);
 
    /* draw! */
-   draw_vbo(draw, info, indirect, draws, num_draws);
+   draw_vbo(draw, info, drawid_offset, indirect, draws, num_draws,
+            lp->patch_vertices);
 
    /*
     * unmap vertex/index buffers
@@ -175,6 +167,16 @@ llvmpipe_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
          draw_vs_reset_so(lp->vs);
       }
    }
+
+   llvmpipe_cleanup_stage_sampling(lp, PIPE_SHADER_VERTEX);
+   llvmpipe_cleanup_stage_sampling(lp, PIPE_SHADER_GEOMETRY);
+   llvmpipe_cleanup_stage_sampling(lp, PIPE_SHADER_TESS_CTRL);
+   llvmpipe_cleanup_stage_sampling(lp, PIPE_SHADER_TESS_EVAL);
+
+   llvmpipe_cleanup_stage_images(lp, PIPE_SHADER_VERTEX);
+   llvmpipe_cleanup_stage_images(lp, PIPE_SHADER_GEOMETRY);
+   llvmpipe_cleanup_stage_images(lp, PIPE_SHADER_TESS_CTRL);
+   llvmpipe_cleanup_stage_images(lp, PIPE_SHADER_TESS_EVAL);
 
    /*
     * TODO: Flush only when a user vertex/index buffer is present

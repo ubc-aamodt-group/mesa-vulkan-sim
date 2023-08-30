@@ -33,8 +33,6 @@
 #include "util/u_inlines.h"
 #include "draw/draw_context.h"
 #include "tgsi/tgsi_dump.h"
-#include "tgsi/tgsi_scan.h"
-#include "tgsi/tgsi_parse.h"
 
 
 static void *
@@ -49,7 +47,7 @@ llvmpipe_create_tcs_state(struct pipe_context *pipe,
       goto no_state;
 
    /* debug */
-   if (LP_DEBUG & DEBUG_TGSI) {
+   if (LP_DEBUG & DEBUG_TGSI && templ->type == PIPE_SHADER_IR_TGSI) {
       debug_printf("llvmpipe: Create tess ctrl shader %p:\n", (void *)state);
       tgsi_dump(templ->tokens, 0);
    }
@@ -68,7 +66,7 @@ llvmpipe_create_tcs_state(struct pipe_context *pipe,
    return state;
 
 no_dgs:
-   FREE( state );
+   FREE(state);
 no_state:
    return NULL;
 }
@@ -136,7 +134,7 @@ llvmpipe_create_tes_state(struct pipe_context *pipe,
    return state;
 
 no_dgs:
-   FREE( state );
+   FREE(state);
 no_state:
    return NULL;
 }
@@ -181,6 +179,14 @@ llvmpipe_set_tess_state(struct pipe_context *pipe,
    draw_set_tess_state(llvmpipe->draw, default_outer_level, default_inner_level);
 }
 
+static void
+llvmpipe_set_patch_vertices(struct pipe_context *pipe, uint8_t patch_vertices)
+{
+   struct llvmpipe_context *llvmpipe = llvmpipe_context(pipe);
+
+   llvmpipe->patch_vertices = patch_vertices;
+}
+
 void
 llvmpipe_init_tess_funcs(struct llvmpipe_context *llvmpipe)
 {
@@ -193,4 +199,5 @@ llvmpipe_init_tess_funcs(struct llvmpipe_context *llvmpipe)
    llvmpipe->pipe.delete_tes_state = llvmpipe_delete_tes_state;
 
    llvmpipe->pipe.set_tess_state = llvmpipe_set_tess_state;
+   llvmpipe->pipe.set_patch_vertices = llvmpipe_set_patch_vertices;
 }

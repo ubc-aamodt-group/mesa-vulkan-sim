@@ -2,30 +2,7 @@
  * SGI FREE SOFTWARE LICENSE B (Version 2.0, Sept. 18, 2008)
  * Copyright (C) 1991-2000 Silicon Graphics, Inc. All Rights Reserved.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice including the dates of first publication and
- * either this permission notice or a reference to
- * http://oss.sgi.com/projects/FreeB/
- * shall be included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
- * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
- * SILICON GRAPHICS, INC. BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
- * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
- * OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- * Except as contained in this notice, the name of Silicon Graphics, Inc.
- * shall not be used in advertising or otherwise to promote the sale, use or
- * other dealings in this Software without prior written authorization from
- * Silicon Graphics, Inc.
+ * SPDX-License-Identifier: SGI-B-2.0
  */
 
 /**
@@ -53,7 +30,9 @@
 #include "glxconfig.h"
 #include "glxhash.h"
 #include "util/macros.h"
-
+#include "util/u_thread.h"
+#include "util/set.h"
+#include "loader.h"
 #include "glxextensions.h"
 
 #if defined(USE_LIBGLVND)
@@ -66,11 +45,16 @@
 extern "C" {
 #endif
 
+extern void glx_message(int level, const char *f, ...) PRINTFLIKE(2, 3);
+
+#define DebugMessageF(...) glx_message(_LOADER_DEBUG, __VA_ARGS__)
+#define InfoMessageF(...) glx_message(_LOADER_INFO, __VA_ARGS__)
+#define ErrorMessageF(...) glx_message(_LOADER_WARNING, __VA_ARGS__)
+#define CriticalErrorMessageF(...) glx_message(_LOADER_FATAL, __VA_ARGS__)
+
 
 #define GLX_MAJOR_VERSION 1       /* current version numbers */
 #define GLX_MINOR_VERSION 4
-
-#define __GLX_MAX_TEXTURE_UNITS 32
 
 struct glx_display;
 struct glx_context;
@@ -111,6 +95,7 @@ struct __GLXDRIscreenRec {
    __GLXDRIdrawable *(*createDrawable)(struct glx_screen *psc,
 				       XID drawable,
 				       GLXDrawable glxDrawable,
+				       int type,
 				       struct glx_config *config);
 
    int64_t (*swapBuffers)(__GLXDRIdrawable *pdraw, int64_t target_msc,
@@ -127,6 +112,10 @@ struct __GLXDRIscreenRec {
    int (*setSwapInterval)(__GLXDRIdrawable *pdraw, int interval);
    int (*getSwapInterval)(__GLXDRIdrawable *pdraw);
    int (*getBufferAge)(__GLXDRIdrawable *pdraw);
+   void (*bindTexImage)(__GLXDRIdrawable *pdraw, int buffer, const int *attribs);
+   void (*releaseTexImage)(__GLXDRIdrawable *pdraw, int buffer);
+
+   int maxSwapInterval;
 };
 
 struct __GLXDRIdrawableRec
@@ -146,7 +135,7 @@ struct __GLXDRIdrawableRec
 ** Function to create and DRI display data and initialize the display
 ** dependent methods.
 */
-extern __GLXDRIdisplay *driswCreateDisplay(Display * dpy);
+extern __GLXDRIdisplay *driswCreateDisplay(Display * dpy, bool zink);
 extern __GLXDRIdisplay *dri2CreateDisplay(Display * dpy);
 extern __GLXDRIdisplay *dri3_create_display(Display * dpy);
 extern __GLXDRIdisplay *driwindowsCreateDisplay(Display * dpy);
@@ -222,23 +211,18 @@ struct mesa_glinterop_export_out;
 
 struct glx_context_vtable {
    void (*destroy)(struct glx_context *ctx);
-   int (*bind)(struct glx_context *context, struct glx_context *old,
-	       GLXDrawable draw, GLXDrawable read);
-   void (*unbind)(struct glx_context *context, struct glx_context *new_ctx);
+   int (*bind)(struct glx_context *context, GLXDrawable draw, GLXDrawable read);
+   void (*unbind)(struct glx_context *context);
    void (*wait_gl)(struct glx_context *ctx);
    void (*wait_x)(struct glx_context *ctx);
-   void (*use_x_font)(struct glx_context *ctx,
-		      Font font, int first, int count, int listBase);
-   void (*bind_tex_image)(Display * dpy,
-			  GLXDrawable drawable,
-			  int buffer, const int *attrib_list);
-   void (*release_tex_image)(Display * dpy, GLXDrawable drawable, int buffer);
-   void * (*get_proc_address)(const char *symbol);
    int (*interop_query_device_info)(struct glx_context *ctx,
                                     struct mesa_glinterop_device_info *out);
    int (*interop_export_object)(struct glx_context *ctx,
                                 struct mesa_glinterop_export_in *in,
                                 struct mesa_glinterop_export_out *out);
+   int (*interop_flush_objects)(struct glx_context *ctx,
+                                unsigned count, struct mesa_glinterop_export_in *objects,
+                                GLsync *sync);
 };
 
 /**
@@ -256,7 +240,7 @@ struct glx_context
      * in the buffer to be filled.  \c limit is described above in the buffer
      * slop discussion.
      *
-     * Commands that require large amounts of data to be transfered will
+     * Commands that require large amounts of data to be transferred will
      * also use this buffer to hold a header that describes the large
      * command.
      *
@@ -286,10 +270,6 @@ struct glx_context
      */
    XID share_xid;
 
-    /**
-     * Screen number.
-     */
-   GLint screen;
    struct glx_screen *psc;
 
     /**
@@ -338,9 +318,8 @@ struct glx_context
      */
    Bool isDirect;
 
-#if defined(GLX_DIRECT_RENDERING) && defined(GLX_USE_APPLEGL)
+   /* Backend private state for the context */
    void *driContext;
-#endif
 
     /**
      * \c dpy of current display for this context.  Will be \c NULL if not
@@ -420,11 +399,6 @@ struct glx_context
    /*@} */
 
    /**
-    * Number of threads we're currently current in.
-    */
-   unsigned long thread_refcount;
-
-   /**
     * GLX_ARB_create_context_no_error setting for this context.
     * This needs to be kept here to enforce shared context rules.
     */
@@ -441,8 +415,6 @@ glx_context_init(struct glx_context *gc,
    if (!(gc)->error) {          \
       (gc)->error = code;       \
    }
-
-extern void __glFreeAttributeState(struct glx_context *);
 
 /************************************************************************/
 
@@ -467,7 +439,7 @@ extern void __glFreeAttributeState(struct glx_context *);
 
 /**
  * This implementation uses a smaller threshold for switching
- * to the RenderLarge protocol than the protcol requires so that
+ * to the RenderLarge protocol than the protocol requires so that
  * large copies don't occur.
  */
 #define __GLX_RENDER_CMD_SIZE_LIMIT 4096
@@ -482,6 +454,11 @@ struct glx_screen_vtable {
 					 struct glx_context *shareList,
 					 int renderType);
 
+   /* The error outparameter abuses the fact that the only possible errors are
+    * GLXBadContext (0), GLXBadFBConfig (9), GLXBadProfileARB (13), BadValue
+    * (2), BadMatch (8), and BadAlloc (11). Since those don't collide we just
+    * use them directly rather than try to offset or use a sign convention. 
+    */
    struct glx_context *(*create_context_attribs)(struct glx_screen *psc,
 						 struct glx_config *config,
 						 struct glx_context *shareList,
@@ -501,11 +478,16 @@ struct glx_screen_vtable {
 struct glx_screen
 {
    const struct glx_screen_vtable *vtable;
+   const struct glx_context_vtable *context_vtable;
 
     /**
-     * GLX extension string reported by the X-server.
+     * \name Storage for the GLX vendor, version, and extension strings
      */
+   /*@{ */
    const char *serverGLXexts;
+   const char *serverGLXvendor;
+   const char *serverGLXversion;
+   /*@} */
 
     /**
      * GLX extension string to be reported to applications.  This is the
@@ -517,6 +499,9 @@ struct glx_screen
 
    Display *dpy;
    int scr;
+   bool force_direct_context;
+   bool allow_invalid_glx_destroy_window;
+   bool keep_native_window_glx_drawable;
 
 #if defined(GLX_DIRECT_RENDERING) && !defined(GLX_USE_APPLEGL)
     /**
@@ -556,9 +541,10 @@ struct glx_screen
  */
 struct glx_display
 {
-   /* The extension protocol codes */
-   XExtCodes *codes;
    struct glx_display *next;
+
+   /* The extension protocol codes */
+   XExtCodes codes;
 
     /**
      * Back pointer to the display
@@ -566,29 +552,13 @@ struct glx_display
    Display *dpy;
 
     /**
-     * The \c majorOpcode is common to all connections to the same server.
-     * It is also copied into the context structure.
-     */
-   int majorOpcode;
-
-    /**
-     * \name Server Version
+     * \name Minor Version
      *
-     * Major and minor version returned by the server during initialization.
+     * Minor version returned by the server during initialization. The major
+     * version is asserted to be 1 during extension setup.
      */
    /*@{ */
-   int majorVersion, minorVersion;
-   /*@} */
-
-    /**
-     * \name Storage for the servers GLX vendor and versions strings.
-     *
-     * These are the same for all screens on this display. These fields will
-     * be filled in on demand.
-     */
-   /*@{ */
-   const char *serverGLXvendor;
-   const char *serverGLXversion;
+   int minorVersion;
    /*@} */
 
     /**
@@ -602,6 +572,11 @@ struct glx_display
 
 #if defined(GLX_DIRECT_RENDERING) && !defined(GLX_USE_APPLEGL)
    __glxHashTable *drawHash;
+
+   /**
+    * GLXDrawable created from native window and about to be released.
+    */
+   struct set *zombieGLXDrawable;
 
     /**
      * Per display direct rendering interface functions and data.
@@ -654,18 +629,9 @@ extern int __glXDebug;
 
 extern void __glXSetCurrentContext(struct glx_context * c);
 
-# if defined( USE_ELF_TLS )
-
-extern __thread void *__glX_tls_Context
-   __attribute__ ((tls_model("initial-exec")));
+extern __THREAD_INITIAL_EXEC void *__glX_tls_Context;
 
 #  define __glXGetCurrentContext() __glX_tls_Context
-
-# else
-
-extern struct glx_context *__glXGetCurrentContext(void);
-
-# endif /* defined( USE_ELF_TLS ) */
 
 extern void __glXSetCurrentContextNull(void);
 
@@ -741,40 +707,17 @@ extern void __glEmptyImage(struct glx_context *, GLint, GLint, GLint, GLint, GLe
 extern void __glXInitVertexArrayState(struct glx_context *);
 extern void __glXFreeVertexArrayState(struct glx_context *);
 
-/*
-** Inform the Server of the major and minor numbers and of the client
-** libraries extension string.
-*/
-extern void __glXClientInfo(Display * dpy, int opcode);
-
-_X_HIDDEN void
-__glX_send_client_info(struct glx_display *glx_dpy);
+extern void glxSendClientInfo(struct glx_display *glx_dpy, int screen);
 
 /************************************************************************/
-
-/*
-** Declarations that should be in Xlib
-*/
-#ifdef __GL_USE_OUR_PROTOTYPES
-extern void _XFlush(Display *);
-extern Status _XReply(Display *, xReply *, int, Bool);
-extern void _XRead(Display *, void *, long);
-extern void _XSend(Display *, const void *, long);
-#endif
-
 
 extern void __glXInitializeVisualConfigFromTags(struct glx_config * config,
                                                 int count, const INT32 * bp,
                                                 Bool tagged_only,
                                                 Bool fbconfig_style_tags);
 
-extern char *__glXQueryServerString(Display * dpy, int opcode,
-                                    CARD32 screen, CARD32 name);
-extern char *__glXGetString(Display * dpy, int opcode,
-                            CARD32 screen, CARD32 name);
-
-extern const char __glXGLClientVersion[];
-extern const char __glXGLClientExtensions[];
+extern char *__glXQueryServerString(Display *dpy, CARD32 screen, CARD32 name);
+extern char *__glXGetString(Display *dpy, CARD32 screen, CARD32 name);
 
 extern GLboolean __glXGetMscRateOML(Display * dpy, GLXDrawable drawable,
                                     int32_t * numerator,
@@ -788,9 +731,6 @@ __glxGetMscRate(struct glx_screen *psc,
 /* So that dri2.c:DRI2WireToEvent() can access
  * glx_info->codes->first_event */
 XExtDisplayInfo *__glXFindDisplay (Display *dpy);
-
-extern void
-GarbageCollectDRIDrawables(struct glx_screen *psc);
 
 extern __GLXDRIdrawable *
 GetGLXDRIDrawable(Display *dpy, GLXDrawable drawable);
@@ -809,6 +749,9 @@ applegl_create_context(struct glx_screen *psc,
 
 extern int
 applegl_create_display(struct glx_display *display);
+
+extern void *
+applegl_get_proc_address(const char *symbol);
 #endif
 
 extern Bool validate_renderType_against_config(const struct glx_config *config,

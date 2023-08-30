@@ -39,6 +39,7 @@
 
 #ifdef DEBUG
 #include "pipe/p_compiler.h"
+#include "util/simple_mtx.h"
 #include "util/u_debug_stack.h"
 #include "util/u_debug.h"
 #include "util/u_memory.h"
@@ -47,11 +48,11 @@
 #include "util/list.h"
 #include "util/u_inlines.h"
 #include "util/u_string.h"
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 #include <stdio.h>
 
 /* Future improvement: Use realloc instead? */
-#define DEBUG_FLUSH_MAP_DEPTH 32
+#define DEBUG_FLUSH_MAP_DEPTH 64
 
 struct debug_map_item {
    struct debug_stack_frame *frame;
@@ -86,7 +87,7 @@ struct debug_flush_ctx {
    struct list_head head;
 };
 
-static mtx_t list_mutex = _MTX_INITIALIZER_NP;
+static simple_mtx_t list_mutex = SIMPLE_MTX_INITIALIZER;
 static struct list_head ctx_list = {&ctx_list, &ctx_list};
 
 static struct debug_stack_frame *
@@ -165,9 +166,9 @@ debug_flush_ctx_create(UNUSED boolean catch_reference_of_mapped,
       goto out_no_ref_hash;
 
    fctx->bt_depth = bt_depth;
-   mtx_lock(&list_mutex);
+   simple_mtx_lock(&list_mutex);
    list_addtail(&fctx->head, &ctx_list);
-   mtx_unlock(&list_mutex);
+   simple_mtx_unlock(&list_mutex);
 
    return fctx;
 
@@ -247,7 +248,7 @@ debug_flush_map(struct debug_flush_buf *fbuf, unsigned flags)
    if (!persistent) {
       struct debug_flush_ctx *fctx;
 
-      mtx_lock(&list_mutex);
+      simple_mtx_lock(&list_mutex);
       LIST_FOR_EACH_ENTRY(fctx, &ctx_list, head) {
          struct debug_flush_item *item =
             util_hash_table_get(fctx->ref_hash, fbuf);
@@ -259,7 +260,7 @@ debug_flush_map(struct debug_flush_buf *fbuf, unsigned flags)
                               FALSE, FALSE, item->ref_frame);
          }
       }
-      mtx_unlock(&list_mutex);
+      simple_mtx_unlock(&list_mutex);
    }
 }
 
@@ -336,7 +337,7 @@ out_no_item:
                 "for this command batch.\n");
 }
 
-static enum pipe_error
+static int
 debug_flush_might_flush_cb(UNUSED void *key, void *value, void *data)
 {
    struct debug_flush_item *item =
@@ -359,7 +360,7 @@ debug_flush_might_flush_cb(UNUSED void *key, void *value, void *data)
    }
    mtx_unlock(&fbuf->mutex);
 
-   return PIPE_OK;
+   return 0;
 }
 
 /**
@@ -377,7 +378,7 @@ debug_flush_might_flush(struct debug_flush_ctx *fctx)
                            "Might flush");
 }
 
-static enum pipe_error
+static int
 debug_flush_flush_cb(UNUSED void *key, void *value, UNUSED void *data)
 {
    struct debug_flush_item *item =
@@ -385,7 +386,7 @@ debug_flush_flush_cb(UNUSED void *key, void *value, UNUSED void *data)
 
    debug_flush_item_destroy(item);
 
-   return PIPE_OK;
+   return 0;
 }
 
 

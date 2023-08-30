@@ -37,8 +37,6 @@
 
 #ifdef __cplusplus
 extern "C" {
-#else
-struct glsl_type;
 #endif
 
 const char *glsl_get_type_name(const struct glsl_type *type);
@@ -48,13 +46,9 @@ const struct glsl_type *glsl_get_struct_field(const struct glsl_type *type,
 
 int glsl_get_struct_field_offset(const struct glsl_type *type,
                                  unsigned index);
-
+                                 
 int get_struct_field_offset_for_ptx(const struct glsl_type *type,
                               unsigned index);
-
-int
-get_struct_size_for_ptx(const struct glsl_type *type);
-
 const struct glsl_struct_field *
 glsl_get_struct_field_data(const struct glsl_type *type, unsigned index);
 
@@ -85,7 +79,10 @@ glsl_get_function_return_type(const struct glsl_type *type);
 const struct glsl_function_param *
 glsl_get_function_param(const struct glsl_type *type, unsigned index);
 
-GLenum glsl_get_gl_type(const struct glsl_type *type);
+const struct glsl_type *
+glsl_texture_type_to_sampler(const struct glsl_type *type, bool is_shadow);
+const struct glsl_type *
+glsl_sampler_type_to_texture(const struct glsl_type *type);
 
 enum glsl_base_type glsl_get_base_type(const struct glsl_type *type);
 
@@ -105,6 +102,8 @@ unsigned glsl_count_dword_slots(const struct glsl_type *type, bool is_bindless);
 unsigned glsl_count_attribute_slots(const struct glsl_type *type,
                                     bool is_gl_vertex_input);
 unsigned glsl_get_component_slots(const struct glsl_type *type);
+unsigned glsl_get_component_slots_aligned(const struct glsl_type *type,
+                                          unsigned offset);
 unsigned glsl_varying_count(const struct glsl_type *type);
 
 const char *glsl_get_struct_elem_name(const struct glsl_type *type,
@@ -155,17 +154,25 @@ bool glsl_type_is_struct(const struct glsl_type *type);
 bool glsl_type_is_interface(const struct glsl_type *type);
 bool glsl_type_is_struct_or_ifc(const struct glsl_type *type);
 bool glsl_type_is_sampler(const struct glsl_type *type);
+bool glsl_type_is_bare_sampler(const struct glsl_type *type);
+bool glsl_type_is_texture(const struct glsl_type *type);
 bool glsl_type_is_image(const struct glsl_type *type);
 bool glsl_type_is_dual_slot(const struct glsl_type *type);
 bool glsl_type_is_numeric(const struct glsl_type *type);
 bool glsl_type_is_boolean(const struct glsl_type *type);
 bool glsl_type_is_integer(const struct glsl_type *type);
 bool glsl_type_contains_64bit(const struct glsl_type *type);
+bool glsl_type_contains_image(const struct glsl_type *type);
 bool glsl_sampler_type_is_shadow(const struct glsl_type *type);
 bool glsl_sampler_type_is_array(const struct glsl_type *type);
 bool glsl_struct_type_is_packed(const struct glsl_type *type);
 bool glsl_contains_atomic(const struct glsl_type *type);
+bool glsl_contains_double(const struct glsl_type *type);
+bool glsl_contains_integer(const struct glsl_type *type);
 bool glsl_contains_opaque(const struct glsl_type *type);
+bool glsl_record_compare(const struct glsl_type *a, const struct glsl_type *b,
+                         bool match_name, bool match_locations,
+                         bool match_precision);
 
 const struct glsl_type *glsl_void_type(void);
 const struct glsl_type *glsl_float_type(void);
@@ -200,8 +207,8 @@ const struct glsl_type *glsl_explicit_matrix_type(const struct glsl_type *mat,
                                                   unsigned stride,
                                                   bool row_major);
 
-const struct glsl_type *glsl_array_type(const struct glsl_type *base,
-                                        unsigned elements,
+const struct glsl_type *glsl_array_type(const struct glsl_type *element,
+                                        unsigned array_size,
                                         unsigned explicit_stride);
 
 const struct glsl_type *glsl_struct_type(const struct glsl_struct_field *fields,
@@ -217,6 +224,9 @@ const struct glsl_type *glsl_sampler_type(enum glsl_sampler_dim dim,
                                           enum glsl_base_type base_type);
 const struct glsl_type *glsl_bare_sampler_type();
 const struct glsl_type *glsl_bare_shadow_sampler_type();
+const struct glsl_type *glsl_texture_type(enum glsl_sampler_dim dim,
+                                          bool is_array,
+                                          enum glsl_base_type base_type);
 const struct glsl_type *glsl_image_type(enum glsl_sampler_dim dim,
                                         bool is_array,
                                         enum glsl_base_type base_type);
@@ -231,6 +241,7 @@ const struct glsl_type *glsl_channel_type(const struct glsl_type *type);
 const struct glsl_type *glsl_float16_type(const struct glsl_type *type);
 const struct glsl_type *glsl_int16_type(const struct glsl_type *type);
 const struct glsl_type *glsl_uint16_type(const struct glsl_type *type);
+const struct glsl_type *glsl_type_to_16bit(const struct glsl_type *old_type);
 
 void glsl_get_natural_size_align_bytes(const struct glsl_type *type,
                                        unsigned *size, unsigned *align);
@@ -243,10 +254,16 @@ const struct glsl_type *glsl_get_explicit_type_for_size_align(const struct glsl_
                                                               glsl_type_size_align_func type_info,
                                                               unsigned *size, unsigned *align);
 
+const struct glsl_type *glsl_type_wrap_in_arrays(const struct glsl_type *type,
+                                                 const struct glsl_type *arrays);
+
 const struct glsl_type *glsl_type_replace_vec3_with_vec4(const struct glsl_type *type);
 
 unsigned glsl_type_get_sampler_count(const struct glsl_type *type);
+unsigned glsl_type_get_texture_count(const struct glsl_type *type);
 unsigned glsl_type_get_image_count(const struct glsl_type *type);
+
+int glsl_get_field_index(const struct glsl_type *type, const char *name);
 
 bool glsl_type_is_leaf(const struct glsl_type *type);
 

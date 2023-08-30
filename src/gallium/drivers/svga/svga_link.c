@@ -27,6 +27,7 @@
 #include "svga_link.h"
 #include "svga_debug.h"
 
+#include "tgsi/tgsi_scan.h"
 #include "tgsi/tgsi_strings.h"
 
 
@@ -70,6 +71,11 @@ svga_link_shaders(const struct tgsi_shader_info *outshader_info,
       unsigned sem_index = inshader_info->input_semantic_index[i];
       unsigned j;
       unsigned out_index;
+
+      if (sem_name == TGSI_SEMANTIC_PCOORD) {
+         sem_name = TGSI_SEMANTIC_TEXCOORD;
+         sem_index = 0;
+      }
 
       /* search output shader outputs for same item */
       for (j = 0; j < outshader_info->num_outputs; j++) {

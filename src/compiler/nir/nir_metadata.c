@@ -19,9 +19,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
- *
- * Authors:
- *    Jason Ekstrand (jason@jlekstrand.net)
  */
 
 #include "nir.h"
@@ -46,7 +43,13 @@ nir_metadata_require(nir_function_impl *impl, nir_metadata required, ...)
    if (NEEDS_UPDATE(nir_metadata_loop_analysis)) {
       va_list ap;
       va_start(ap, required);
-      nir_loop_analyze_impl(impl, va_arg(ap, nir_variable_mode));
+      /* !! Warning !! Do not move these va_arg() call directly to
+       * nir_loop_analyze_impl() as parameters because the execution order will
+       * become undefined.
+       */
+      nir_variable_mode mode = va_arg(ap, nir_variable_mode);
+      int force_unroll_sampler_indirect = va_arg(ap, int);
+      nir_loop_analyze_impl(impl, mode, force_unroll_sampler_indirect);
       va_end(ap);
    }
 

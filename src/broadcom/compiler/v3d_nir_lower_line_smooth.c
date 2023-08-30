@@ -1,5 +1,5 @@
 /*
- * Copyright © 2020 Raspberry Pi
+ * Copyright © 2020 Raspberry Pi Ltd
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -54,10 +54,12 @@ lower_line_smooth_intrinsic(struct lower_line_smooth_state *state,
                               nir_src_for_ssa(new_val));
 }
 
-static void
+static bool
 lower_line_smooth_func(struct lower_line_smooth_state *state,
                        nir_function_impl *impl)
 {
+        bool progress = false;
+
         nir_builder b;
 
         nir_builder_init(&b, impl);
@@ -77,8 +79,11 @@ lower_line_smooth_func(struct lower_line_smooth_state *state,
                                 continue;
 
                         lower_line_smooth_intrinsic(state, &b, intr);
+                        progress = true;
                 }
         }
+
+        return progress;
 }
 
 static void
@@ -111,12 +116,12 @@ initialise_coverage_var(struct lower_line_smooth_state *state,
                          nir_fmul(&b,
                                   nir_imm_float(&b, 1.0f / M_SQRT2),
                                   nir_fsub(&b, pixels_from_center,
-                                           nir_fmul(&b,
-                                                    line_width,
-                                                    nir_imm_float(&b, 0.5f)))));
+                                           nir_fmul_imm(&b,
+                                                        line_width,
+                                                        0.5f))));
 
         /* Discard fragments that aren’t covered at all by the line */
-        nir_ssa_def *outside = nir_fge(&b, nir_imm_float(&b, 0.0f), coverage);
+        nir_ssa_def *outside = nir_fle_imm(&b, coverage, 0.0f);
 
         nir_discard_if(&b, outside);
 
@@ -140,9 +145,11 @@ make_coverage_var(nir_shader *s)
         return var;
 }
 
-void
+bool
 v3d_nir_lower_line_smooth(nir_shader *s)
 {
+        bool progress = false;
+
         assert(s->info.stage == MESA_SHADER_FRAGMENT);
 
         struct lower_line_smooth_state state = {
@@ -154,6 +161,16 @@ v3d_nir_lower_line_smooth(nir_shader *s)
                 if (function->is_entrypoint)
                         initialise_coverage_var(&state, function->impl);
 
-                lower_line_smooth_func(&state, function->impl);
+                progress |= lower_line_smooth_func(&state, function->impl);
+
+                if (progress) {
+                        nir_metadata_preserve(function->impl,
+                                              nir_metadata_block_index |
+                                              nir_metadata_dominance);
+                } else {
+                        nir_metadata_preserve(function->impl, nir_metadata_all);
+                }
         }
+
+        return progress;
 }

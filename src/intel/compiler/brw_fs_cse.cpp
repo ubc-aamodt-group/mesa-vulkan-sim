@@ -76,6 +76,7 @@ is_expression(const fs_visitor *v, const fs_inst *const inst)
    case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_LOGICAL:
    case FS_OPCODE_LINTERP:
    case SHADER_OPCODE_FIND_LIVE_CHANNEL:
+   case SHADER_OPCODE_FIND_LAST_LIVE_CHANNEL:
    case FS_OPCODE_LOAD_LIVE_CHANNELS:
    case SHADER_OPCODE_BROADCAST:
    case SHADER_OPCODE_MOV_INDIRECT:
@@ -332,10 +333,10 @@ fs_visitor::opt_cse_local(const fs_live_variables &live, bblock_t *block, int &i
          /* Kill all AEB entries that write a different value to or read from
           * the flag register if we just wrote it.
           */
-         if (inst->flags_written()) {
+         if (inst->flags_written(devinfo)) {
             bool negate; /* dummy */
             if (entry->generator->flags_read(devinfo) ||
-                (entry->generator->flags_written() &&
+                (entry->generator->flags_written(devinfo) &&
                  !instructions_match(inst, entry->generator, &negate))) {
                entry->remove();
                ralloc_free(entry);

@@ -1,8 +1,8 @@
 /**************************************************************************
- * 
+ *
  * Copyright 2003 VMware, Inc.
  * All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
  * "Software"), to deal in the Software without restriction, including
@@ -10,11 +10,11 @@
  * distribute, sub license, and/or sell copies of the Software, and to
  * permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice (including the
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
@@ -22,7 +22,7 @@
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- * 
+ *
  **************************************************************************/
 
 #include "util/u_math.h"
@@ -50,8 +50,6 @@ compute_vertex_info(struct llvmpipe_context *llvmpipe)
 {
    const struct tgsi_shader_info *fsInfo = &llvmpipe->fs->info.base;
    struct vertex_info *vinfo = &llvmpipe->vertex_info;
-   int vs_index;
-   uint i;
 
    draw_prepare_shader_outputs(llvmpipe->draw);
 
@@ -77,12 +75,12 @@ compute_vertex_info(struct llvmpipe_context *llvmpipe)
 
    vinfo->num_attribs = 0;
 
-   vs_index = draw_find_shader_output(llvmpipe->draw,
-                                      TGSI_SEMANTIC_POSITION, 0);
+   int vs_index = draw_find_shader_output(llvmpipe->draw,
+                                          TGSI_SEMANTIC_POSITION, 0);
 
    draw_emit_vertex_attr(vinfo, EMIT_4F, vs_index);
 
-   for (i = 0; i < fsInfo->num_inputs; i++) {
+   for (unsigned i = 0; i < fsInfo->num_inputs; i++) {
       /*
        * Search for each input in current vs output:
        */
@@ -124,9 +122,21 @@ compute_vertex_info(struct llvmpipe_context *llvmpipe)
       }
    }
 
+   /*
+    * The new style front face is a system value, hence won't show up as
+    * ordinary fs register above. But we still need to assign a vs output
+    * location so draw can inject face info for unfilled tris.
+    */
+   if (llvmpipe->face_slot < 0 && fsInfo->uses_frontface) {
+      vs_index = draw_find_shader_output(llvmpipe->draw,
+                                         TGSI_SEMANTIC_FACE, 0);
+      llvmpipe->face_slot = (int)vinfo->num_attribs;
+      draw_emit_vertex_attr(vinfo, EMIT_4F, vs_index);
+   }
+
    /* Figure out if we need bcolor as well.
     */
-   for (i = 0; i < 2; i++) {
+   for (unsigned i = 0; i < 2; i++) {
       vs_index = draw_find_shader_output(llvmpipe->draw,
                                          TGSI_SEMANTIC_BCOLOR, i);
 
@@ -173,6 +183,72 @@ compute_vertex_info(struct llvmpipe_context *llvmpipe)
 }
 
 
+static void
+check_linear_rasterizer(struct llvmpipe_context *lp)
+{
+   const bool bgr8 =
+      (lp->framebuffer.nr_cbufs == 1 && lp->framebuffer.cbufs[0] &&
+       util_res_sample_count(lp->framebuffer.cbufs[0]->texture) == 1 &&
+       lp->framebuffer.cbufs[0]->texture->target == PIPE_TEXTURE_2D &&
+       (lp->framebuffer.cbufs[0]->format == PIPE_FORMAT_B8G8R8A8_UNORM ||
+        lp->framebuffer.cbufs[0]->format == PIPE_FORMAT_B8G8R8X8_UNORM));
+
+   /* permit_linear means guardband, hence fake scissor, which we can only
+    * handle if there's just one vp. */
+   const bool single_vp = lp->viewport_index_slot < 0;
+   const bool permit_linear = (!lp->framebuffer.zsbuf &&
+                               bgr8 &&
+                               single_vp);
+
+   /* Tell draw that we're happy doing our own x/y clipping.
+    */
+   bool clipping_changed = false;
+   if (lp->permit_linear_rasterizer != permit_linear) {
+      lp->permit_linear_rasterizer = permit_linear;
+      lp_setup_set_linear_mode(lp->setup, permit_linear);
+      clipping_changed = TRUE;
+   }
+
+   if (lp->single_vp != single_vp) {
+      lp->single_vp = single_vp;
+      clipping_changed = TRUE;
+   }
+
+   /* Disable xy clipping in linear mode.
+    *
+    * Use a guard band if we don't have zsbuf.  Could enable
+    * guardband always - this just to be conservative.
+    *
+    * Because we have a layering violation where the draw module emits
+    * state changes to the driver while we're already inside a draw
+    * call, need to be careful about when we make calls back to the
+    * draw module.  Hence the clipping_changed flag which is as much
+    * to prevent flush recursion as it is to short-circuit noop state
+    * changes.
+    */
+   if (clipping_changed) {
+      draw_set_driver_clipping(lp->draw,
+                               FALSE, // bypass_clip_xy
+                               FALSE, //bypass_clip_z
+                               permit_linear, // guard_band_xy,
+                               single_vp); // bypass_clip_points)
+   }
+}
+
+
+/**
+ * Handle state changes before clears.
+ * Called just prior to clearing (pipe::clear()).
+ */
+void
+llvmpipe_update_derived_clear(struct llvmpipe_context *llvmpipe)
+{
+   if (llvmpipe->dirty & (LP_NEW_FS |
+                          LP_NEW_FRAMEBUFFER))
+      check_linear_rasterizer(llvmpipe);
+}
+
+
 /**
  * Handle state changes.
  * Called just prior to drawing anything (pipe::draw_arrays(), etc).
@@ -180,7 +256,8 @@ compute_vertex_info(struct llvmpipe_context *llvmpipe)
  * Hopefully this will remain quite simple, otherwise need to pull in
  * something like the gallium frontend mechanism.
  */
-void llvmpipe_update_derived( struct llvmpipe_context *llvmpipe )
+void
+llvmpipe_update_derived(struct llvmpipe_context *llvmpipe)
 {
    struct llvmpipe_screen *lp_screen = llvmpipe_screen(llvmpipe->pipe.screen);
 
@@ -191,12 +268,19 @@ void llvmpipe_update_derived( struct llvmpipe_context *llvmpipe )
       llvmpipe->dirty |= LP_NEW_SAMPLER_VIEW;
    }
 
+   if (llvmpipe->dirty & (LP_NEW_TASK))
+      llvmpipe_update_task_shader(llvmpipe);
+
+   if (llvmpipe->dirty & (LP_NEW_MESH))
+      llvmpipe_update_mesh_shader(llvmpipe);
+
    /* This needs LP_NEW_RASTERIZER because of draw_prepare_shader_outputs(). */
    if (llvmpipe->dirty & (LP_NEW_RASTERIZER |
                           LP_NEW_FS |
                           LP_NEW_GS |
                           LP_NEW_TCS |
                           LP_NEW_TES |
+                          LP_NEW_MESH |
                           LP_NEW_VS))
       compute_vertex_info(llvmpipe);
 
@@ -216,28 +300,15 @@ void llvmpipe_update_derived( struct llvmpipe_context *llvmpipe )
                           LP_NEW_RASTERIZER |
                           LP_NEW_SAMPLE_MASK |
                           LP_NEW_DEPTH_STENCIL_ALPHA)) {
-
-      /*
-       * Rasterization is disabled if there is no pixel shader and
-       * both depth and stencil testing are disabled:
-       * http://msdn.microsoft.com/en-us/library/windows/desktop/bb205125
-       * FIXME: set rasterizer_discard in state tracker instead.
-       */
-      boolean null_fs = !llvmpipe->fs ||
-                        llvmpipe->fs->info.base.num_instructions <= 1;
       boolean discard =
-         (llvmpipe->sample_mask) == 0 ||
-         (llvmpipe->rasterizer ? llvmpipe->rasterizer->rasterizer_discard : FALSE) ||
-         (null_fs &&
-          !llvmpipe->depth_stencil->depth_enabled &&
-          !llvmpipe->depth_stencil->stencil[0].enabled);
+         llvmpipe->rasterizer ? llvmpipe->rasterizer->rasterizer_discard : FALSE;
       lp_setup_set_rasterizer_discard(llvmpipe->setup, discard);
    }
 
    if (llvmpipe->dirty & (LP_NEW_FS |
                           LP_NEW_FRAMEBUFFER |
                           LP_NEW_RASTERIZER))
-      llvmpipe_update_setup( llvmpipe );
+      llvmpipe_update_setup(llvmpipe);
 
    if (llvmpipe->dirty & LP_NEW_SAMPLE_MASK)
       lp_setup_set_sample_mask(llvmpipe->setup, llvmpipe->sample_mask);
@@ -250,7 +321,7 @@ void llvmpipe_update_derived( struct llvmpipe_context *llvmpipe )
       lp_setup_set_scissors(llvmpipe->setup, llvmpipe->scissors);
 
    if (llvmpipe->dirty & LP_NEW_DEPTH_STENCIL_ALPHA) {
-      lp_setup_set_alpha_ref_value(llvmpipe->setup, 
+      lp_setup_set_alpha_ref_value(llvmpipe->setup,
                                    llvmpipe->depth_stencil->alpha_ref_value);
       lp_setup_set_stencil_ref_values(llvmpipe->setup,
                                       llvmpipe->stencil_ref.ref_value);
@@ -264,7 +335,7 @@ void llvmpipe_update_derived( struct llvmpipe_context *llvmpipe )
    if (llvmpipe->dirty & LP_NEW_FS_SSBOS)
       lp_setup_set_fs_ssbos(llvmpipe->setup,
                             ARRAY_SIZE(llvmpipe->ssbos[PIPE_SHADER_FRAGMENT]),
-                            llvmpipe->ssbos[PIPE_SHADER_FRAGMENT]);
+                            llvmpipe->ssbos[PIPE_SHADER_FRAGMENT], llvmpipe->fs_ssbo_write_mask);
 
    if (llvmpipe->dirty & LP_NEW_FS_IMAGES)
       lp_setup_set_fs_images(llvmpipe->setup,
@@ -292,6 +363,11 @@ void llvmpipe_update_derived( struct llvmpipe_context *llvmpipe )
                              PIPE_MAX_VIEWPORTS,
                              llvmpipe->viewports);
    }
+
+   llvmpipe_task_update_derived(llvmpipe);
+   llvmpipe_mesh_update_derived(llvmpipe);
+
+   llvmpipe_update_derived_clear(llvmpipe);
 
    llvmpipe->dirty = 0;
 }

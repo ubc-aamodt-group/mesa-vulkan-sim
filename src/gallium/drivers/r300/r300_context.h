@@ -389,7 +389,7 @@ struct r300_texture_desc {
 
 struct r300_resource
 {
-    struct u_resource b;
+    struct pipe_resource b;
 
     /* Winsys buffer backing this resource. */
     struct pb_buffer *buf;
@@ -574,6 +574,8 @@ struct r300_context {
     unsigned char blitter_saved_skip_rendering;
     /* Point sprites texcoord index,  1 bit per texcoord */
     int sprite_coord_enable;
+    /* Whether we are drawing points, to disable sprite coord if not */
+    boolean is_point;
     /* Whether two-sided color selection is enabled (AKA light_twoside). */
     boolean two_sided_color;
     boolean flatshade;
@@ -635,6 +637,8 @@ struct r300_context {
     /* Compiler state. */
     struct rc_regalloc_state fs_regalloc_state; /* Register allocator info for
                                                  * fragment shaders. */
+    struct rc_regalloc_state vs_regalloc_state; /* Register allocator info for
+                                                 * vertex shaders. */
 };
 
 #define foreach_atom(r300, atom) \
@@ -667,6 +671,11 @@ static inline struct r300_context* r300_context(struct pipe_context* context)
 static inline struct r300_fragment_shader *r300_fs(struct r300_context *r300)
 {
     return (struct r300_fragment_shader*)r300->fs.state;
+}
+
+static inline struct r300_vertex_shader *r300_vs(struct r300_context *r300)
+{
+    return (struct r300_vertex_shader*)r300->vs_state.state;
 }
 
 static inline void r300_mark_atom_dirty(struct r300_context *r300,

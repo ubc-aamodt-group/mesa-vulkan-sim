@@ -32,26 +32,9 @@
 #define PIXELSTORE_H
 
 
-#include "glheader.h"
+#include "util/glheader.h"
 
 struct gl_context;
-
-
-extern void GLAPIENTRY
-_mesa_PixelStorei( GLenum pname, GLint param );
-
-
-extern void GLAPIENTRY
-_mesa_PixelStoref( GLenum pname, GLfloat param );
-
-
-extern void GLAPIENTRY
-_mesa_PixelStorei_no_error(GLenum pname, GLint param);
-
-
-extern void GLAPIENTRY
-_mesa_PixelStoref_no_error(GLenum pname, GLfloat param);
-
 
 extern void
 _mesa_init_pixelstore( struct gl_context *ctx );

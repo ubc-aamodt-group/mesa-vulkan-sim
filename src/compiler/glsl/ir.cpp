@@ -23,6 +23,7 @@
 #include <string.h>
 #include "ir.h"
 #include "util/half_float.h"
+#include "util/bitscan.h"
 #include "compiler/glsl_types.h"
 #include "glsl_parser_extras.h"
 
@@ -149,30 +150,20 @@ ir_assignment::whole_variable_written()
 }
 
 ir_assignment::ir_assignment(ir_dereference *lhs, ir_rvalue *rhs,
-			     ir_rvalue *condition, unsigned write_mask)
+                             unsigned write_mask)
    : ir_instruction(ir_type_assignment)
 {
-   this->condition = condition;
    this->rhs = rhs;
    this->lhs = lhs;
    this->write_mask = write_mask;
 
-   if (lhs->type->is_scalar() || lhs->type->is_vector()) {
-      int lhs_components = 0;
-      for (int i = 0; i < 4; i++) {
-	 if (write_mask & (1 << i))
-	    lhs_components++;
-      }
-
-      assert(lhs_components == this->rhs->type->vector_elements);
-   }
+   if (lhs->type->is_scalar() || lhs->type->is_vector())
+      assert(util_bitcount(write_mask) == this->rhs->type->vector_elements);
 }
 
-ir_assignment::ir_assignment(ir_rvalue *lhs, ir_rvalue *rhs,
-			     ir_rvalue *condition)
+ir_assignment::ir_assignment(ir_rvalue *lhs, ir_rvalue *rhs)
    : ir_instruction(ir_type_assignment)
 {
-   this->condition = condition;
    this->rhs = rhs;
 
    /* If the RHS is a vector type, assume that all components of the vector
@@ -438,6 +429,7 @@ ir_expression::ir_expression(int op, ir_rvalue *op0)
 
    case ir_unop_get_buffer_size:
    case ir_unop_ssbo_unsized_array_length:
+   case ir_unop_implicitly_sized_array_length:
       this->type = glsl_type::int_type;
       break;
 
@@ -582,7 +574,7 @@ ir_expression::ir_expression(int op, ir_rvalue *op0, ir_rvalue *op1)
          base = GLSL_TYPE_UINT64;
          break;
       default:
-         unreachable(!"Invalid base type.");
+         unreachable("Invalid base type.");
       }
 
       this->type = glsl_type::get_instance(base, op0->type->vector_elements, 1);
@@ -1806,7 +1798,16 @@ ir_texture::set_sampler(ir_dereference *sampler, const glsl_type *type)
    assert(sampler != NULL);
    assert(type != NULL);
    this->sampler = sampler;
-   this->type = type;
+
+   if (this->is_sparse) {
+      /* code holds residency info */
+      glsl_struct_field fields[2] = {
+         glsl_struct_field(glsl_type::int_type, "code"),
+         glsl_struct_field(type, "texel"),
+      };
+      this->type = glsl_type::get_struct_instance(fields, 2, "struct");
+   } else
+      this->type = type;
 
    if (this->op == ir_txs || this->op == ir_query_levels ||
        this->op == ir_texture_samples) {
@@ -2024,7 +2025,6 @@ ir_variable::ir_variable(const struct glsl_type *type, const char *name,
    this->data.explicit_component = false;
    this->data.has_initializer = false;
    this->data.is_implicit_initializer = false;
-   this->data.is_unmatched_generic_inout = false;
    this->data.is_xfb = false;
    this->data.is_xfb_only = false;
    this->data.explicit_xfb_buffer = false;
@@ -2073,6 +2073,7 @@ ir_variable::ir_variable(const struct glsl_type *type, const char *name,
    this->data.stream = 0;
    this->data.xfb_buffer = -1;
    this->data.xfb_stride = -1;
+   this->data.implicit_conversion_prohibited = false;
 
    this->interface_type = NULL;
 
@@ -2289,63 +2290,6 @@ reparent_ir(exec_list *list, void *mem_ctx)
       visit_tree(node, steal_memory, mem_ctx);
    }
 }
-
-
-static ir_rvalue *
-try_min_one(ir_rvalue *ir)
-{
-   ir_expression *expr = ir->as_expression();
-
-   if (!expr || expr->operation != ir_binop_min)
-      return NULL;
-
-   if (expr->operands[0]->is_one())
-      return expr->operands[1];
-
-   if (expr->operands[1]->is_one())
-      return expr->operands[0];
-
-   return NULL;
-}
-
-static ir_rvalue *
-try_max_zero(ir_rvalue *ir)
-{
-   ir_expression *expr = ir->as_expression();
-
-   if (!expr || expr->operation != ir_binop_max)
-      return NULL;
-
-   if (expr->operands[0]->is_zero())
-      return expr->operands[1];
-
-   if (expr->operands[1]->is_zero())
-      return expr->operands[0];
-
-   return NULL;
-}
-
-ir_rvalue *
-ir_rvalue::as_rvalue_to_saturate()
-{
-   ir_expression *expr = this->as_expression();
-
-   if (!expr)
-      return NULL;
-
-   ir_rvalue *max_zero = try_max_zero(expr);
-   if (max_zero) {
-      return try_min_one(max_zero);
-   } else {
-      ir_rvalue *min_one = try_min_one(expr);
-      if (min_one) {
-	 return try_max_zero(min_one);
-      }
-   }
-
-   return NULL;
-}
-
 
 unsigned
 vertices_per_prim(GLenum prim)

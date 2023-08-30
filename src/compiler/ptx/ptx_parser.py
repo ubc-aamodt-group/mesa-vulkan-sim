@@ -29,6 +29,13 @@
 from enum import Enum, auto, EnumMeta
 import re
 
+
+def debug_print(content):
+    debug = False
+
+    if debug:
+        print(content)
+
 class MetaEnum(EnumMeta):
     def __contains__(cls, item):
         try:
@@ -42,6 +49,7 @@ class InstructionClass(Enum):
     EntryPoint = auto()
     Functional = auto()
     Empty = auto()
+    Untranslated = auto()
     UNKNOWN = auto()
 
 class PTXLine:
@@ -60,6 +68,7 @@ class PTXLine:
         self.command = self.command.strip()
         self.instructionClass = PTXLine.getInstructionClass(fullLine)
         self.condition = ''
+        self.lineNO = -1
     
     def buildString(self):
         if len(self.condition) > 0:
@@ -75,12 +84,28 @@ class PTXLine:
         self.comment += '//' + comment + '\n'
         self.buildString()
 
+    def printLine(self):
+        try:
+            print("Full line: {}".format(self.fullLine))
+            print("Line #: {}".format(self.lineNO))
+            print("Command: {}".format(self.command))
+            print("Inst. class: {}".format(self.instructionClass))
+            if self.instructionClass == InstructionClass.Functional:
+                print("Functional Type: {}".format(self.functionalType))
+            print("Args: {}".format(self.args))
+            print("Whitespace: *{}*".format(self.leadingWhiteSpace))
+            print("Comment: {}".format(self.comment))
+        except:
+            print("Incomplete line")
+        
     @staticmethod
     def getInstructionClass(line):
         if len(line) == 0 or line.isspace():
             return InstructionClass.Empty
+        elif "Untranslated" in line:
+            return InstructionClass.Untranslated
         
-        #print("-%s-%s" % (line, line.isspace()))
+        #debug_print("-%s-%s" % (line, line.isspace()))
         firstWord = line.split(None, 1)[0]
         if firstWord == '.entry':
             return InstructionClass.EntryPoint
@@ -125,9 +150,9 @@ class PTXDecleration (PTXLine):
             self.parse(self.command)
     
     def parse(self, command):
-        # print('###')
-        # print(command)
-        # print('###')
+        # debug_print('###')
+        # debug_print(command)
+        # debug_print('###')
         self.command = command
         firstWord = command.split(None, 1)[0]
         if firstWord == '.reg':
@@ -207,6 +232,7 @@ class FunctionalType(Enum, metaclass=MetaEnum):
     call_miss_shader = 'call_miss_shader'
     call_closest_hit_shader = 'call_closest_hit_shader'
     call_intersection_shader = 'call_intersection_shader'
+    call_anyhit_shader = 'call_anyhit_shader'
     alloca = 'alloca'
     decl_var = 'decl_var'
     deref_var = 'deref_var'
@@ -233,16 +259,21 @@ class FunctionalType(Enum, metaclass=MetaEnum):
     fsign = 'fsign'
     shader_clock = 'shader_clock'
     report_ray_intersection = 'report_ray_intersection'
+    ignore_ray_intersection = 'ignore_ray_intersection'
     fsat = 'fsat'
     # get_intersection_index = 'get_intersection_index'
     run_intersection = 'run_intersection'
     intersection_exit = 'intersection_exit'
+    run_anyhit = 'run_anyhit'
+    anyhit_exit = 'anyhit_exit'
     hit_geometry = 'hit_geometry'
     get_warp_hitgroup = 'get_warp_hitgroup'
     get_hitgroup = 'get_hitgroup'
     get_closest_hit_shaderID = 'get_closest_hit_shaderID'
     get_intersection_shaderID = 'get_intersection_shaderID'
     get_intersection_shader_data_address = 'get_intersection_shader_data_address'
+    get_anyhit_shaderID = 'get_anyhit_shaderID'
+    get_anyhit_shader_data_address = 'get_anyhit_shader_data_address'
     Other = auto()
 
 class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line that does sth like mov (eg it's not decleration)
@@ -260,7 +291,7 @@ class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line t
 
         if firstWord in FunctionalType:
             self.functionalType = FunctionalType[firstWord]
-            self.fullFunction = self.functionalType
+            self.fullFunction = self.functionalType.name
         elif firstWord.split('.')[0] in FunctionalType:
             dotSplit = firstWord.split('.')
             self.functionalType = FunctionalType[dotSplit[0]]
@@ -289,6 +320,13 @@ class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line t
             self.args = []
     
     def buildString(self, function=None, args=None):
+        if not hasattr(self, "fullFunction"):
+            if isinstance(function, FunctionalType):
+                self.fullFunction = function.name
+            else:
+                self.fullFunction = function
+            debug_print("Setting fullFunction to {}".format(self.fullFunction))
+
         self.instructionClass = InstructionClass.Functional
         if function is None:
             function = self.functionalType
@@ -298,6 +336,11 @@ class PTXFunctionalLine (PTXLine): # come up with a better name. I mean a line t
         if isinstance(function, FunctionalType):
             self.command = function.name
             self.functionalType = function
+
+        elif isinstance(function, str) and function in FunctionalType:
+            self.command = function
+            self.functionalType = FunctionalType[function]
+
         else:
             self.command = function
             self.functionalType = FunctionalType.Other
@@ -341,18 +384,22 @@ class PTXShader:
         self.lines = []
         self.vectorVariables = list()
         for line in f:
-            print('parsing line %s: %s' % (lineNO, line))
+            debug_print('parsing line %s: %s' % (lineNO, line))
             ptxLine = PTXLine.createNewLine(line)
+            ptxLine.lineNO = lineNO
             if ptxLine.instructionClass == InstructionClass.VariableDeclaration and ptxLine.declarationType == DeclarationType.Register:
                 if ptxLine.isVector():
                     self.vectorVariables.append(ptxLine.variableName)
-            # print("#1")
-            # print(line)
-            # print(ptxLine.instructionClass)
+            # debug_print("#1")
+            # debug_print(line)
+            # debug_print(ptxLine.instructionClass)
             if ptxLine.instructionClass == InstructionClass.Functional:
-                print(ptxLine.functionalType)
+                debug_print(ptxLine.functionalType)
             # if ptxLine.instructionClass == InstructionClass.Functional:
-            #     print(ptxLine.functionalType)
+            #     debug_print(ptxLine.functionalType)
+            if ptxLine.instructionClass == InstructionClass.Untranslated:
+                ptxLine.printLine()
+                raise Exception("ERROR: Untranslated line found in shader! Please add this instruction to PTX translator before proceeding. ")
             self.lines.append(ptxLine)
             lineNO += 1
         # exit(-1)
@@ -396,6 +443,7 @@ class PTXShader:
 
     
     def findDeclaration(self, name):
+        name = name.split(".")[0]
         for index in range(len(self.lines)):
             line = self.lines[index]
             if line.instructionClass == InstructionClass.VariableDeclaration:

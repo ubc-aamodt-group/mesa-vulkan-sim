@@ -100,9 +100,9 @@ struct ruvd_decoder {
 };
 
 /* flush IB to the hardware */
-static int flush(struct ruvd_decoder *dec, unsigned flags)
-{
-	return dec->ws->cs_flush(&dec->cs, flags, NULL);
+static int flush(struct ruvd_decoder *dec, unsigned flags,
+				 struct pipe_fence_handle **fence) {
+	return dec->ws->cs_flush(&dec->cs, flags, fence);
 }
 
 /* add a new set register command to the IB */
@@ -115,12 +115,12 @@ static void set_reg(struct ruvd_decoder *dec, unsigned reg, uint32_t val)
 /* send a command to the VCPU through the GPCOM registers */
 static void send_cmd(struct ruvd_decoder *dec, unsigned cmd,
 		     struct pb_buffer* buf, uint32_t off,
-		     enum radeon_bo_usage usage, enum radeon_bo_domain domain)
+		     unsigned usage, enum radeon_bo_domain domain)
 {
 	int reloc_idx;
 
 	reloc_idx = dec->ws->cs_add_buffer(&dec->cs, buf, usage | RADEON_USAGE_SYNCHRONIZED,
-					   domain, 0);
+					   domain);
 	if (!dec->use_legacy) {
 		uint64_t addr;
 		addr = dec->ws->buffer_get_virtual_address(buf);
@@ -152,7 +152,7 @@ static void map_msg_fb_it_buf(struct ruvd_decoder *dec)
 	buf = &dec->msg_fb_it_buffers[dec->cur_buffer];
 
 	/* and map it for CPU access */
-	ptr = dec->ws->buffer_map(buf->res->buf, &dec->cs,
+	ptr = dec->ws->buffer_map(dec->ws, buf->res->buf, &dec->cs,
                                   PIPE_MAP_WRITE | RADEON_MAP_TEMPORARY);
 
 	/* calc buffer offsets */
@@ -177,7 +177,7 @@ static void send_msg_buf(struct ruvd_decoder *dec)
 	buf = &dec->msg_fb_it_buffers[dec->cur_buffer];
 
 	/* unmap the buffer */
-	dec->ws->buffer_unmap(buf->res->buf);
+	dec->ws->buffer_unmap(dec->ws, buf->res->buf);
 	dec->bs_ptr = NULL;
 	dec->msg = NULL;
 	dec->fb = NULL;
@@ -295,7 +295,7 @@ static unsigned calc_dpb_size(struct ruvd_decoder *dec)
 				dpb_size += align(width_in_mb * height_in_mb * 32, alignment);
 			}
 		} else {
-			// the firmware seems to allways assume a minimum of ref frames
+			// the firmware seems to always assume a minimum of ref frames
 			max_references = MAX2(NUM_H264_REFS, max_references);
 			// reference picture buffer
 			dpb_size = image_size * max_references;
@@ -310,7 +310,7 @@ static unsigned calc_dpb_size(struct ruvd_decoder *dec)
 	}
 
 	case PIPE_VIDEO_FORMAT_VC1:
-		// the firmware seems to allways assume a minimum of ref frames
+		// the firmware seems to always assume a minimum of ref frames
 		max_references = MAX2(NUM_VC1_REFS, max_references);
 
 		// reference picture buffer
@@ -807,7 +807,7 @@ static void ruvd_destroy(struct pipe_video_codec *decoder)
 	dec->msg->stream_handle = dec->stream_handle;
 	send_msg_buf(dec);
 
-	flush(dec, 0);
+	flush(dec, 0, NULL);
 
 	dec->ws->cs_destroy(&dec->cs);
 
@@ -840,7 +840,7 @@ static void ruvd_begin_frame(struct pipe_video_codec *decoder,
 					    &ruvd_destroy_associated_data);
 
 	dec->bs_size = 0;
-	dec->bs_ptr = dec->ws->buffer_map(
+	dec->bs_ptr = dec->ws->buffer_map(dec->ws,
 		dec->bs_buffers[dec->cur_buffer].res->buf,
 		&dec->cs, PIPE_MAP_WRITE | RADEON_MAP_TEMPORARY);
 }
@@ -888,14 +888,14 @@ static void ruvd_decode_bitstream(struct pipe_video_codec *decoder,
 			new_size += 2; /* save for EOI */
 
 		if (new_size > buf->res->buf->size) {
-			dec->ws->buffer_unmap(buf->res->buf);
+			dec->ws->buffer_unmap(dec->ws, buf->res->buf);
 			dec->bs_ptr = NULL;
 			if (!rvid_resize_buffer(dec->screen, &dec->cs, buf, new_size)) {
 				RVID_ERR("Can't resize bitstream buffer!");
 				return;
 			}
 
-			dec->bs_ptr = dec->ws->buffer_map(buf->res->buf, &dec->cs,
+			dec->bs_ptr = dec->ws->buffer_map(dec->ws, buf->res->buf, &dec->cs,
 							  PIPE_MAP_WRITE |
 							  RADEON_MAP_TEMPORARY);
 			if (!dec->bs_ptr)
@@ -939,7 +939,7 @@ static void ruvd_end_frame(struct pipe_video_codec *decoder,
 
 	bs_size = align(dec->bs_size, 128);
 	memset(dec->bs_ptr, 0, bs_size - dec->bs_size);
-	dec->ws->buffer_unmap(bs_buf->res->buf);
+	dec->ws->buffer_unmap(dec->ws, bs_buf->res->buf);
 	dec->bs_ptr = NULL;
 
 	map_msg_fb_it_buf(dec);
@@ -1017,7 +1017,7 @@ static void ruvd_end_frame(struct pipe_video_codec *decoder,
 			 FB_BUFFER_OFFSET + dec->fb_size, RADEON_USAGE_READ, RADEON_DOMAIN_GTT);
 	set_reg(dec, dec->reg.cntl, 1);
 
-	flush(dec, PIPE_FLUSH_ASYNC);
+	flush(dec, PIPE_FLUSH_ASYNC, picture->fence);
 	next_buffer(dec);
 }
 
@@ -1026,6 +1026,14 @@ static void ruvd_end_frame(struct pipe_video_codec *decoder,
  */
 static void ruvd_flush(struct pipe_video_codec *decoder)
 {
+}
+
+static int ruvd_get_decoder_fence(struct pipe_video_codec *decoder,
+                                  struct pipe_fence_handle *fence,
+                                  uint64_t timeout) {
+
+  struct ruvd_decoder *dec = (struct ruvd_decoder *)decoder;
+  return dec->ws->fence_wait(dec->ws, fence, timeout);
 }
 
 /**
@@ -1044,14 +1052,14 @@ struct pipe_video_codec *ruvd_create_decoder(struct pipe_context *context,
 	struct ruvd_decoder *dec;
 	int r, i;
 
-	ws->query_info(ws, &info, false, false);
+	ws->query_info(ws, &info);
 
 	switch(u_reduce_video_profile(templ->profile)) {
 	case PIPE_VIDEO_FORMAT_MPEG12:
 		if (templ->entrypoint > PIPE_VIDEO_ENTRYPOINT_BITSTREAM || info.family < CHIP_PALM)
 			return vl_create_mpeg12_decoder(context, templ);
 
-		/* fall through */
+		FALLTHROUGH;
 	case PIPE_VIDEO_FORMAT_MPEG4:
 		width = align(width, VL_MACROBLOCK_WIDTH);
 		height = align(height, VL_MACROBLOCK_HEIGHT);
@@ -1084,6 +1092,7 @@ struct pipe_video_codec *ruvd_create_decoder(struct pipe_context *context,
 	dec->base.decode_bitstream = ruvd_decode_bitstream;
 	dec->base.end_frame = ruvd_end_frame;
 	dec->base.flush = ruvd_flush;
+	dec->base.get_decoder_fence = ruvd_get_decoder_fence;
 
 	dec->stream_type = profile2stream_type(dec, info.family);
 	dec->set_dtb = set_dtb;
@@ -1091,7 +1100,7 @@ struct pipe_video_codec *ruvd_create_decoder(struct pipe_context *context,
 	dec->screen = context->screen;
 	dec->ws = ws;
 
-	if (!ws->cs_create(&dec->cs, rctx->ctx, RING_UVD, NULL, NULL, false)) {
+	if (!ws->cs_create(&dec->cs, rctx->ctx, AMD_IP_UVD, NULL, NULL, false)) {
 		RVID_ERR("Can't get command submission context.\n");
 		goto error;
 	}
@@ -1142,7 +1151,7 @@ struct pipe_video_codec *ruvd_create_decoder(struct pipe_context *context,
 	dec->msg->body.create.height_in_samples = dec->base.height;
 	dec->msg->body.create.dpb_size = dpb_size;
 	send_msg_buf(dec);
-	r = flush(dec, 0);
+	r = flush(dec, 0, NULL);
 	if (r)
 		goto error;
 
@@ -1170,7 +1179,7 @@ error:
 /* calculate top/bottom offset */
 static unsigned texture_offset(struct radeon_surf *surface, unsigned layer)
 {
-	return surface->u.legacy.level[0].offset +
+	return (uint64_t)surface->u.legacy.level[0].offset_256B * 256 +
 		layer * (uint64_t)surface->u.legacy.level[0].slice_size_dw * 4;
 }
 

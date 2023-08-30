@@ -19,10 +19,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
- *
- * Authors:
- *    Jason Ekstrand (jason@jlekstrand.net)
- *
  */
 
 #include "nir.h"
@@ -61,9 +57,37 @@
 
 static bool
 block_check_for_allowed_instrs(nir_block *block, unsigned *count,
-                               bool alu_ok, bool indirect_load_ok,
+                               unsigned limit, bool indirect_load_ok,
                                bool expensive_alu_ok)
 {
+   bool alu_ok = limit != 0;
+
+   /* Used on non-control-flow HW to flatten all IFs. */
+   if (limit == ~0) {
+      nir_foreach_instr(instr, block) {
+         switch (instr->type) {
+         case nir_instr_type_alu:
+         case nir_instr_type_deref:
+         case nir_instr_type_load_const:
+         case nir_instr_type_phi:
+         case nir_instr_type_ssa_undef:
+         case nir_instr_type_tex:
+            break;
+
+         case nir_instr_type_intrinsic:
+            if (!nir_intrinsic_can_reorder(nir_instr_as_intrinsic(instr)))
+               return false;
+            break;
+
+         case nir_instr_type_call:
+         case nir_instr_type_jump:
+         case nir_instr_type_parallel_copy:
+            return false;
+         }
+      }
+      return true;
+   }
+
    nir_foreach_instr(instr, block) {
       switch (instr->type) {
       case nir_instr_type_intrinsic: {
@@ -76,6 +100,7 @@ block_check_for_allowed_instrs(nir_block *block, unsigned *count,
             switch (deref->modes) {
             case nir_var_shader_in:
             case nir_var_uniform:
+            case nir_var_image:
                /* Don't try to remove flow control around an indirect load
                 * because that flow control may be trying to avoid invalid
                 * loads.
@@ -92,6 +117,7 @@ block_check_for_allowed_instrs(nir_block *block, unsigned *count,
          }
 
          case nir_intrinsic_load_uniform:
+         case nir_intrinsic_load_preamble:
          case nir_intrinsic_load_helper_invocation:
          case nir_intrinsic_is_helper_invocation:
          case nir_intrinsic_load_front_face:
@@ -99,6 +125,7 @@ block_check_for_allowed_instrs(nir_block *block, unsigned *count,
          case nir_intrinsic_load_layer_id:
          case nir_intrinsic_load_frag_coord:
          case nir_intrinsic_load_sample_pos:
+         case nir_intrinsic_load_sample_pos_or_center:
          case nir_intrinsic_load_sample_id:
          case nir_intrinsic_load_sample_mask_in:
          case nir_intrinsic_load_vertex_id_zero_base:
@@ -106,8 +133,8 @@ block_check_for_allowed_instrs(nir_block *block, unsigned *count,
          case nir_intrinsic_load_base_instance:
          case nir_intrinsic_load_instance_id:
          case nir_intrinsic_load_draw_id:
-         case nir_intrinsic_load_num_work_groups:
-         case nir_intrinsic_load_work_group_id:
+         case nir_intrinsic_load_num_workgroups:
+         case nir_intrinsic_load_workgroup_id:
          case nir_intrinsic_load_local_invocation_id:
          case nir_intrinsic_load_local_invocation_index:
          case nir_intrinsic_load_subgroup_id:
@@ -194,13 +221,10 @@ block_check_for_allowed_instrs(nir_block *block, unsigned *count,
             if (mov->dest.saturate)
                return false;
 
-            /* It cannot have any if-uses */
-            if (!list_is_empty(&mov->dest.dest.ssa.if_uses))
-               return false;
-
             /* The only uses of this definition must be phis in the successor */
-            nir_foreach_use(use, &mov->dest.dest.ssa) {
-               if (use->parent_instr->type != nir_instr_type_phi ||
+            nir_foreach_use_including_if(use, &mov->dest.dest.ssa) {
+               if (use->is_if ||
+                   use->parent_instr->type != nir_instr_type_phi ||
                    use->parent_instr->block != block->successors[0])
                   return false;
             }
@@ -353,6 +377,17 @@ nir_opt_peephole_select_block(nir_block *block, nir_shader *shader,
    if (prev_node->type != nir_cf_node_if)
       return false;
 
+   nir_block *prev_block = nir_cf_node_as_block(nir_cf_node_prev(prev_node));
+
+   /* If the last instruction before this if/else block is a jump, we can't
+    * append stuff after it because it would break a bunch of assumption about
+    * control flow (nir_validate expects the successor of a return/halt jump
+    * to be the end of the function, which might not match the successor of
+    * the if/else blocks).
+    */
+   if (nir_block_ends_in_return_or_halt(prev_block))
+      return false;
+
    nir_if *if_stmt = nir_cf_node_as_if(prev_node);
 
    /* first, try to collapse the if */
@@ -379,9 +414,9 @@ nir_opt_peephole_select_block(nir_block *block, nir_shader *shader,
 
    /* ... and those blocks must only contain "allowed" instructions. */
    unsigned count = 0;
-   if (!block_check_for_allowed_instrs(then_block, &count, limit != 0,
+   if (!block_check_for_allowed_instrs(then_block, &count, limit,
                                        indirect_load_ok, expensive_alu_ok) ||
-       !block_check_for_allowed_instrs(else_block, &count, limit != 0,
+       !block_check_for_allowed_instrs(else_block, &count, limit,
                                        indirect_load_ok, expensive_alu_ok))
       return false;
 
@@ -393,8 +428,6 @@ nir_opt_peephole_select_block(nir_block *block, nir_shader *shader,
     * just remove that entire CF node and replace all of the phi nodes with
     * selects.
     */
-
-   nir_block *prev_block = nir_cf_node_as_block(nir_cf_node_prev(prev_node));
 
    /* First, we move the remaining instructions from the blocks to the
     * block before.  We have already guaranteed that this is safe by
@@ -412,13 +445,9 @@ nir_opt_peephole_select_block(nir_block *block, nir_shader *shader,
       exec_list_push_tail(&prev_block->instr_list, &instr->node);
    }
 
-   nir_foreach_instr_safe(instr, block) {
-      if (instr->type != nir_instr_type_phi)
-         break;
-
-      nir_phi_instr *phi = nir_instr_as_phi(instr);
+   nir_foreach_phi_safe(phi, block) {
       nir_alu_instr *sel = nir_alu_instr_create(shader, nir_op_bcsel);
-      nir_src_copy(&sel->src[0].src, &if_stmt->condition, sel);
+      nir_src_copy(&sel->src[0].src, &if_stmt->condition, &sel->instr);
       /* Splat the condition to all channels */
       memset(sel->src[0].swizzle, 0, sizeof sel->src[0].swizzle);
 
@@ -428,16 +457,15 @@ nir_opt_peephole_select_block(nir_block *block, nir_shader *shader,
          assert(src->src.is_ssa);
 
          unsigned idx = src->pred == then_block ? 1 : 2;
-         nir_src_copy(&sel->src[idx].src, &src->src, sel);
+         nir_src_copy(&sel->src[idx].src, &src->src, &sel->instr);
       }
 
       nir_ssa_dest_init(&sel->instr, &sel->dest.dest,
-                        phi->dest.ssa.num_components,
-                        phi->dest.ssa.bit_size, phi->dest.ssa.name);
+                        phi->dest.ssa.num_components, phi->dest.ssa.bit_size);
       sel->dest.write_mask = (1 << phi->dest.ssa.num_components) - 1;
 
       nir_ssa_def_rewrite_uses(&phi->dest.ssa,
-                               nir_src_for_ssa(&sel->dest.dest.ssa));
+                               &sel->dest.dest.ssa);
 
       nir_instr_insert_before(&phi->instr, &sel->instr);
       nir_instr_remove(&phi->instr);

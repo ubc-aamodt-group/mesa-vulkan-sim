@@ -299,10 +299,12 @@ is_align1_opcode(unsigned opcode)
 }
 
 static bool
-try_copy_propagate(const struct gen_device_info *devinfo,
+try_copy_propagate(const struct brw_compiler *compiler,
                    vec4_instruction *inst, int arg,
                    const copy_entry *entry, int attributes_per_reg)
 {
+   const struct intel_device_info *devinfo = compiler->devinfo;
+
    /* Build up the value we are propagating as if it were the source of a
     * single MOV
     */
@@ -346,12 +348,19 @@ try_copy_propagate(const struct gen_device_info *devinfo,
 
    bool has_source_modifiers = value.negate || value.abs;
 
-   /* gen6 math and gen7+ SENDs from GRFs ignore source modifiers on
+   /* gfx6 math and gfx7+ SENDs from GRFs ignore source modifiers on
     * instructions.
     */
-   if ((has_source_modifiers || value.file == UNIFORM ||
-        value.swizzle != BRW_SWIZZLE_XYZW) && !inst->can_do_source_mods(devinfo))
+   if (has_source_modifiers && !inst->can_do_source_mods(devinfo))
       return false;
+
+   /* Reject cases that would violate register regioning restrictions. */
+   if ((value.file == UNIFORM || value.swizzle != BRW_SWIZZLE_XYZW) &&
+       ((devinfo->ver == 6 && inst->is_math()) ||
+        inst->is_send_from_grf() ||
+        inst->uses_indirect_addressing())) {
+      return false;
+   }
 
    if (has_source_modifiers &&
        value.type != inst->src[arg].type &&
@@ -359,7 +368,7 @@ try_copy_propagate(const struct gen_device_info *devinfo,
       return false;
 
    if (has_source_modifiers &&
-       (inst->opcode == SHADER_OPCODE_GEN4_SCRATCH_WRITE ||
+       (inst->opcode == SHADER_OPCODE_GFX4_SCRATCH_WRITE ||
         inst->opcode == VEC4_OPCODE_PICK_HIGH_32BIT))
       return false;
 
@@ -373,7 +382,7 @@ try_copy_propagate(const struct gen_device_info *devinfo,
    if (is_align1_opcode(inst->opcode) && composed_swizzle != BRW_SWIZZLE_XYZW)
       return false;
 
-   if (inst->is_3src(devinfo) &&
+   if (inst->is_3src(compiler) &&
        (value.file == UNIFORM ||
         (value.file == ATTR && attributes_per_reg != 1)) &&
        !brw_is_single_value_swizzle(composed_swizzle))
@@ -382,7 +391,7 @@ try_copy_propagate(const struct gen_device_info *devinfo,
    if (inst->is_send_from_grf())
       return false;
 
-   /* we can't generally copy-propagate UD negations becuse we
+   /* we can't generally copy-propagate UD negations because we
     * end up accessing the resulting values as signed integers
     * instead. See also resolve_ud_negate().
     */
@@ -496,7 +505,7 @@ vec4_visitor::opt_copy_propagation(bool do_constant_prop)
 
          if (do_constant_prop && try_constant_propagate(inst, i, &entry))
             progress = true;
-         else if (try_copy_propagate(devinfo, inst, i, &entry, attributes_per_reg))
+         else if (try_copy_propagate(compiler, inst, i, &entry, attributes_per_reg))
 	    progress = true;
       }
 

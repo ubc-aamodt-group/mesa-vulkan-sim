@@ -19,6 +19,7 @@
 # SOFTWARE.
 
 files_vulkan_wsi = files('wsi_common.c')
+platform_deps = []
 
 if dep_libdrm.found()
   files_vulkan_wsi += files('wsi_common_drm.c')
@@ -30,24 +31,69 @@ endif
 
 if with_platform_wayland
   files_vulkan_wsi += files('wsi_common_wayland.c')
-  files_vulkan_wsi += [
-    wayland_drm_client_protocol_h,
-    wayland_drm_protocol_c,
-    linux_dmabuf_unstable_v1_client_protocol_h,
-    linux_dmabuf_unstable_v1_protocol_c,
-  ]
+  files_vulkan_wsi += wp_files['linux-dmabuf-unstable-v1']
+  files_vulkan_wsi += wp_files['presentation-time']
+endif
+
+if with_platform_windows
+  files_vulkan_wsi += files('wsi_common_win32.cpp')
+  platform_deps += dep_dxheaders
+else
+  files_vulkan_wsi += files('wsi_common_headless.c')
 endif
 
 if system_has_kms_drm and not with_platform_android
   files_vulkan_wsi += files('wsi_common_display.c')
 endif
 
+wsi_entrypoints = custom_target(
+  'wsi_entrypoints',
+  input : [vk_entrypoints_gen, vk_api_xml],
+  output : ['wsi_common_entrypoints.h', 'wsi_common_entrypoints.c'],
+  command : [
+    prog_python, '@INPUT0@', '--xml', '@INPUT1@', '--proto', '--weak',
+    '--out-h', '@OUTPUT0@', '--out-c', '@OUTPUT1@', '--prefix', 'wsi',
+    '--beta', with_vulkan_beta.to_string()
+  ],
+  depend_files : vk_entrypoints_gen_depend_files,
+)
+
 libvulkan_wsi = static_library(
   'vulkan_wsi',
-  files_vulkan_wsi,
-  include_directories : [inc_include, inc_src],
-  dependencies : [vulkan_wsi_deps, dep_libdrm, idep_vulkan_util, idep_xmlconfig],
-  c_args : [vulkan_wsi_args],
+  [files_vulkan_wsi, wsi_entrypoints],
+  include_directories : [inc_include, inc_src, inc_gallium],
+  dependencies : [
+    vulkan_wsi_deps, dep_libdrm, dep_libudev, idep_vulkan_util_headers,
+    idep_vulkan_runtime_headers, idep_xmlconfig, idep_mesautil, platform_deps
+  ],
   gnu_symbol_visibility : 'hidden',
   build_by_default : false,
 )
+
+idep_vulkan_wsi_headers = declare_dependency(
+  dependencies : idep_vulkan_wsi_defines,
+  include_directories : include_directories('.')
+)
+
+idep_vulkan_wsi_entrypoints_h = declare_dependency(
+  sources : [wsi_entrypoints[0]]
+)
+
+# This is likely a bug in the Meson VS backend, as MSVC with ninja works fine.
+# See this discussion here:
+# https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/10506
+if get_option('backend').startswith('vs')
+  idep_vulkan_wsi = declare_dependency(
+    link_with : libvulkan_wsi,
+    dependencies : idep_vulkan_wsi_headers
+  )
+else
+  idep_vulkan_wsi = declare_dependency(
+    # Instruct users of this library to link with --whole-archive.  Otherwise,
+    # our weak function overloads may not resolve properly.
+    link_whole : libvulkan_wsi,
+    dependencies : [
+      idep_vulkan_wsi_headers, dep_libudev
+    ]
+  )
+endif

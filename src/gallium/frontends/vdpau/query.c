@@ -33,6 +33,8 @@
 #include "pipe/p_defines.h"
 #include "util/u_debug.h"
 
+#include "vl/vl_codec.h"
+
 /**
  * Retrieve the VDPAU version implemented by the backend.
  */
@@ -196,8 +198,7 @@ vlVdpDecoderQueryCapabilities(VdpDevice device, VdpDecoderProfile profile,
    }
 
    mtx_lock(&dev->mutex);
-   *is_supported = pscreen->get_video_param(pscreen, p_profile, PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
-                                            PIPE_VIDEO_CAP_SUPPORTED);
+   *is_supported = vl_codec_supported(pscreen, p_profile, false);
    if (*is_supported) {
       *max_width = pscreen->get_video_param(pscreen, p_profile, PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
                                             PIPE_VIDEO_CAP_MAX_WIDTH);
@@ -205,7 +206,11 @@ vlVdpDecoderQueryCapabilities(VdpDevice device, VdpDecoderProfile profile,
                                              PIPE_VIDEO_CAP_MAX_HEIGHT);
       *max_level = pscreen->get_video_param(pscreen, p_profile, PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
                                             PIPE_VIDEO_CAP_MAX_LEVEL);
-      *max_macroblocks = (*max_width/16)*(*max_height/16);
+      *max_macroblocks = pscreen->get_video_param(pscreen, p_profile, PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
+                                            PIPE_VIDEO_CAP_MAX_MACROBLOCKS);
+      if (*max_macroblocks == 0) {
+         *max_macroblocks = (*max_width/16)*(*max_height/16);
+      }
    } else {
       *max_width = 0;
       *max_height = 0;

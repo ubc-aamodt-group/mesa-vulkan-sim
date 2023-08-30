@@ -51,7 +51,6 @@ struct tgsi_shader_info
    ubyte input_interpolate[PIPE_MAX_SHADER_INPUTS];
    ubyte input_interpolate_loc[PIPE_MAX_SHADER_INPUTS];
    ubyte input_usage_mask[PIPE_MAX_SHADER_INPUTS];
-   ubyte input_cylindrical_wrap[PIPE_MAX_SHADER_INPUTS];
    ubyte output_semantic_name[PIPE_MAX_SHADER_OUTPUTS]; /**< TGSI_SEMANTIC_x */
    ubyte output_semantic_index[PIPE_MAX_SHADER_OUTPUTS];
    ubyte output_usagemask[PIPE_MAX_SHADER_OUTPUTS];
@@ -73,9 +72,7 @@ struct tgsi_shader_info
    ubyte num_stream_output_components[4];
 
    ubyte input_array_first[PIPE_MAX_SHADER_INPUTS];
-   ubyte input_array_last[PIPE_MAX_SHADER_INPUTS];
    ubyte output_array_first[PIPE_MAX_SHADER_OUTPUTS];
-   ubyte output_array_last[PIPE_MAX_SHADER_OUTPUTS];
    unsigned array_max[TGSI_FILE_COUNT];  /**< highest index array per register file */
 
    uint immediate_count; /**< number of immediates declared */
@@ -165,6 +162,7 @@ struct tgsi_shader_info
    bool uses_bindless_image_store;
    bool uses_bindless_image_atomic;
 
+   unsigned hw_atomic_declared; /**< bitmask of declared atomic_counter */
    /**
     * Bitmask indicating which register files are accessed with
     * indirect addressing.  The bits are (1 << TGSI_FILE_x), etc.
@@ -187,38 +185,9 @@ struct tgsi_shader_info
    unsigned max_depth;
 };
 
-struct tgsi_array_info
-{
-   /** Whether an array with this ID was declared. */
-   bool declared;
-
-   /** The OR of all writemasks used to write to this array. */
-   ubyte writemask;
-
-   /** The range with which the array was declared. */
-   struct tgsi_declaration_range range;
-};
-
-struct tgsi_tessctrl_info
-{
-   /** Whether all codepaths write tess factors in all invocations. */
-   bool tessfactors_are_def_in_all_invocs;
-};
-
 extern void
 tgsi_scan_shader(const struct tgsi_token *tokens,
                  struct tgsi_shader_info *info);
-
-void
-tgsi_scan_arrays(const struct tgsi_token *tokens,
-                 unsigned file,
-                 unsigned max_array_id,
-                 struct tgsi_array_info *arrays);
-
-void
-tgsi_scan_tess_ctrl(const struct tgsi_token *tokens,
-                    const struct tgsi_shader_info *info,
-                    struct tgsi_tessctrl_info *out);
 
 static inline bool
 tgsi_is_bindless_image_file(unsigned file)

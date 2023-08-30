@@ -32,13 +32,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
-#include "c11/threads.h"
+#include "util/simple_mtx.h"
 
 #include "eglglobals.h"
 #include "egldevice.h"
 #include "egldisplay.h"
 
 #include "util/macros.h"
+#include "util/os_misc.h"
 
 #ifdef HAVE_MINCORE
 #include <unistd.h>
@@ -46,7 +47,7 @@
 #endif
 
 
-static mtx_t _eglGlobalMutex = _MTX_INITIALIZER_NP;
+static simple_mtx_t _eglGlobalMutex = SIMPLE_MTX_INITIALIZER;
 
 struct _egl_global _eglGlobal =
 {
@@ -66,9 +67,11 @@ struct _egl_global _eglGlobal =
    .ClientExtensionString =
 #endif
    "EGL_EXT_client_extensions"
+#if !DETECT_OS_WINDOWS
    " EGL_EXT_device_base"
    " EGL_EXT_device_enumeration"
    " EGL_EXT_device_query"
+#endif
    " EGL_EXT_platform_base"
    " EGL_KHR_client_get_all_proc_addresses"
    " EGL_KHR_debug"
@@ -80,7 +83,9 @@ struct _egl_global _eglGlobal =
    " "
 #endif
 
+#if !DETECT_OS_WINDOWS
    "EGL_EXT_platform_device"
+#endif
 #ifdef HAVE_WAYLAND_PLATFORM
    " EGL_EXT_platform_wayland"
    " EGL_KHR_platform_wayland"
@@ -90,7 +95,7 @@ struct _egl_global _eglGlobal =
    " EGL_KHR_platform_x11"
 #endif
 #ifdef HAVE_XCB_PLATFORM
-   " EGL_MESA_platform_xcb"
+   " EGL_EXT_platform_xcb"
 #endif
 #ifdef HAVE_DRM_PLATFORM
    " EGL_MESA_platform_gbm"
@@ -119,7 +124,7 @@ _eglAddAtExitCall(void (*func)(void))
    if (func) {
       static EGLBoolean registered = EGL_FALSE;
 
-      mtx_lock(_eglGlobal.Mutex);
+      simple_mtx_lock(_eglGlobal.Mutex);
 
       if (!registered) {
          atexit(_eglAtExit);
@@ -129,15 +134,16 @@ _eglAddAtExitCall(void (*func)(void))
       assert(_eglGlobal.NumAtExitCalls < ARRAY_SIZE(_eglGlobal.AtExitCalls));
       _eglGlobal.AtExitCalls[_eglGlobal.NumAtExitCalls++] = func;
 
-      mtx_unlock(_eglGlobal.Mutex);
+      simple_mtx_unlock(_eglGlobal.Mutex);
    }
 }
 
 EGLBoolean
-_eglPointerIsDereferencable(void *p)
+_eglPointerIsDereferenceable(void *p)
 {
    uintptr_t addr = (uintptr_t) p;
-   const long page_size = getpagesize();
+   uint64_t page_size = 0;
+   os_get_page_size(&page_size);
 #ifdef HAVE_MINCORE
    unsigned char valid = 0;
 
@@ -147,7 +153,10 @@ _eglPointerIsDereferencable(void *p)
    /* align addr to page_size */
    addr &= ~(page_size - 1);
 
-   if (mincore((void *) addr, page_size, &valid) < 0) {
+   /* mincore expects &valid to be unsigned char* on Linux but char* on BSD:
+    * we cast pointers to void, to fix type mismatch warnings in all systems
+    */
+   if (mincore((void *) addr, page_size, (void*)&valid) < 0) {
       return EGL_FALSE;
    }
 

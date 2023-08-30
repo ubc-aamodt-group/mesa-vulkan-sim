@@ -18,23 +18,42 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+libglsl_util = static_library(
+  'glsl_util',
+  glsl_util_files,
+  include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
+  dependencies : dep_valgrind,
+  gnu_symbol_visibility : 'hidden',
+  build_by_default : false,
+)
+
 subdir('glcpp')
+
+bison_command = []
+if yacc_is_bison
+  bison_command = [
+    prog_bison, '-o', '@OUTPUT0@', '-p', '_mesa_glsl_', '--defines=@OUTPUT1@',
+    '@INPUT@',
+  ]
+else
+  bison_command = [
+    prog_bison, '-o', '@OUTPUT0@', '-p', '_mesa_glsl_', '-H', '@OUTPUT1@',
+    '@INPUT@',
+  ]
+endif
 
 glsl_parser = custom_target(
   'glsl_parser',
   input : 'glsl_parser.yy',
   output : ['glsl_parser.cpp', 'glsl_parser.h'],
-  command : [
-    prog_bison, '-o', '@OUTPUT0@', '-p', '_mesa_glsl_', '--defines=@OUTPUT1@',
-    '@INPUT@',
-  ],
+  command : bison_command
 )
 
 glsl_lexer_cpp = custom_target(
   'glsl_lexer_cpp',
   input : 'glsl_lexer.ll',
   output : 'glsl_lexer.cpp',
-  command : [prog_flex, '-o', '@OUTPUT@', '@INPUT@'],
+  command : [prog_flex_cpp, '-o', '@OUTPUT@', '@INPUT@'],
 )
 
 ir_expression_operation_constant_h = custom_target(
@@ -60,6 +79,41 @@ float64_glsl_h = custom_target(
   command : [prog_python, '@INPUT@', '@OUTPUT@', '-n', 'float64_source'],
 )
 
+cross_platform_settings_piece_all_h = custom_target(
+  'cross_platform_settings_piece_all.h',
+  input : [files_xxd, 'CrossPlatformSettings_piece_all.glsl'],
+  output : 'cross_platform_settings_piece_all.h',
+  command : [prog_python, '@INPUT@', '@OUTPUT@', '-n', 'cross_platform_settings_piece_all_header'],
+)
+
+bc1_glsl_h = custom_target(
+  'bc1_glsl.h',
+  input : [files_xxd, 'bc1.glsl'],
+  output : 'bc1_glsl.h',
+  command : [prog_python, '@INPUT@', '@OUTPUT@', '-n', 'bc1_source'],
+)
+
+bc4_glsl_h = custom_target(
+  'bc4_glsl.h',
+  input : [files_xxd, 'bc4.glsl'],
+  output : 'bc4_glsl.h',
+  command : [prog_python, '@INPUT@', '@OUTPUT@', '-n', 'bc4_source'],
+)
+
+etc2_rgba_stitch_glsl_h = custom_target(
+  'etc2_rgba_stitch_glsl.h',
+  input : [files_xxd, 'etc2_rgba_stitch.glsl'],
+  output : 'etc2_rgba_stitch_glsl.h',
+  command : [prog_python, '@INPUT@', '@OUTPUT@', '-n', 'etc2_rgba_stitch_source'],
+)
+
+astc_glsl_h = custom_target(
+  'astc_glsl.h',
+  input : [files_xxd, 'astc_decoder.glsl'],
+  output : 'astc_glsl.h',
+  command : [prog_python, '@INPUT@', '@OUTPUT@', '-n', 'astc_source'],
+)
+
 files_libglsl = files(
   'ast.h',
   'ast_array_index.cpp',
@@ -76,15 +130,20 @@ files_libglsl = files(
   'gl_nir_lower_atomics.c',
   'gl_nir_lower_images.c',
   'gl_nir_lower_buffers.c',
+  'gl_nir_lower_packed_varyings.c',
   'gl_nir_lower_samplers.c',
   'gl_nir_lower_samplers_as_deref.c',
+  'gl_nir_lower_xfb_varying.c',
   'gl_nir_link_atomics.c',
   'gl_nir_link_uniform_blocks.c',
   'gl_nir_link_uniform_initializers.c',
   'gl_nir_link_uniforms.c',
+  'gl_nir_link_varyings.c',
+  'gl_nir_link_varyings.h',
   'gl_nir_link_xfb.c',
   'gl_nir_linker.c',
   'gl_nir_linker.h',
+  'gl_nir_opt_dead_builtin_varyings.c',
   'gl_nir.h',
   'glsl_parser_extras.cpp',
   'glsl_parser_extras.h',
@@ -120,7 +179,6 @@ files_libglsl = files(
   'ir_reader.h',
   'ir_rvalue_visitor.cpp',
   'ir_rvalue_visitor.h',
-  'ir_set_program_inouts.cpp',
   'ir_uniform.h',
   'ir_validate.cpp',
   'ir_variable_refcount.cpp',
@@ -130,62 +188,32 @@ files_libglsl = files(
   'linker.h',
   'linker_util.h',
   'linker_util.cpp',
-  'link_atomics.cpp',
   'link_functions.cpp',
   'link_interface_blocks.cpp',
   'link_uniforms.cpp',
-  'link_uniform_initializers.cpp',
   'link_uniform_block_active_visitor.cpp',
   'link_uniform_block_active_visitor.h',
   'link_uniform_blocks.cpp',
   'link_varyings.cpp',
   'link_varyings.h',
   'list.h',
-  'loop_analysis.cpp',
-  'loop_analysis.h',
-  'loop_unroll.cpp',
   'lower_blend_equation_advanced.cpp',
-  'lower_buffer_access.cpp',
-  'lower_buffer_access.h',
   'lower_builtins.cpp',
-  'lower_const_arrays_to_uniforms.cpp',
-  'lower_cs_derived.cpp',
   'lower_discard.cpp',
   'lower_discard_flow.cpp',
   'lower_distance.cpp',
-  'lower_if_to_cond_assign.cpp',
   'lower_instructions.cpp',
   'lower_int64.cpp',
   'lower_jumps.cpp',
   'lower_mat_op_to_vec.cpp',
-  'lower_offset_array.cpp',
-  'lower_packed_varyings.cpp',
   'lower_named_interface_blocks.cpp',
   'lower_packing_builtins.cpp',
   'lower_precision.cpp',
   'lower_subroutine.cpp',
-  'lower_tess_level.cpp',
-  'lower_texture_projection.cpp',
-  'lower_variable_index_to_cond_assign.cpp',
   'lower_vec_index_to_cond_assign.cpp',
-  'lower_vec_index_to_swizzle.cpp',
-  'lower_vector.cpp',
   'lower_vector_derefs.cpp',
-  'lower_vector_insert.cpp',
-  'lower_vertex_id.cpp',
-  'lower_output_reads.cpp',
-  'lower_shared_reference.cpp',
-  'lower_ubo_reference.cpp',
-  'lower_xfb_varying.cpp',
   'opt_algebraic.cpp',
-  'opt_array_splitting.cpp',
-  'opt_conditional_discard.cpp',
-  'opt_constant_folding.cpp',
-  'opt_constant_propagation.cpp',
-  'opt_constant_variable.cpp',
-  'opt_copy_propagation_elements.cpp',
   'opt_dead_builtin_variables.cpp',
-  'opt_dead_builtin_varyings.cpp',
   'opt_dead_code.cpp',
   'opt_dead_code_local.cpp',
   'opt_dead_functions.cpp',
@@ -195,11 +223,7 @@ files_libglsl = files(
   'opt_if_simplification.cpp',
   'opt_minmax.cpp',
   'opt_rebalance_tree.cpp',
-  'opt_redundant_jumps.cpp',
-  'opt_structure_splitting.cpp',
-  'opt_swizzle.cpp',
   'opt_tree_grafting.cpp',
-  'opt_vectorize.cpp',
   'program.h',
   'propagate_invariance.cpp',
   's_expression.cpp',
@@ -226,7 +250,8 @@ libglsl = static_library(
   'glsl',
   [files_libglsl, glsl_parser, glsl_lexer_cpp, ir_expression_operation_h,
    ir_expression_operation_strings_h, ir_expression_operation_constant_h,
-   float64_glsl_h],
+   float64_glsl_h, cross_platform_settings_piece_all_h, bc1_glsl_h, bc4_glsl_h,
+   etc2_rgba_stitch_glsl_h, astc_glsl_h],
   c_args : [c_msvc_compat_args, no_override_init_args],
   cpp_args : [cpp_msvc_compat_args],
   gnu_symbol_visibility : 'hidden',

@@ -1190,7 +1190,7 @@ img_filter_2d_linear_repeat_POT(const struct sp_sampler_view *sp_sview,
    }
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1225,7 +1225,7 @@ img_filter_2d_nearest_repeat_POT(const struct sp_sampler_view *sp_sview,
       rgba[TGSI_NUM_CHANNELS*c] = out[c];
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1268,7 +1268,7 @@ img_filter_2d_nearest_clamp_POT(const struct sp_sampler_view *sp_sview,
       rgba[TGSI_NUM_CHANNELS*c] = out[c];
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1299,7 +1299,7 @@ img_filter_1d_nearest(const struct sp_sampler_view *sp_sview,
       rgba[TGSI_NUM_CHANNELS*c] = out[c];
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1331,7 +1331,7 @@ img_filter_1d_array_nearest(const struct sp_sampler_view *sp_sview,
       rgba[TGSI_NUM_CHANNELS*c] = out[c];
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1365,7 +1365,7 @@ img_filter_2d_nearest(const struct sp_sampler_view *sp_sview,
       rgba[TGSI_NUM_CHANNELS*c] = out[c];
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1400,7 +1400,7 @@ img_filter_2d_array_nearest(const struct sp_sampler_view *sp_sview,
       rgba[TGSI_NUM_CHANNELS*c] = out[c];
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1444,7 +1444,7 @@ img_filter_cube_nearest(const struct sp_sampler_view *sp_sview,
       rgba[TGSI_NUM_CHANNELS*c] = out[c];
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -1479,7 +1479,7 @@ img_filter_cube_array_nearest(const struct sp_sampler_view *sp_sview,
       rgba[TGSI_NUM_CHANNELS*c] = out[c];
 
    if (DEBUG_TEX) {
-      print_sample(__FUNCTION__, rgba);
+      print_sample(__func__, rgba);
    }
 }
 
@@ -2137,7 +2137,7 @@ mip_filter_linear(const struct sp_sampler_view *sp_sview,
    }
 
    if (DEBUG_TEX) {
-      print_sample_4(__FUNCTION__, rgba);
+      print_sample_4(__func__, rgba);
    }
 }
 
@@ -2204,7 +2204,7 @@ mip_filter_nearest(const struct sp_sampler_view *sp_sview,
    }
 
    if (DEBUG_TEX) {
-      print_sample_4(__FUNCTION__, rgba);
+      print_sample_4(__func__, rgba);
    }
 }
 
@@ -2385,15 +2385,6 @@ img_filter_2d_ewa(const struct sp_sampler_view *sp_sview,
    float weight_buffer[TGSI_QUAD_SIZE];
    int j;
 
-   /* For each quad, the du and dx values are the same and so the ellipse is
-    * also the same. Note that texel/image access can only be performed using
-    * a quad, i.e. it is not possible to get the pixel value for a single
-    * tex coord. In order to have a better performance, the access is buffered
-    * using the s_buffer/t_buffer and weight_buffer. Only when the buffer is
-    * full, then the pixel values are read from the image.
-    */
-   const float ddq = 2 * A;
-
    /* Scale ellipse formula to directly index the Filter Lookup Table.
     * i.e. scale so that F = WEIGHT_LUT_SIZE-1
     */
@@ -2402,6 +2393,15 @@ img_filter_2d_ewa(const struct sp_sampler_view *sp_sview,
    B *= formScale;
    C *= formScale;
    /* F *= formScale; */ /* no need to scale F as we don't use it below here */
+
+   /* For each quad, the du and dx values are the same and so the ellipse is
+    * also the same. Note that texel/image access can only be performed using
+    * a quad, i.e. it is not possible to get the pixel value for a single
+    * tex coord. In order to have a better performance, the access is buffered
+    * using the s_buffer/t_buffer and weight_buffer. Only when the buffer is
+    * full, then the pixel values are read from the image.
+    */
+   const float ddq = 2 * A;
 
    args.level = level;
    args.offset = offset;
@@ -2653,7 +2653,7 @@ mip_filter_linear_aniso(const struct sp_sampler_view *sp_sview,
    }
 
    if (DEBUG_TEX) {
-      print_sample_4(__FUNCTION__, rgba);
+      print_sample_4(__func__, rgba);
    }
 }
 
@@ -2728,7 +2728,7 @@ mip_filter_linear_2d_linear_repeat_POT(
    }
 
    if (DEBUG_TEX) {
-      print_sample_4(__FUNCTION__, rgba);
+      print_sample_4(__func__, rgba);
    }
 }
 
@@ -3079,7 +3079,7 @@ get_img_filter(const struct sp_sampler_view *sp_sview,
        */
       if (!gather && sp_sview->pot2d &&
           sampler->wrap_s == sampler->wrap_t &&
-          sampler->normalized_coords) 
+          !sampler->unnormalized_coords)
       {
          switch (sampler->wrap_s) {
          case PIPE_TEX_WRAP_REPEAT:
@@ -3479,7 +3479,7 @@ softpipe_create_sampler_state(struct pipe_context *pipe,
     * nearest_texcoord_s may be active at the same time, if the
     * sampler min_img_filter differs from its mag_img_filter.
     */
-   if (sampler->normalized_coords) {
+   if (!sampler->unnormalized_coords) {
       samp->linear_texcoord_s = get_linear_wrap( sampler->wrap_s );
       samp->linear_texcoord_t = get_linear_wrap( sampler->wrap_t );
       samp->linear_texcoord_p = get_linear_wrap( sampler->wrap_r );
@@ -3514,7 +3514,7 @@ softpipe_create_sampler_state(struct pipe_context *pipe,
 
    case PIPE_TEX_MIPFILTER_LINEAR:
       if (sampler->min_img_filter == sampler->mag_img_filter &&
-          sampler->normalized_coords &&
+          !sampler->unnormalized_coords &&
           sampler->wrap_s == PIPE_TEX_WRAP_REPEAT &&
           sampler->wrap_t == PIPE_TEX_WRAP_REPEAT &&
           sampler->min_img_filter == PIPE_TEX_FILTER_LINEAR &&

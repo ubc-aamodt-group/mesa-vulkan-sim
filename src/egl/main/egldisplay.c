@@ -35,7 +35,11 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 #include <fcntl.h>
 #include "c11/threads.h"
 #include "util/macros.h"
@@ -60,6 +64,9 @@
 #ifdef HAVE_DRM_PLATFORM
 #include <gbm.h>
 #endif
+#ifdef HAVE_WINDOWS_PLATFORM
+#include <windows.h>
+#endif
 
 
 /**
@@ -77,6 +84,7 @@ static const struct {
    { _EGL_PLATFORM_HAIKU, "haiku" },
    { _EGL_PLATFORM_SURFACELESS, "surfaceless" },
    { _EGL_PLATFORM_DEVICE, "device" },
+   { _EGL_PLATFORM_WINDOWS, "windows" },
 };
 
 
@@ -115,7 +123,7 @@ _eglGetNativePlatformFromEnv(void)
 
 
 /**
- * Try detecting native platform with the help of native display characteristcs.
+ * Try detecting native platform with the help of native display characteristics.
  */
 static _EGLPlatformType
 _eglNativePlatformDetectNativeDisplay(void *nativeDisplay)
@@ -123,10 +131,14 @@ _eglNativePlatformDetectNativeDisplay(void *nativeDisplay)
    if (nativeDisplay == EGL_DEFAULT_DISPLAY)
       return _EGL_INVALID_PLATFORM;
 
-   if (_eglPointerIsDereferencable(nativeDisplay)) {
-      void *first_pointer = *(void **) nativeDisplay;
+#ifdef HAVE_WINDOWS_PLATFORM
+   if (GetObjectType(nativeDisplay) == OBJ_DC)
+      return _EGL_PLATFORM_WINDOWS;
+#endif
 
-      (void) first_pointer; /* silence unused var warning */
+#if defined(HAVE_WAYLAND_PLATFORM) || defined(HAVE_DRM_PLATFORM)
+   if (_eglPointerIsDereferenceable(nativeDisplay)) {
+      void *first_pointer = *(void **) nativeDisplay;
 
 #ifdef HAVE_WAYLAND_PLATFORM
       /* wl_display is a wl_proxy, which is a wl_object.
@@ -141,6 +153,7 @@ _eglNativePlatformDetectNativeDisplay(void *nativeDisplay)
          return _EGL_PLATFORM_DRM;
 #endif
    }
+#endif
 
    return _EGL_INVALID_PLATFORM;
 }
@@ -250,7 +263,7 @@ _eglFindDisplay(_EGLPlatformType plat, void *plat_dpy,
    if (plat == _EGL_INVALID_PLATFORM)
       return NULL;
 
-   mtx_lock(_eglGlobal.Mutex);
+   simple_mtx_lock(_eglGlobal.Mutex);
 
    /* search the display list first */
    for (disp = _eglGlobal.DisplayList; disp; disp = disp->Next) {
@@ -265,7 +278,8 @@ _eglFindDisplay(_EGLPlatformType plat, void *plat_dpy,
    if (!disp)
       goto out;
 
-   mtx_init(&disp->Mutex, mtx_plain);
+   simple_mtx_init(&disp->Mutex, mtx_plain);
+   u_rwlock_init(&disp->TerminateLock);
    disp->Platform = plat;
    disp->PlatformDisplay = plat_dpy;
    num_attribs = _eglNumAttribs(attrib_list);
@@ -285,7 +299,7 @@ _eglFindDisplay(_EGLPlatformType plat, void *plat_dpy,
    _eglGlobal.DisplayList = disp;
 
 out:
-   mtx_unlock(_eglGlobal.Mutex);
+   simple_mtx_unlock(_eglGlobal.Mutex);
 
    return disp;
 }
@@ -299,6 +313,8 @@ _eglReleaseDisplayResources(_EGLDisplay *display)
 {
    _EGLResource *list;
    const _EGLDriver *drv = display->Driver;
+
+   simple_mtx_assert_locked(&display->Mutex);
 
    list = display->ResourceLists[_EGL_RESOURCE_CONTEXT];
    while (list) {
@@ -359,26 +375,6 @@ _eglCleanupDisplay(_EGLDisplay *disp)
 
 
 /**
- * Return EGL_TRUE if the given handle is a valid handle to a display.
- */
-EGLBoolean
-_eglCheckDisplayHandle(EGLDisplay dpy)
-{
-   _EGLDisplay *cur;
-
-   mtx_lock(_eglGlobal.Mutex);
-   cur = _eglGlobal.DisplayList;
-   while (cur) {
-      if (cur == (_EGLDisplay *) dpy)
-         break;
-      cur = cur->Next;
-   }
-   mtx_unlock(_eglGlobal.Mutex);
-   return (cur != NULL);
-}
-
-
-/**
  * Return EGL_TRUE if the given resource is valid.  That is, the display does
  * own the resource.
  */
@@ -387,6 +383,8 @@ _eglCheckResource(void *res, _EGLResourceType type, _EGLDisplay *disp)
 {
    _EGLResource *list = disp->ResourceLists[type];
    
+   simple_mtx_assert_locked(&disp->Mutex);
+
    if (!res)
       return EGL_FALSE;
 
@@ -425,8 +423,7 @@ void
 _eglGetResource(_EGLResource *res)
 {
    assert(res && res->RefCount > 0);
-   /* hopefully a resource is always manipulated with its display locked */
-   res->RefCount++;
+   p_atomic_inc(&res->RefCount);
 }
 
 
@@ -437,8 +434,7 @@ EGLBoolean
 _eglPutResource(_EGLResource *res)
 {
    assert(res && res->RefCount > 0);
-   res->RefCount--;
-   return (!res->RefCount);
+   return p_atomic_dec_zero(&res->RefCount);
 }
 
 
@@ -449,6 +445,7 @@ void
 _eglLinkResource(_EGLResource *res, _EGLResourceType type)
 {
    assert(res->Display);
+   simple_mtx_assert_locked(&res->Display->Mutex);
 
    res->IsLinked = EGL_TRUE;
    res->Next = res->Display->ResourceLists[type];
@@ -464,6 +461,8 @@ void
 _eglUnlinkResource(_EGLResource *res, _EGLResourceType type)
 {
    _EGLResource *prev;
+
+   simple_mtx_assert_locked(&res->Display->Mutex);
 
    prev = res->Display->ResourceLists[type];
    if (prev != res) {
@@ -636,7 +635,7 @@ _eglGetDeviceDisplay(void *native_display,
 
    /* If the fd is explicitly provided and we did not dup() it yet, do so.
     * The spec mandates that we do so, since we'll need it past the
-    * eglGetPlatformDispay call.
+    * eglGetPlatformDisplay call.
     *
     * The new fd is guaranteed to be 3 or greater.
     */

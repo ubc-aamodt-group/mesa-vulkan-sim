@@ -33,6 +33,7 @@ struct virgl_hw_res;
 
 #define VIRGL_MAX_TBUF_DWORDS 1024
 #define VIRGL_MAX_CMDBUF_DWORDS ((64 * 1024) + VIRGL_MAX_TBUF_DWORDS)
+#define VIRGL_MAX_PLANE_COUNT 3
 
 struct virgl_drm_caps {
    union virgl_caps caps;
@@ -51,6 +52,8 @@ struct virgl_winsys {
 
    void (*destroy)(struct virgl_winsys *vws);
 
+   int (*get_fd)(struct virgl_winsys *vws);
+
    int (*transfer_put)(struct virgl_winsys *vws,
                        struct virgl_hw_res *res,
                        const struct pipe_box *box,
@@ -64,12 +67,13 @@ struct virgl_winsys {
                        uint32_t buf_offset, uint32_t level);
 
    struct virgl_hw_res *(*resource_create)(struct virgl_winsys *vws,
-                               enum pipe_texture_target target,
-                               uint32_t format, uint32_t bind,
-                               uint32_t width, uint32_t height,
-                               uint32_t depth, uint32_t array_size,
-                               uint32_t last_level, uint32_t nr_samples,
-                               uint32_t flags, uint32_t size);
+                                           enum pipe_texture_target target,
+                                           const void *map_front_private,
+                                           uint32_t format, uint32_t bind,
+                                           uint32_t width, uint32_t height,
+                                           uint32_t depth, uint32_t array_size,
+                                           uint32_t last_level, uint32_t nr_samples,
+                                           uint32_t flags, uint32_t size);
 
    void (*resource_reference)(struct virgl_winsys *qws,
                               struct virgl_hw_res **dres,
@@ -87,10 +91,22 @@ struct virgl_winsys {
                                                        uint32_t *plane_offset,
                                                        uint64_t *modifier,
                                                        uint32_t *blob_mem);
+   void (*resource_set_type)(struct virgl_winsys *vws,
+                             struct virgl_hw_res *res,
+                             uint32_t format, uint32_t bind,
+                             uint32_t width, uint32_t height,
+                             uint32_t usage, uint64_t modifier,
+                             uint32_t plane_count,
+                             const uint32_t *plane_strides,
+                             const uint32_t *plane_offsets);
+
    boolean (*resource_get_handle)(struct virgl_winsys *vws,
                                   struct virgl_hw_res *res,
                                   uint32_t stride,
                                   struct winsys_handle *whandle);
+
+   uint32_t (*resource_get_storage_size)(struct virgl_winsys* vws,
+                                         struct virgl_hw_res* res);
 
    struct virgl_cmd_buf *(*cmd_buf_create)(struct virgl_winsys *ws, uint32_t size);
    void (*cmd_buf_destroy)(struct virgl_cmd_buf *buf);
@@ -161,6 +177,10 @@ static inline void virgl_ws_fill_new_caps_defaults(struct virgl_drm_caps *caps)
    caps->caps.v2.max_compute_work_group_invocations = 0;
    caps->caps.v2.max_compute_shared_memory_size = 0;
    caps->caps.v2.host_feature_check_version = 0;
+   caps->caps.v2.max_shader_sampler_views = 16;
+   for (int shader_type = 0; shader_type < PIPE_SHADER_TYPES; shader_type++) {
+      caps->caps.v2.max_const_buffer_size[shader_type] = 4096 * sizeof(float[4]);
+   }
 }
 
 extern enum virgl_formats pipe_to_virgl_format(enum pipe_format format);

@@ -18,28 +18,52 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-# TODO: android?
-
 files_libintel_common = files(
-  'gen_aux_map.c',
-  'gen_aux_map.h',
-  'gen_buffer_alloc.h',
-  'gen_clflush.h',
-  'gen_batch_decoder.c',
-  'gen_decoder.c',
-  'gen_decoder.h',
-  'gen_disasm.c',
-  'gen_disasm.h',
-  'gen_gem.c',
-  'gen_gem.h',
-  'gen_guardband.h',
-  'gen_l3_config.c',
-  'gen_l3_config.h',
-  'gen_urb_config.c',
-  'gen_sample_positions.h',
-  'gen_uuid.c',
-  'gen_uuid.h',
+  'i915/intel_engine.c',
+  'i915/intel_engine.h',
+  'i915/intel_gem.c',
+  'i915/intel_gem.h',
+  'xe/intel_engine.c',
+  'xe/intel_engine.h',
+  'xe/intel_gem.c',
+  'xe/intel_gem.h',
+  'intel_aux_map.c',
+  'intel_aux_map.h',
+  'intel_buffer_alloc.h',
+  'intel_clflush.h',
+  'intel_decoder.h',
+  'intel_disasm.c',
+  'intel_disasm.h',
+  'intel_engine.c',
+  'intel_engine.h',
+  'intel_gem.c',
+  'intel_gem.h',
+  'intel_genX_state.h',
+  'intel_guardband.h',
+  'intel_l3_config.c',
+  'intel_l3_config.h',
+  'intel_urb_config.c',
+  'intel_sample_positions.c',
+  'intel_sample_positions.h',
+  'intel_uuid.c',
+  'intel_uuid.h',
+  'intel_measure.c',
+  'intel_measure.h',
+  'intel_pixel_hash.h'
 )
+
+files_batch_decoder = files(
+  'intel_batch_decoder.c',
+  'intel_decoder.c',
+)
+
+batch_decoder_dependencies = []
+if not dep_expat.found()
+  files_libintel_common += 'intel_batch_decoder_stub.c'
+else
+  batch_decoder_dependencies += dep_expat
+  files_libintel_common += files_batch_decoder
+endif
 
 libintel_common = static_library(
   'intel_common',
@@ -48,7 +72,7 @@ libintel_common = static_library(
   c_args : [no_override_init_args],
   gnu_symbol_visibility : 'hidden',
   link_with : [libisl],
-  dependencies : [dep_expat, dep_libdrm, dep_thread, idep_genxml, idep_mesautil],
+  dependencies : [batch_decoder_dependencies, dep_libdrm, dep_thread, idep_genxml, idep_mesautil, idep_intel_dev],
 )
 
 libintel_extra_dependencies = []
@@ -62,28 +86,11 @@ idep_libintel_common = declare_dependency(
 )
 
 install_intel_gpu_tests = get_option('install-intel-gpu-tests')
-
-if install_intel_gpu_tests
-  foreach g : [['70', 'gen7'], ['75', 'hsw'], ['80', 'gen8'],
-               ['90', 'gen9'], ['110', 'gen11'], ['120', 'gen12'],
-               ['125', 'gen125']]
-    executable(
-      'intel_@0@_mi_builder_test'.format(g[1]),
-      files('tests/gen_mi_builder_test.cpp'),
-      cpp_args : [
-        cpp_msvc_compat_args,
-        '-DGEN_VERSIONx10=@0@'.format(g[0])
-      ],
-      gnu_symbol_visibility : 'hidden',
-      include_directories : [inc_include, inc_src, inc_intel],
-      link_with : [libintel_dev],
-      dependencies : [dep_libdrm, idep_gtest, idep_genxml, idep_mesautil],
-      install : install_intel_gpu_tests,
-    )
-  endforeach
+if install_intel_gpu_tests and not with_tests
+  error('`install-intel-gpu-tests` requires `build-tests`')
 endif
 
-if with_tests
+if with_tests and not with_platform_android
   gentest_xml = files('tests/gentest.xml')
   _name = 'gentest_pack.h'
   gentest_pack = custom_target(
@@ -92,9 +99,10 @@ if with_tests
     output : _name,
     command : [prog_python, '@INPUT@'],
     capture : true,
+    depend_files: gen_pack_header_deps
   )
 
-  genxml_path = join_paths(meson.source_root(),
+  genxml_path = join_paths(dir_source_root,
                            '@0@'.format(gentest_xml[0]))
 
   test(
@@ -103,7 +111,7 @@ if with_tests
       'genxml_test',
       ['tests/genxml_test.c', gentest_pack],
       include_directories : [inc_include, inc_src, inc_intel],
-      dependencies : idep_mesautil,
+      dependencies : [idep_mesautil, idep_intel_dev],
       link_with : libintel_common,
       c_args : [
         '-DGENXML_PATH="@0@"'.format(genxml_path)
@@ -112,4 +120,22 @@ if with_tests
     args : ['-quiet'],
     suite : ['intel'],
   )
+
+  foreach g : [['70', 'gfx7'], ['75', 'hsw'], ['80', 'gfx8'],
+               ['90', 'gfx9'], ['110', 'gfx11'], ['120', 'gfx12'],
+               ['125', 'gfx125']]
+    executable(
+      'intel_@0@_mi_builder_test'.format(g[1]),
+      files('tests/mi_builder_test.cpp'),
+      cpp_args : [
+        cpp_msvc_compat_args,
+        '-DGFX_VERx10=@0@'.format(g[0])
+      ],
+      gnu_symbol_visibility : 'hidden',
+      include_directories : [inc_include, inc_src, inc_intel],
+      link_with : [libintel_common],
+      dependencies : [dep_libdrm, idep_gtest, idep_genxml, idep_mesautil, idep_intel_dev],
+      install : install_intel_gpu_tests,
+    )
+  endforeach
 endif

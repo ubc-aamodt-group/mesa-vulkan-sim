@@ -33,7 +33,7 @@ extern "C" {
 struct pipe_resource;
 struct pipe_screen;
 struct pipe_context;
-struct stw_winsys;
+struct sw_winsys;
 
 struct pipe_screen *
 d3d12_wgl_create_screen(struct sw_winsys *winsys,
@@ -50,7 +50,7 @@ d3d12_wgl_get_pfd_flags(struct pipe_screen *screen);
 
 struct stw_winsys_framebuffer *
 d3d12_wgl_create_framebuffer(struct pipe_screen *screen,
-                             HDC hDC,
+                             HWND hWnd,
                              int iPixelFormat);
 
 #ifdef __cplusplus

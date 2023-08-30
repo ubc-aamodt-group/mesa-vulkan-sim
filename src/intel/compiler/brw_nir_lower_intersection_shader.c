@@ -84,7 +84,7 @@ lower_any_hit_for_intersection(nir_shader *any_hit)
                 */
                nir_store_deref(b, commit, nir_imm_false(b), 0x1);
                nir_push_if(b, nir_imm_true(b));
-               nir_jump(b, nir_jump_halt);
+               nir_jump(b, nir_jump_return);
                nir_pop_if(b, NULL);
                break;
 
@@ -96,19 +96,31 @@ lower_any_hit_for_intersection(nir_shader *any_hit)
 
             case nir_intrinsic_load_ray_t_max:
                nir_ssa_def_rewrite_uses(&intrin->dest.ssa,
-                                        nir_src_for_ssa(hit_t));
+                                        hit_t);
                nir_instr_remove(&intrin->instr);
                break;
 
             case nir_intrinsic_load_ray_hit_kind:
                nir_ssa_def_rewrite_uses(&intrin->dest.ssa,
-                                        nir_src_for_ssa(hit_kind));
+                                        hit_kind);
                nir_instr_remove(&intrin->instr);
                break;
 
             default:
                break;
             }
+            break;
+         }
+
+         case nir_instr_type_jump: {
+            /* Stomp any halts to returns since they only return from the
+             * any-hit shader and not necessarily from the intersection
+             * shader.  This is safe to do because we've already asserted
+             * that we only have the one function.
+             */
+            nir_jump_instr *jump = nir_instr_as_jump(instr);
+            if (jump->type == nir_jump_halt)
+               jump->type = nir_jump_return;
             break;
          }
 
@@ -130,7 +142,7 @@ lower_any_hit_for_intersection(nir_shader *any_hit)
 void
 brw_nir_lower_intersection_shader(nir_shader *intersection,
                                   const nir_shader *any_hit,
-                                  const struct gen_device_info *devinfo)
+                                  const struct intel_device_info *devinfo)
 {
    void *dead_ctx = ralloc_context(intersection);
 
@@ -151,7 +163,7 @@ brw_nir_lower_intersection_shader(nir_shader *intersection,
 
    b->cursor = nir_before_cf_list(&impl->body);
 
-   nir_ssa_def *t_addr = brw_nir_rt_mem_hit_addr(b, false);
+   nir_ssa_def *t_addr = brw_nir_rt_mem_hit_addr(b, false /* committed */);
    nir_variable *commit =
       nir_local_variable_create(impl, glsl_bool_type(), "ray_commit");
    nir_store_var(b, commit, nir_imm_false(b), 0x1);
@@ -163,7 +175,7 @@ brw_nir_lower_intersection_shader(nir_shader *intersection,
       nir_push_if(b, nir_load_var(b, commit));
       {
          /* Set the "valid" bit in mem_hit */
-         nir_ssa_def *ray_addr = brw_nir_rt_mem_hit_addr(b, false);
+         nir_ssa_def *ray_addr = brw_nir_rt_mem_hit_addr(b, false /* committed */);
          nir_ssa_def *flags_dw_addr = nir_iadd_imm(b, ray_addr, 12);
          nir_store_global(b, flags_dw_addr, 4,
             nir_ior(b, nir_load_global(b, flags_dw_addr, 4, 1, 32),
@@ -231,7 +243,7 @@ brw_nir_lower_intersection_shader(nir_shader *intersection,
 
                nir_ssa_def *accepted = nir_load_var(b, commit_tmp);
                nir_ssa_def_rewrite_uses(&intrin->dest.ssa,
-                                        nir_src_for_ssa(accepted));
+                                        accepted);
                break;
             }
 
@@ -246,6 +258,7 @@ brw_nir_lower_intersection_shader(nir_shader *intersection,
          }
       }
    }
+   nir_metadata_preserve(impl, nir_metadata_none);
 
    /* We did some inlining; have to re-index SSA defs */
    nir_index_ssa_defs(impl);

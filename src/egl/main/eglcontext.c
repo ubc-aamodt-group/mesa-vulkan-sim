@@ -334,8 +334,8 @@ _eglParseContextAttribList(_EGLContext *ctx, _EGLDisplay *disp,
          /* The KHR_no_error spec only applies against OpenGL 2.0+ and
           * OpenGL ES 2.0+
           */
-         if ((api != EGL_OPENGL_API && api != EGL_OPENGL_ES_API) ||
-             ctx->ClientMajorVersion < 2) {
+         if (((api != EGL_OPENGL_API && api != EGL_OPENGL_ES_API) ||
+             ctx->ClientMajorVersion < 2) && val == EGL_TRUE) {
             err = EGL_BAD_ATTRIBUTE;
             break;
          }
@@ -405,6 +405,14 @@ _eglParseContextAttribList(_EGLContext *ctx, _EGLDisplay *disp,
          } else {
             err = EGL_BAD_ATTRIBUTE;
          }
+         break;
+
+      case EGL_PROTECTED_CONTENT_EXT:
+         if (!disp->Extensions.EXT_protected_content) {
+            err = EGL_BAD_ATTRIBUTE;
+            break;
+         }
+         ctx->Protected = val == EGL_TRUE;
          break;
 
       default:
@@ -589,7 +597,7 @@ _eglParseContextAttribList(_EGLContext *ctx, _EGLDisplay *disp,
  */
 EGLBoolean
 _eglInitContext(_EGLContext *ctx, _EGLDisplay *disp, _EGLConfig *conf,
-                const EGLint *attrib_list)
+                _EGLContext *share_list, const EGLint *attrib_list)
 {
    const EGLenum api = eglQueryAPI();
    EGLint err;
@@ -622,6 +630,31 @@ _eglInitContext(_EGLContext *ctx, _EGLDisplay *disp, _EGLConfig *conf,
    }
    if (err != EGL_SUCCESS)
       return _eglError(err, "eglCreateContext");
+
+   /* The EGL_EXT_create_context_robustness spec says:
+    *
+    *    "Add to the eglCreateContext context creation errors: [...]
+    *
+    *     * If the reset notification behavior of <share_context> and the
+    *       newly created context are different then an EGL_BAD_MATCH error is
+    *       generated."
+    */
+   if (share_list && share_list->ResetNotificationStrategy !=
+                     ctx->ResetNotificationStrategy) {
+      return _eglError(EGL_BAD_MATCH,
+                       "eglCreateContext() share list notification strategy mismatch");
+   }
+
+   /* The EGL_KHR_create_context_no_error spec says:
+    *
+    *    "BAD_MATCH is generated if the value of EGL_CONTEXT_OPENGL_NO_ERROR_KHR
+    *    used to create <share_context> does not match the value of
+    *    EGL_CONTEXT_OPENGL_NO_ERROR_KHR for the context being created."
+    */
+   if (share_list && share_list->NoError != ctx->NoError) {
+      return _eglError(EGL_BAD_MATCH,
+                       "eglCreateContext() share list no-error mismatch");
+   }
 
    return EGL_TRUE;
 }
@@ -673,6 +706,8 @@ _eglQueryContextRenderBuffer(_EGLContext *ctx)
 EGLBoolean
 _eglQueryContext(_EGLContext *c, EGLint attribute, EGLint *value)
 {
+   _EGLDisplay *disp = c->Resource.Display;
+
    if (!value)
       return _eglError(EGL_BAD_PARAMETER, "eglQueryContext");
 
@@ -698,6 +733,11 @@ _eglQueryContext(_EGLContext *c, EGLint attribute, EGLint *value)
       break;
    case EGL_CONTEXT_PRIORITY_LEVEL_IMG:
       *value = c->ContextPriority;
+      break;
+   case EGL_PROTECTED_CONTENT_EXT:
+      if (!disp->Extensions.EXT_protected_content)
+         return _eglError(EGL_BAD_ATTRIBUTE, "eglQueryContext");
+      *value = c->Protected;
       break;
    default:
       return _eglError(EGL_BAD_ATTRIBUTE, "eglQueryContext");
@@ -739,9 +779,6 @@ _eglCheckMakeCurrent(_EGLContext *ctx, _EGLSurface *draw, _EGLSurface *read)
 {
    _EGLThreadInfo *t = _eglGetCurrentThread();
    _EGLDisplay *disp;
-
-   if (_eglIsCurrentThreadDummy())
-      return _eglError(EGL_BAD_ALLOC, "eglMakeCurrent");
 
    /* this is easy */
    if (!ctx) {
@@ -788,11 +825,6 @@ _eglCheckMakeCurrent(_EGLContext *ctx, _EGLSurface *draw, _EGLSurface *read)
       /* Otherwise we must be using the EGL_KHR_no_config_context
        * extension */
       assert(disp->Extensions.KHR_no_config_context);
-
-      /* The extension doesn't permit binding draw and read buffers with
-       * differing contexts */
-      if (draw && read && draw->Config != read->Config)
-         return _eglError(EGL_BAD_MATCH, "eglMakeCurrent");
    }
 
    return EGL_TRUE;
@@ -805,7 +837,7 @@ _eglCheckMakeCurrent(_EGLContext *ctx, _EGLSurface *draw, _EGLSurface *read)
  * returned context and surfaces.
  *
  * Making a second call with the resources returned by the first call
- * unsurprisingly undoes the first call, except for the resouce reference
+ * unsurprisingly undoes the first call, except for the resource reference
  * counts.
  */
 EGLBoolean

@@ -24,8 +24,6 @@
 # Authors:
 #    Ian Romanick <idr@us.ibm.com>
 
-from __future__ import print_function
-
 import argparse
 
 import gl_XML, glX_XML
@@ -136,10 +134,10 @@ class PrintGlOffsets(gl_XML.gl_print_base):
  *   #define KEYWORD2
  *   #define NAME(func)  gl##func
  *   #define DISPATCH(func, args, msg)                             \\
- *          struct _glapi_table *dispatch = CurrentClientDispatch; \\
+ *          struct _glapi_table *dispatch = GLApi; \\
  *          (*dispatch->func) args
  *   #define RETURN DISPATCH(func, args, msg)                      \\
- *          struct _glapi_table *dispatch = CurrentClientDispatch; \\
+ *          struct _glapi_table *dispatch = GLApi; \\
  *          return (*dispatch->func) args
  *
  */
@@ -164,6 +162,10 @@ class PrintGlOffsets(gl_XML.gl_print_base):
 
 #ifndef RETURN_DISPATCH
 #error RETURN_DISPATCH must be defined
+#endif
+
+#if defined(_WIN32) && defined(_WINDOWS_)
+#error "Should not include <windows.h> here"
 #endif
 
 """)

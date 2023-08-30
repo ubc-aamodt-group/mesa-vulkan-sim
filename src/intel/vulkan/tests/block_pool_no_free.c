@@ -35,7 +35,6 @@ struct job {
    unsigned id;
    struct anv_block_pool *pool;
    int32_t blocks[BLOCKS_PER_THREAD];
-   int32_t back_blocks[BLOCKS_PER_THREAD];
 } jobs[NUM_THREADS];
 
 
@@ -47,25 +46,16 @@ static void *alloc_blocks(void *_job)
    int32_t block, *data;
 
    for (unsigned i = 0; i < BLOCKS_PER_THREAD; i++) {
-      block = anv_block_pool_alloc(job->pool, block_size, NULL);
+      UNUSED uint32_t padding;
+      block = anv_block_pool_alloc(job->pool, block_size, &padding);
       data = anv_block_pool_map(job->pool, block, block_size);
       *data = block;
       ASSERT(block >= 0);
       job->blocks[i] = block;
-
-      block = anv_block_pool_alloc_back(job->pool, block_size);
-      data = anv_block_pool_map(job->pool, block, block_size);
-      *data = block;
-      ASSERT(block < 0);
-      job->back_blocks[i] = -block;
    }
 
    for (unsigned i = 0; i < BLOCKS_PER_THREAD; i++) {
       block = job->blocks[i];
-      data = anv_block_pool_map(job->pool, block, block_size);
-      ASSERT(*data == block);
-
-      block = -job->back_blocks[i];
       data = anv_block_pool_map(job->pool, block, block_size);
       ASSERT(*data == block);
    }
@@ -110,15 +100,16 @@ static void validate_monotonic(int32_t **blocks)
 
 static void run_test()
 {
-   struct anv_physical_device physical_device = { };
-   struct anv_device device = {
-      .physical = &physical_device,
-   };
+   struct anv_physical_device physical_device = {};
+   struct anv_device device = {};
    struct anv_block_pool pool;
 
+   test_device_info_init(&physical_device.info);
+   anv_device_set_physical(&device, &physical_device);
+   device.kmd_backend = anv_kmd_backend_get(INTEL_KMD_TYPE_STUB);
    pthread_mutex_init(&device.mutex, NULL);
-   anv_bo_cache_init(&device.bo_cache);
-   anv_block_pool_init(&pool, &device, 4096, 4096);
+   anv_bo_cache_init(&device.bo_cache, &device);
+   anv_block_pool_init(&pool, &device, "test", 4096, 4096);
 
    for (unsigned i = 0; i < NUM_THREADS; i++) {
       jobs[i].pool = &pool;
@@ -135,12 +126,8 @@ static void run_test()
       block_ptrs[i] = jobs[i].blocks;
    validate_monotonic(block_ptrs);
 
-   /* Validate that the back block allocations were monotonic */
-   for (unsigned i = 0; i < NUM_THREADS; i++)
-      block_ptrs[i] = jobs[i].back_blocks;
-   validate_monotonic(block_ptrs);
-
    anv_block_pool_finish(&pool);
+   anv_bo_cache_finish(&device.bo_cache);
    pthread_mutex_destroy(&device.mutex);
 }
 

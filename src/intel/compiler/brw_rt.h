@@ -31,6 +31,9 @@ extern "C" {
 /** Vulkan defines shaderGroupHandleSize = 32 */
 #define BRW_RT_SBT_HANDLE_SIZE 32
 
+/** RT_DISPATCH_GLOBALS size (see gen_rt.xml) */
+#define BRW_RT_DISPATCH_GLOBALS_SIZE 80
+
 /** Offset after the RT dispatch globals at which "push" constants live */
 #define BRW_RT_PUSH_CONST_OFFSET 128
 
@@ -177,6 +180,10 @@ struct brw_rt_raygen_trampoline_params {
     (BRW_RT_SIZEOF_RAY + BRW_RT_SIZEOF_TRAV_STACK) * BRW_RT_MAX_BVH_LEVELS + \
     (BRW_RT_MAX_BVH_LEVELS % 2 ? 32 : 0))
 
+#define BRW_RT_SIZEOF_SHADOW_RAY_QUERY  \
+   (BRW_RT_SIZEOF_HIT_INFO * 2 + \
+    (BRW_RT_SIZEOF_RAY + BRW_RT_SIZEOF_TRAV_STACK) * BRW_RT_MAX_BVH_LEVELS)
+
 #define BRW_RT_SIZEOF_HW_STACK \
    (BRW_RT_SIZEOF_HIT_INFO * 2 + \
     BRW_RT_SIZEOF_RAY * BRW_RT_MAX_BVH_LEVELS + \
@@ -192,13 +199,13 @@ struct brw_rt_raygen_trampoline_params {
 
 static inline void
 brw_rt_compute_scratch_layout(struct brw_rt_scratch_layout *layout,
-                              const struct gen_device_info *devinfo,
+                              const struct intel_device_info *devinfo,
                               uint32_t stack_ids_per_dss,
                               uint32_t sw_stack_size)
 {
    layout->stack_ids_per_dss = stack_ids_per_dss;
 
-   const uint32_t dss_count = gen_device_info_num_dual_subslices(devinfo);
+   const uint32_t dss_count = intel_device_info_dual_subslice_id_bound(devinfo);
    const uint32_t num_stack_ids = dss_count * stack_ids_per_dss;
 
    uint64_t size = 0;
@@ -223,9 +230,54 @@ brw_rt_compute_scratch_layout(struct brw_rt_scratch_layout *layout,
    assert(size % 64 == 0);
    layout->sw_stack_start = size;
    layout->sw_stack_size = ALIGN(sw_stack_size, 64);
+
+   /* Currently it's always the case that sw_stack_size is a power of
+    * two, but power-of-two SW stack sizes are prone to causing
+    * collisions in the hashing function used by the L3 to map memory
+    * addresses to banks, which can cause stack accesses from most
+    * DSSes to bottleneck on a single L3 bank.  Fix it by padding the
+    * SW stack by a single cacheline if it was a power of two.
+    */
+   if (layout->sw_stack_size > 64 &&
+       util_is_power_of_two_nonzero(layout->sw_stack_size))
+      layout->sw_stack_size += 64;
+
    size += num_stack_ids * layout->sw_stack_size;
 
    layout->total_size = size;
+}
+
+static inline uint32_t
+brw_rt_ray_queries_hw_stacks_size(const struct intel_device_info *devinfo)
+{
+   /* Maximum slice/subslice/EU ID can be computed from the max_scratch_ids
+    * which includes all the threads.
+    */
+   uint32_t max_eu_id = devinfo->max_scratch_ids[MESA_SHADER_COMPUTE];
+   uint32_t max_simd_size = 16; /* Cannot run in SIMD32 with ray queries */
+   return max_eu_id * max_simd_size * BRW_RT_SIZEOF_RAY_QUERY;
+}
+
+static inline uint32_t
+brw_rt_ray_queries_shadow_stack_size(const struct intel_device_info *devinfo)
+{
+   /* Maximum slice/subslice/EU ID can be computed from the max_scratch_ids
+    * which includes all the threads.
+    */
+   uint32_t max_eu_id = devinfo->max_scratch_ids[MESA_SHADER_COMPUTE];
+   uint32_t max_simd_size = 16; /* Cannot run in SIMD32 with ray queries */
+   return max_eu_id * max_simd_size * BRW_RT_SIZEOF_SHADOW_RAY_QUERY;
+}
+
+static inline uint32_t
+brw_rt_ray_queries_shadow_stacks_size(const struct intel_device_info *devinfo,
+                                      uint32_t ray_queries)
+{
+   /* Don't bother a shadow stack if we only have a single query. We can
+    * directly write in the HW buffer.
+    */
+   return (ray_queries > 1 ? ray_queries : 0) * brw_rt_ray_queries_shadow_stack_size(devinfo) +
+          ray_queries * 4; /* Ctrl + Level data */
 }
 
 #ifdef __cplusplus

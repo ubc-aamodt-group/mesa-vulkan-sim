@@ -19,15 +19,18 @@
 # SOFTWARE.
 
 files_libzink = files(
-  'nir_lower_dynamic_bo_access.c',
+  'zink_lower_cubemap_to_array.c',
   'nir_to_spirv/nir_to_spirv.c',
   'nir_to_spirv/spirv_builder.c',
   'zink_batch.c',
   'zink_blit.c',
+  'zink_bo.c',
   'zink_clear.c',
   'zink_compiler.c',
   'zink_context.c',
-  'zink_draw.c',
+  'zink_kopper.c',
+  'zink_descriptors.c',
+  'zink_draw.cpp',
   'zink_fence.c',
   'zink_format.c',
   'zink_framebuffer.c',
@@ -39,6 +42,7 @@ files_libzink = files(
   'zink_screen.c',
   'zink_state.c',
   'zink_surface.c',
+  'zink_synchronization.cpp',
 )
 
 zink_device_info = custom_target(
@@ -46,7 +50,7 @@ zink_device_info = custom_target(
   input : ['zink_device_info.py'],
   output : ['zink_device_info.h', 'zink_device_info.c'],
   command : [
-    prog_python, '@INPUT@', '@OUTPUT@'
+    prog_python, '@INPUT@', '@OUTPUT@', vk_api_xml
   ]
 )
 
@@ -55,7 +59,7 @@ zink_instance = custom_target(
   input : ['zink_instance.py'],
   output : ['zink_instance.h', 'zink_instance.c'],
   command : [
-    prog_python, '@INPUT@', '@OUTPUT@', join_paths(meson.source_root(), 'src/vulkan/registry/vk.xml')
+    prog_python, '@INPUT@', '@OUTPUT@', vk_api_xml
   ]
 )
 
@@ -64,19 +68,40 @@ zink_nir_algebraic_c = custom_target(
   input : 'nir_to_spirv/zink_nir_algebraic.py',
   output : 'zink_nir_algebraic.c',
   command : [
-    prog_python, '@INPUT@',
-    '-p', join_paths(meson.source_root(), 'src/compiler/nir/'),
+    prog_python, '@INPUT@', '-p', dir_compiler_nir,
   ],
   capture : true,
-  depend_files : nir_algebraic_py,
+  depend_files : nir_algebraic_depends,
 )
+
+zink_c_args = []
+inc_zink_vk = []
+
+if host_machine.system() == 'darwin'
+
+  # MoltenVK options
+  if with_moltenvk_dir != ''
+    inc_zink_vk += include_directories(join_paths(with_moltenvk_dir, 'include'))
+  else
+    error('moltenvk-dir is required but not set.')
+  endif
+
+  zink_c_args += ['-x','objective-c'] # Put compiler into objective-C mode to allow for MacOS types, like IOSurface and CAMetalLayer
+  zink_c_args += ['-iframework' , 'Foundation']
+
+endif
 
 libzink = static_library(
   'zink',
-  [files_libzink, zink_device_info, zink_instance, zink_nir_algebraic_c],
+  [files_libzink, zink_device_info, zink_instance, zink_nir_algebraic_c, vk_dispatch_table],
   gnu_symbol_visibility : 'hidden',
-  include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux, inc_vulkan_wsi, inc_vulkan_util],
-  dependencies: [dep_vulkan, idep_nir_headers, idep_mesautil],
+  include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux, inc_vulkan_util, inc_zink_vk],
+  link_args : [ld_args_build_id],
+  dependencies: [
+    idep_nir_headers, idep_mesautil, idep_vulkan_util_headers,
+    idep_vulkan_wsi_defines, idep_vulkan_util, dep_libdrm
+  ],
+  c_args: zink_c_args,
 )
 
 driver_zink = declare_dependency(

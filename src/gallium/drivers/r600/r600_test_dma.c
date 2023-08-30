@@ -59,7 +59,7 @@ static void set_random_pixels(struct pipe_context *ctx,
 	uint8_t *map;
 	unsigned x,y,z;
 
-	map = pipe_transfer_map_3d(ctx, tex, 0, PIPE_MAP_WRITE,
+	map = pipe_texture_map_3d(ctx, tex, 0, PIPE_MAP_WRITE,
 				   0, 0, 0, tex->width0, tex->height0,
 				   tex->array_size, &t);
 	assert(map);
@@ -82,7 +82,7 @@ static void set_random_pixels(struct pipe_context *ctx,
 		}
 	}
 
-	pipe_transfer_unmap(ctx, t);
+	pipe_texture_unmap(ctx, t);
 }
 
 static bool compare_textures(struct pipe_context *ctx,
@@ -94,7 +94,7 @@ static bool compare_textures(struct pipe_context *ctx,
 	int y,z;
 	bool pass = true;
 
-	map = pipe_transfer_map_3d(ctx, tex, 0, PIPE_MAP_READ,
+	map = pipe_texture_map_3d(ctx, tex, 0, PIPE_MAP_READ,
 				   0, 0, 0, tex->width0, tex->height0,
 				   tex->array_size, &t);
 	assert(map);
@@ -112,7 +112,7 @@ static bool compare_textures(struct pipe_context *ctx,
 		}
 	}
 done:
-	pipe_transfer_unmap(ctx, t);
+	pipe_texture_unmap(ctx, t);
 	return pass;
 }
 
@@ -138,7 +138,7 @@ static enum pipe_format get_format_from_bpp(int bpp)
 static const char *array_mode_to_string(struct r600_common_screen *rscreen,
 					struct radeon_surf *surf)
 {
-	if (rscreen->chip_class >= GFX9) {
+	if (rscreen->gfx_level >= GFX9) {
 		/* TODO */
 		return "       UNKNOWN";
 	} else {

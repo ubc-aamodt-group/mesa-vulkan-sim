@@ -76,13 +76,16 @@ NinePixelShader9_UpdateKey( struct NinePixelShader9 *ps,
                             struct nine_context *context )
 {
     uint16_t samplers_shadow;
+    uint16_t samplers_fetch4;
     uint16_t samplers_ps1_types;
     uint8_t projected;
     uint64_t key;
     BOOL res;
 
     samplers_shadow = (uint16_t)((context->samplers_shadow & NINE_PS_SAMPLERS_MASK) >> NINE_SAMPLER_PS(0));
+    samplers_fetch4 = (uint16_t)((context->samplers_fetch4 & NINE_PS_SAMPLERS_MASK) >> NINE_SAMPLER_PS(0));
     key = samplers_shadow & ps->sampler_mask;
+    samplers_fetch4 &= ps->sampler_mask;
 
     if (unlikely(ps->byte_code.version < 0x20)) {
         /* variable targets */
@@ -108,14 +111,11 @@ NinePixelShader9_UpdateKey( struct NinePixelShader9 *ps,
         }
     }
 
-    if (ps->byte_code.version < 0x30) {
-        key |= ((uint64_t)context->rs[D3DRS_FOGENABLE]) << 20;
-        key |= ((uint64_t)context->rs[D3DRS_FOGTABLEMODE]) << 21;
+    if (ps->byte_code.version < 0x30 && context->rs[D3DRS_FOGENABLE]) {
+        key |= 1 << 20;
+        key |= ((uint64_t)context->rs[D3DRS_FOGTABLEMODE]) << 21; /* 2 bits */
+        key |= ((uint64_t)context->zfog) << 23;
     }
-
-    /* centroid interpolation automatically used for color ps inputs */
-    if (context->rt[0]->base.info.nr_samples)
-        key |= ((uint64_t)1) << 22;
 
     if ((ps->const_int_slots > 0 || ps->const_bool_slots > 0) && context->inline_constants)
         key |= ((uint64_t)nine_shader_constant_combination_key(&ps->c_combinations,
@@ -123,6 +123,15 @@ NinePixelShader9_UpdateKey( struct NinePixelShader9 *ps,
                                                                ps->bool_slots_used,
                                                                (void *)context->ps_const_i,
                                                                context->ps_const_b)) << 24;
+
+    key |= ((uint64_t)(context->rs[NINED3DRS_FETCH4] & samplers_fetch4)) << 32; /* 16 bits */
+
+    /* centroid interpolation automatically used for color ps inputs */
+    if (context->rt[0]->base.info.nr_samples)
+        key |= ((uint64_t)1) << 48;
+    key |= ((uint64_t)(context->rs[NINED3DRS_EMULATED_ALPHATEST] & 0x7)) << 49; /* 3 bits */
+    if (context->rs[D3DRS_SHADEMODE] == D3DSHADE_FLAT)
+        key |= ((uint64_t)1) << 52;
 
     res = ps->last_key != key;
     if (res)

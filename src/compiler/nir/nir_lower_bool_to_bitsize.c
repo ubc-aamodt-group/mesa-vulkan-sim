@@ -163,16 +163,6 @@ lower_alu_instr(nir_builder *b, nir_alu_instr *alu)
       /* Nothing to do here, we do not specialize these opcodes by bit-size */
       break;
 
-   case nir_op_f2b1:
-      opcode = bit_size == 8 ? nir_op_f2b8 :
-                               bit_size == 16 ? nir_op_f2b16 : nir_op_f2b32;
-      break;
-
-   case nir_op_i2b1:
-      opcode = bit_size == 8 ? nir_op_i2b8 :
-                               bit_size == 16 ? nir_op_i2b16 : nir_op_i2b32;
-      break;
-
    case nir_op_b2b1:
       /* Since the canonical bit size is the size of the src, it's a no-op */
       opcode = nir_op_mov;
@@ -375,7 +365,7 @@ lower_phi_instr(nir_builder *b, nir_phi_instr *phi)
          dst_bit_size = src_bit_size;
       } else if (src_bit_size != dst_bit_size) {
          assert(phi_src->src.is_ssa);
-         b->cursor = nir_before_src(&phi_src->src, false);
+         b->cursor = nir_before_src(&phi_src->src);
          nir_op convert_op = get_bool_convert_opcode(dst_bit_size);
          nir_ssa_def *new_src =
             nir_build_alu(b, convert_op, phi_src->src.ssa, NULL, NULL, NULL);
@@ -390,58 +380,53 @@ lower_phi_instr(nir_builder *b, nir_phi_instr *phi)
 }
 
 static bool
-nir_lower_bool_to_bitsize_impl(nir_builder *b, nir_function_impl *impl)
+lower_tex_instr(nir_tex_instr *tex)
 {
    bool progress = false;
-
-   nir_foreach_block(block, impl) {
-      nir_foreach_instr_safe(instr, block) {
-         switch (instr->type) {
-         case nir_instr_type_alu:
-            progress |= lower_alu_instr(b, nir_instr_as_alu(instr));
-            break;
-
-         case nir_instr_type_load_const:
-            progress |= lower_load_const_instr(nir_instr_as_load_const(instr));
-            break;
-
-         case nir_instr_type_phi:
-            progress |= lower_phi_instr(b, nir_instr_as_phi(instr));
-            break;
-
-         case nir_instr_type_ssa_undef:
-         case nir_instr_type_intrinsic:
-         case nir_instr_type_tex:
-            nir_foreach_ssa_def(instr, rewrite_1bit_ssa_def_to_32bit,
-                                &progress);
-            break;
-
-         default:
-            nir_foreach_ssa_def(instr, assert_ssa_def_is_not_1bit, NULL);
-         }
-      }
+   rewrite_1bit_ssa_def_to_32bit(&tex->dest.ssa, &progress);
+   if (tex->dest_type == nir_type_bool1) {
+      tex->dest_type = nir_type_bool32;
+      progress = true;
    }
-
-   if (progress) {
-      nir_metadata_preserve(impl, nir_metadata_block_index |
-                                  nir_metadata_dominance);
-   }
-
    return progress;
+}
+
+static bool
+nir_lower_bool_to_bitsize_instr(nir_builder *b,
+                                nir_instr *instr,
+                                UNUSED void *cb_data)
+{
+   switch (instr->type) {
+   case nir_instr_type_alu:
+      return lower_alu_instr(b, nir_instr_as_alu(instr));
+
+   case nir_instr_type_load_const:
+      return lower_load_const_instr(nir_instr_as_load_const(instr));
+
+   case nir_instr_type_phi:
+      return lower_phi_instr(b, nir_instr_as_phi(instr));
+
+   case nir_instr_type_ssa_undef:
+   case nir_instr_type_intrinsic: {
+      bool progress = false;
+      nir_foreach_ssa_def(instr, rewrite_1bit_ssa_def_to_32bit, &progress);
+      return progress;
+   }
+
+   case nir_instr_type_tex:
+      return lower_tex_instr(nir_instr_as_tex(instr));
+
+   default:
+      nir_foreach_ssa_def(instr, assert_ssa_def_is_not_1bit, NULL);
+      return false;
+   }
 }
 
 bool
 nir_lower_bool_to_bitsize(nir_shader *shader)
 {
-   nir_builder b;
-   bool progress = false;
-
-   nir_foreach_function(function, shader) {
-      if (function->impl) {
-         nir_builder_init(&b, function->impl);
-         progress = nir_lower_bool_to_bitsize_impl(&b, function->impl) || progress;
-      }
-   }
-
-   return progress;
+   return nir_shader_instructions_pass(shader, nir_lower_bool_to_bitsize_instr,
+                                       nir_metadata_block_index |
+                                       nir_metadata_dominance,
+                                       NULL);
 }

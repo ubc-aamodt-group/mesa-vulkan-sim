@@ -1,5 +1,5 @@
 /*
- * Copyright © 2019 Raspberry Pi
+ * Copyright © 2019 Raspberry Pi Ltd
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -30,6 +30,7 @@ struct v3dv_bo {
    struct list_head list_link;
 
    uint32_t handle;
+   uint64_t handle_bit;
    uint32_t size;
    uint32_t offset;
 
@@ -51,14 +52,20 @@ struct v3dv_bo {
     */
    bool private;
 
+   /** If this BO has been imported */
+   bool is_import;
+
    /**
     * If this BO was allocated for a swapchain on the display device, the
     * handle of the dumb BO on that device.
     */
    int32_t dumb_handle;
+
+   int32_t refcnt;
 };
 
 void v3dv_bo_init(struct v3dv_bo *bo, uint32_t handle, uint32_t size, uint32_t offset, const char *name, bool private);
+void v3dv_bo_init_import(struct v3dv_bo *bo, uint32_t handle, uint32_t size, uint32_t offset, bool private);
 
 struct v3dv_bo *v3dv_bo_alloc(struct v3dv_device *device, uint32_t size, const char *name, bool private);
 

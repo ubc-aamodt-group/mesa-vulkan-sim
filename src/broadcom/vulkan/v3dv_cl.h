@@ -1,5 +1,5 @@
 /*
- * Copyright © 2019 Raspberry Pi
+ * Copyright © 2019 Raspberry Pi Ltd
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -26,7 +26,7 @@
 
 #include "broadcom/cle/v3d_packet_helpers.h"
 
-#include "list.h"
+#include "util/list.h"
 
 struct v3dv_bo;
 struct v3dv_job;
@@ -45,6 +45,16 @@ struct v3dv_cl_reloc {
    struct v3dv_bo *bo;
    uint32_t offset;
 };
+
+static inline void
+pack_emit_reloc(void *cl, const void *reloc) {}
+
+#define __gen_user_data struct v3dv_cl
+#define __gen_address_type struct v3dv_cl_reloc
+#define __gen_address_offset(reloc) (((reloc)->bo ? (reloc)->bo->offset : 0) + \
+                                     (reloc)->offset)
+#define __gen_emit_reloc cl_pack_emit_reloc
+#define __gen_unpack_address(cl, s, e) __unpack_address(cl, s, e)
 
 struct v3dv_cl {
    void *base;
@@ -108,6 +118,13 @@ cl_advance(struct v3dv_cl_out **cl, uint32_t n)
 }
 
 static inline void
+cl_advance_and_end(struct v3dv_cl *cl, uint32_t n)
+{
+   cl->next = (struct v3dv_cl_out *)((char *)(cl->next) + n);
+   assert(v3dv_cl_offset(cl) <= cl->size);
+}
+
+static inline void
 cl_aligned_u32(struct v3dv_cl_out **cl, uint32_t n)
 {
    *(uint32_t *)(*cl) = n;
@@ -168,8 +185,7 @@ void v3dv_cl_ensure_space_with_branch(struct v3dv_cl *cl, uint32_t space);
         ({                                                       \
                 struct v3dv_cl_out *cl_out = cl_start(cl);        \
                 cl_packet_pack(packet)(cl, (uint8_t *)cl_out, &name); \
-                cl_advance(&cl_out, cl_packet_length(packet));   \
-                cl_end(cl, cl_out);                              \
+                cl_advance_and_end(cl, cl_packet_length(packet)); \
                 _loop_terminate = NULL;                          \
         }))                                                      \
 
@@ -185,8 +201,7 @@ void v3dv_cl_ensure_space_with_branch(struct v3dv_cl *cl, uint32_t space);
                 cl_packet_pack(packet)(cl, packed, &name);       \
                 for (int _i = 0; _i < cl_packet_length(packet); _i++) \
                         ((uint8_t *)cl_out)[_i] = packed[_i] | (prepacked)[_i]; \
-                cl_advance(&cl_out, cl_packet_length(packet));   \
-                cl_end(cl, cl_out);                              \
+                cl_advance_and_end(cl, cl_packet_length(packet)); \
                 _loop_terminate = NULL;                          \
         }))                                                      \
 
@@ -194,7 +209,7 @@ void v3dv_cl_ensure_space_with_branch(struct v3dv_cl *cl, uint32_t space);
  * Helper function called by the XML-generated pack functions for filling in
  * an address field in shader records.
  *
- * Since we have a private address space as of VC5, our BOs can have lifelong
+ * Since we have a private address space as of V3D, our BOs can have lifelong
  * offsets, and all the kernel needs to know is which BOs need to be paged in
  * for this exec.
  */
@@ -213,7 +228,7 @@ cl_pack_emit_reloc(struct v3dv_cl *cl, const struct v3dv_cl_reloc *reloc)
 #define cl_emit_prepacked(cl, packet) \
         cl_emit_prepacked_sized(cl, packet, sizeof(*(packet)))
 
-#define v3dv_pack(packed, packet, name)                          \
+#define v3dvx_pack(packed, packet, name)                         \
         for (struct cl_packet_struct(packet) name = {            \
                 cl_packet_header(packet)                         \
         },                                                       \

@@ -28,7 +28,6 @@
 ///
 
 #include <llvm/Target/TargetMachine.h>
-#include <llvm/Support/TargetRegistry.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 
 #include "llvm/codegen.hpp"
@@ -36,12 +35,12 @@
 #include "llvm/util.hpp"
 #include "core/error.hpp"
 
-using clover::module;
+using clover::binary;
 using clover::build_error;
 using namespace clover::llvm;
 using ::llvm::TargetMachine;
 
-#ifdef HAVE_CLOVER_NATIVE
+#if defined(USE_LIBELF)
 
 #include <libelf.h>
 #include <gelf.h>
@@ -117,7 +116,11 @@ namespace {
 
       std::unique_ptr<TargetMachine> tm {
          t->createTargetMachine(target.triple, target.cpu, "", {},
+#if LLVM_VERSION_MAJOR >= 16
+                                std::nullopt, std::nullopt,
+#else
                                 ::llvm::None, ::llvm::None,
+#endif
                                 ::llvm::CodeGenOpt::Default) };
       if (!tm)
          fail(r_log, build_error(),
@@ -143,7 +146,7 @@ namespace {
    }
 }
 
-module
+binary
 clover::llvm::build_module_native(::llvm::Module &mod, const target &target,
                                   const clang::CompilerInstance &c,
                                   std::string &r_log) {
@@ -167,7 +170,7 @@ clover::llvm::print_module_native(const ::llvm::Module &mod,
 
 #else
 
-module
+binary
 clover::llvm::build_module_native(::llvm::Module &mod, const target &target,
                                   const clang::CompilerInstance &c,
                                   std::string &r_log) {

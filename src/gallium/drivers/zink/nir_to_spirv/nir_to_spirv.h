@@ -26,7 +26,7 @@
 
 #include <stdlib.h>
 #include <stdint.h>
-#include <vulkan/vulkan.h>
+#include <vulkan/vulkan_core.h>
 
 #include "compiler/nir/nir.h"
 #include "compiler/shader_enums.h"
@@ -34,23 +34,29 @@
 
 #include "zink_compiler.h"
 
+#define SPIRV_VERSION(major, minor) (((major) << 16) | ((minor) << 8))
+
 struct spirv_shader {
    uint32_t *words;
    size_t num_words;
+   uint32_t tcs_vertices_out_word;
 };
 
 struct nir_shader;
 struct pipe_stream_output_info;
 
 struct spirv_shader *
-nir_to_spirv(struct nir_shader *s, const struct zink_so_info *so_info,
-             unsigned char *shader_slot_map, unsigned char *shader_slots_reserved);
+nir_to_spirv(struct nir_shader *s, const struct zink_shader_info *so_info,
+             uint32_t spirv_version);
 
 void
 spirv_shader_delete(struct spirv_shader *s);
 
-uint32_t
-zink_binding(gl_shader_stage stage, VkDescriptorType type, int index);
+static inline bool
+type_is_counter(const struct glsl_type *type)
+{
+   return glsl_get_base_type(glsl_without_array(type)) == GLSL_TYPE_ATOMIC_UINT;
+}
 
 static inline VkDescriptorType
 zink_sampler_type(const struct glsl_type *type)
@@ -63,6 +69,7 @@ zink_sampler_type(const struct glsl_type *type)
    case GLSL_SAMPLER_DIM_CUBE:
    case GLSL_SAMPLER_DIM_RECT:
    case GLSL_SAMPLER_DIM_MS:
+   case GLSL_SAMPLER_DIM_EXTERNAL:
       return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
    case GLSL_SAMPLER_DIM_BUF:
       return VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
@@ -83,6 +90,7 @@ zink_image_type(const struct glsl_type *type)
    case GLSL_SAMPLER_DIM_CUBE:
    case GLSL_SAMPLER_DIM_RECT:
    case GLSL_SAMPLER_DIM_MS:
+   case GLSL_SAMPLER_DIM_EXTERNAL:
       return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
    case GLSL_SAMPLER_DIM_BUF:
       return VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;

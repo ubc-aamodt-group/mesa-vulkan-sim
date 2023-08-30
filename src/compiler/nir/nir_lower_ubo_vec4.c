@@ -113,6 +113,8 @@ nir_lower_ubo_vec4_lower(nir_builder *b, nir_instr *instr, void *data)
                                            intr->dest.ssa.bit_size,
                                            num_components);
 
+   nir_intrinsic_set_access(load, nir_intrinsic_access(intr));
+
    nir_ssa_def *result = &load->dest.ssa;
 
    int align_chan_offset = align_offset / chan_size_bytes;
@@ -132,7 +134,7 @@ nir_lower_ubo_vec4_lower(nir_builder *b, nir_instr *instr, void *data)
 
       result = nir_vector_extract(b, result, component);
    } else if (align_mul == 8 &&
-              align_offset + chan_size_bytes * intr->num_components <= 16) {
+              align_offset + chan_size_bytes * intr->num_components <= 8) {
       /* Special case: Loading small vectors from offset % 8 == 0 can be done
        * with just one load and one bcsel.
        */
@@ -140,15 +142,13 @@ nir_lower_ubo_vec4_lower(nir_builder *b, nir_instr *instr, void *data)
          BITSET_MASK(intr->num_components) << (align_chan_offset);
       nir_component_mask_t high_channels =
          low_channels << (8 / chan_size_bytes);
-      result = nir_bcsel(b,
-                         nir_i2b(b, nir_iand_imm(b, byte_offset, 8)),
-                         nir_channels(b, result, high_channels),
-                         nir_channels(b, result, low_channels));
+      result = nir_bcsel(b, nir_test_mask(b, byte_offset, 8),
+                            nir_channels(b, result, high_channels),
+                            nir_channels(b, result, low_channels));
    } else {
       /* General fallback case: Per-result-channel bcsel-based extraction
        * from two separate vec4 loads.
        */
-      assert(num_components == 4);
       nir_ssa_def *next_vec4_offset = nir_iadd_imm(b, vec4_offset, 1);
       nir_intrinsic_instr *next_load = create_load(b, intr->src[0].ssa, next_vec4_offset,
                                                    intr->dest.ssa.bit_size,

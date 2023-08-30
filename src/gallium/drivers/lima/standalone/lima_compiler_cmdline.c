@@ -112,7 +112,7 @@ load_glsl(unsigned num_files, char* const* files, gl_shader_stage stage)
 
    lima_do_glsl_optimizations(prog->_LinkedShaders[stage]->ir);
 
-   nir_shader *nir = glsl_to_nir(&local_ctx, prog, stage, nir_options);
+   nir_shader *nir = glsl_to_nir(&local_ctx.Const, prog, stage, nir_options);
 
    /* required NIR passes: */
    if (nir_options->lower_all_io_to_temps ||
@@ -135,7 +135,7 @@ load_glsl(unsigned num_files, char* const* files, gl_shader_stage stage)
    NIR_PASS_V(nir, nir_lower_var_copies);
    nir_print_shader(nir, stdout);
    NIR_PASS_V(nir, gl_nir_lower_atomics, prog, true);
-   NIR_PASS_V(nir, nir_lower_atomics_to_ssbo);
+   NIR_PASS_V(nir, nir_lower_atomics_to_ssbo, 0);
    nir_print_shader(nir, stdout);
 
    switch (stage) {
@@ -214,6 +214,7 @@ main(int argc, char **argv)
 
    struct nir_lower_tex_options tex_options = {
       .lower_txp = ~0u,
+      .lower_invalid_implicit_lod = true,
    };
 
    nir_shader *nir = load_glsl(1, filename, stage);
@@ -224,7 +225,7 @@ main(int argc, char **argv)
 
       nir_print_shader(nir, stdout);
 
-      struct lima_vs_shader_state *vs = ralloc(nir, struct lima_vs_shader_state);
+      struct lima_vs_compiled_shader *vs = ralloc(nir, struct lima_vs_compiled_shader);
       gpir_compile_nir(vs, nir, NULL);
       break;
    case MESA_SHADER_FRAGMENT:
@@ -232,7 +233,7 @@ main(int argc, char **argv)
 
       nir_print_shader(nir, stdout);
 
-      struct lima_fs_shader_state *so = rzalloc(NULL, struct lima_fs_shader_state);
+      struct lima_fs_compiled_shader *so = rzalloc(NULL, struct lima_fs_compiled_shader);
       struct ra_regs *ra = ppir_regalloc_init(NULL);
       ppir_compile_nir(so, nir, ra, NULL);
       break;

@@ -43,7 +43,7 @@
 
 #define MESA_LOG_TAG "INTEL-SANITIZE-GPU"
 #include "util/log.h"
-#include "common/gen_clflush.h"
+#include "common/intel_clflush.h"
 
 static int (*libc_open)(const char *pathname, int flags, mode_t mode);
 static int (*libc_close)(int fd);
@@ -96,7 +96,7 @@ bo_size(int fd, uint32_t handle)
    if (!t)
       return UINT64_MAX;
    struct hash_entry *e = _mesa_hash_table_search(t, (void*)(uintptr_t)handle);
-   return e ? (uint64_t)e->data : UINT64_MAX;
+   return e ? (uint64_t)(uintptr_t)e->data : UINT64_MAX;
 }
 
 static inline bool
@@ -139,7 +139,7 @@ del_drm_fd(int fd)
    }
 }
 
-/* Our goal is not to have noise good enough for cryto,
+/* Our goal is not to have noise good enough for crypto,
  * but instead values that are unique-ish enough that
  * it is incredibly unlikely that a buffer overwrite
  * will produce the exact same values.
@@ -185,11 +185,13 @@ padding_is_good(int fd, uint32_t handle)
    }
 
    mapped = (uint8_t*) (uintptr_t) mmap_arg.addr_ptr;
+#ifdef SUPPORT_INTEL_INTEGRATED_GPUS
    /* bah-humbug, we need to see the latest contents and
     * if the bo is not cache coherent we likely need to
     * invalidate the cache lines to get it.
     */
-   gen_invalidate_range(mapped, PADDING_SIZE);
+   intel_invalidate_range(mapped, PADDING_SIZE);
+#endif
 
    expected_value = handle & 0xFF;
    for (uint32_t i = 0; i < PADDING_SIZE; ++i) {

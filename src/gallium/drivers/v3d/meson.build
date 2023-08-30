@@ -26,11 +26,15 @@ files_libv3d = files(
   'v3d_cl.h',
   'v3d_context.c',
   'v3d_context.h',
+  'v3d_disk_cache.c',
   'v3d_fence.c',
   'v3d_formats.c',
   'v3d_job.c',
   'v3d_program.c',
   'v3d_query.c',
+  'v3d_query.h',
+  'v3d_query_pipe.c',
+  'v3d_query_perfcnt.c',
   'v3d_resource.c',
   'v3d_resource.h',
   'v3d_screen.c',
@@ -54,7 +58,7 @@ if dep_v3dv3.found()
   v3d_args += '-DUSE_V3D_SIMULATOR'
 endif
 
-v3d_versions = ['33', '41']
+v3d_versions = ['33', '42']
 
 per_version_libs = []
 foreach ver : v3d_versions
@@ -77,18 +81,6 @@ if host_machine.cpu_family() == 'arm'
     v3d_neon_c_args = '-mfpu=neon'
 endif
 
-libv3d_neon = static_library(
-  'v3d_neon',
-  'v3d_tiling.c',
-  include_directories : [
-    inc_src, inc_include, inc_gallium, inc_gallium_aux, inc_broadcom,
-    inc_gallium_drivers,
-  ],
-  c_args : [v3d_args, v3d_neon_c_args],
-  gnu_symbol_visibility : 'hidden',
-  dependencies : [dep_v3dv3, dep_libdrm, dep_valgrind, idep_nir_headers],
-)
-
 libv3d = static_library(
   'v3d',
   [
@@ -102,8 +94,11 @@ libv3d = static_library(
   c_args : [v3d_args],
   cpp_args : [v3d_args],
   gnu_symbol_visibility : 'hidden',
-  dependencies : [dep_v3dv3, dep_libdrm, dep_valgrind, idep_nir_headers],
-  link_with: [per_version_libs, libv3d_neon],
+  dependencies : [
+    dep_v3dv3, dep_libdrm, dep_valgrind,
+    idep_nir_headers, idep_mesautil,
+  ],
+  link_with: [per_version_libs],
 )
 
 driver_v3d = declare_dependency(

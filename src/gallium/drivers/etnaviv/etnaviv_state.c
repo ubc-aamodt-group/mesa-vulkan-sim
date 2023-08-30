@@ -81,7 +81,7 @@ etna_set_sample_mask(struct pipe_context *pctx, unsigned sample_mask)
 
 static void
 etna_set_constant_buffer(struct pipe_context *pctx,
-      enum pipe_shader_type shader, uint index,
+      enum pipe_shader_type shader, uint index, bool take_ownership,
       const struct pipe_constant_buffer *cb)
 {
    struct etna_context *ctx = etna_context(pctx);
@@ -89,7 +89,7 @@ etna_set_constant_buffer(struct pipe_context *pctx,
 
    assert(index < ETNA_MAX_CONST_BUF);
 
-   util_copy_constant_buffer(&so->cb[index], cb);
+   util_copy_constant_buffer(&so->cb[index], cb, take_ownership);
 
    /* Note that the gallium frontends can unbind constant buffers by
     * passing NULL here. */
@@ -135,6 +135,8 @@ etna_set_framebuffer_state(struct pipe_context *pctx,
    struct compiled_framebuffer_state *cs = &ctx->framebuffer;
    int nr_samples_color = -1;
    int nr_samples_depth = -1;
+   bool target_16bpp = false;
+   bool target_linear = false;
 
    /* Set up TS as well. Warning: this state is used by both the RS and PE */
    uint32_t ts_mem_config = 0;
@@ -147,8 +149,12 @@ etna_set_framebuffer_state(struct pipe_context *pctx,
       bool color_supertiled = (res->layout & ETNA_LAYOUT_BIT_SUPER) != 0;
       uint32_t fmt = translate_pe_format(cbuf->base.format);
 
-      assert(res->layout & ETNA_LAYOUT_BIT_TILE); /* Cannot render to linear surfaces */
+      assert((res->layout & ETNA_LAYOUT_BIT_TILE) ||
+             VIV_FEATURE(screen, chipMinorFeatures2, LINEAR_PE));
       etna_update_render_resource(pctx, etna_resource(cbuf->prsc));
+
+      if (res->layout == ETNA_LAYOUT_LINEAR)
+         target_linear = true;
 
       if (fmt >= PE_FORMAT_R16F)
           cs->PE_COLOR_FORMAT = VIVS_PE_COLOR_FORMAT_FORMAT_EXT(fmt) |
@@ -156,40 +162,51 @@ etna_set_framebuffer_state(struct pipe_context *pctx,
       else
           cs->PE_COLOR_FORMAT = VIVS_PE_COLOR_FORMAT_FORMAT(fmt);
 
+      if (util_format_get_blocksize(cbuf->base.format) <= 2)
+         target_16bpp = true;
+
       cs->PE_COLOR_FORMAT |=
          VIVS_PE_COLOR_FORMAT_COMPONENTS__MASK |
-         VIVS_PE_COLOR_FORMAT_OVERWRITE |
-         COND(color_supertiled, VIVS_PE_COLOR_FORMAT_SUPER_TILED) |
-         COND(color_supertiled && screen->specs.halti >= 5, VIVS_PE_COLOR_FORMAT_SUPER_TILED_NEW);
+         COND(color_supertiled, VIVS_PE_COLOR_FORMAT_SUPER_TILED);
+
+      nr_samples_color = cbuf->base.texture->nr_samples;
+      if (nr_samples_color <= 1)
+         cs->PE_COLOR_FORMAT |= VIVS_PE_COLOR_FORMAT_OVERWRITE;
+
+      if (VIV_FEATURE(screen, chipMinorFeatures6, CACHE128B256BPERLINE))
+         cs->PE_COLOR_FORMAT |= COND(color_supertiled, VIVS_PE_COLOR_FORMAT_SUPER_TILED_NEW);
       /* VIVS_PE_COLOR_FORMAT_COMPONENTS() and
        * VIVS_PE_COLOR_FORMAT_OVERWRITE comes from blend_state
        * but only if we set the bits above. */
       /* merged with depth_stencil_alpha */
-      if ((cbuf->surf.offset & 63) ||
-          (((cbuf->surf.stride * 4) & 63) && cbuf->surf.height > 4)) {
+      if ((cbuf->offset & 63) ||
+          (((cbuf->level->stride * 4) & 63) && cbuf->level->height > 4)) {
          /* XXX Must make temporary surface here.
           * Need the same mechanism on gc2000 when we want to do mipmap
           * generation by
           * rendering to levels > 1 due to multitiled / tiled conversion. */
          BUG("Alignment error, trying to render to offset %08x with tile "
              "stride %i",
-             cbuf->surf.offset, cbuf->surf.stride * 4);
+             cbuf->offset, cbuf->level->stride * 4);
       }
 
-      if (screen->specs.pixel_pipes == 1) {
-         cs->PE_COLOR_ADDR = cbuf->reloc[0];
-         cs->PE_COLOR_ADDR.flags = ETNA_RELOC_READ | ETNA_RELOC_WRITE;
-      } else {
-         /* Rendered textures must always be multi-tiled, or single-buffer mode must be supported */
-         assert((res->layout & ETNA_LAYOUT_BIT_MULTI) || screen->specs.single_buffer);
+      if (screen->specs.halti >= 0 && screen->model != 0x880) {
+         /* Rendertargets on GPUs with more than a single pixel pipe must always
+          * be multi-tiled, or single-buffer mode must be supported */
+         assert(screen->specs.pixel_pipes == 1 ||
+                (res->layout & ETNA_LAYOUT_BIT_MULTI) || screen->specs.single_buffer);
          for (int i = 0; i < screen->specs.pixel_pipes; i++) {
             cs->PE_PIPE_COLOR_ADDR[i] = cbuf->reloc[i];
             cs->PE_PIPE_COLOR_ADDR[i].flags = ETNA_RELOC_READ | ETNA_RELOC_WRITE;
          }
+      } else {
+         cs->PE_COLOR_ADDR = cbuf->reloc[0];
+         cs->PE_COLOR_ADDR.flags = ETNA_RELOC_READ | ETNA_RELOC_WRITE;
       }
-      cs->PE_COLOR_STRIDE = cbuf->surf.stride;
 
-      if (cbuf->surf.ts_size) {
+      cs->PE_COLOR_STRIDE = cbuf->level->stride;
+
+      if (cbuf->level->ts_size) {
          cs->TS_COLOR_CLEAR_VALUE = cbuf->level->clear_value;
          cs->TS_COLOR_CLEAR_VALUE_EXT = cbuf->level->clear_value >> 32;
 
@@ -212,8 +229,6 @@ etna_set_framebuffer_state(struct pipe_context *pctx,
          }
       }
 
-      nr_samples_color = cbuf->base.texture->nr_samples;
-
       if (util_format_is_srgb(cbuf->base.format))
          pe_logic_op |= VIVS_PE_LOGIC_OP_SRGB;
 
@@ -229,9 +244,9 @@ etna_set_framebuffer_state(struct pipe_context *pctx,
       cs->TS_COLOR_STATUS_BASE.bo = NULL;
       cs->TS_COLOR_SURFACE_BASE.bo = NULL;
 
-      cs->PE_COLOR_ADDR = ctx->dummy_rt_reloc;
+      cs->PE_COLOR_ADDR = screen->dummy_rt_reloc;
       for (int i = 0; i < screen->specs.pixel_pipes; i++)
-         cs->PE_PIPE_COLOR_ADDR[i] = ctx->dummy_rt_reloc;
+         cs->PE_PIPE_COLOR_ADDR[i] = screen->dummy_rt_reloc;
    }
 
    if (fb->zsbuf != NULL) {
@@ -247,6 +262,9 @@ etna_set_framebuffer_state(struct pipe_context *pctx,
          depth_format == VIVS_PE_DEPTH_CONFIG_DEPTH_FORMAT_D16 ? 16 : 24;
       bool depth_supertiled = (res->layout & ETNA_LAYOUT_BIT_SUPER) != 0;
 
+      if (depth_bits == 16)
+         target_16bpp = true;
+
       cs->PE_DEPTH_CONFIG =
          depth_format |
          COND(depth_supertiled, VIVS_PE_DEPTH_CONFIG_SUPER_TILED) |
@@ -255,21 +273,21 @@ etna_set_framebuffer_state(struct pipe_context *pctx,
       /* VIVS_PE_DEPTH_CONFIG_ONLY_DEPTH */
       /* merged with depth_stencil_alpha */
 
-      if (screen->specs.pixel_pipes == 1) {
-         cs->PE_DEPTH_ADDR = zsbuf->reloc[0];
-         cs->PE_DEPTH_ADDR.flags = ETNA_RELOC_READ | ETNA_RELOC_WRITE;
-      } else {
+      if (screen->specs.halti >= 0 && screen->model != 0x880) {
          for (int i = 0; i < screen->specs.pixel_pipes; i++) {
             cs->PE_PIPE_DEPTH_ADDR[i] = zsbuf->reloc[i];
             cs->PE_PIPE_DEPTH_ADDR[i].flags = ETNA_RELOC_READ | ETNA_RELOC_WRITE;
          }
+      } else {
+         cs->PE_DEPTH_ADDR = zsbuf->reloc[0];
+         cs->PE_DEPTH_ADDR.flags = ETNA_RELOC_READ | ETNA_RELOC_WRITE;
       }
 
-      cs->PE_DEPTH_STRIDE = zsbuf->surf.stride;
+      cs->PE_DEPTH_STRIDE = zsbuf->level->stride;
       cs->PE_HDEPTH_CONTROL = VIVS_PE_HDEPTH_CONTROL_FORMAT_DISABLED;
       cs->PE_DEPTH_NORMALIZE = fui(exp2f(depth_bits) - 1.0f);
 
-      if (zsbuf->surf.ts_size) {
+      if (zsbuf->level->ts_size) {
          cs->TS_DEPTH_CLEAR_VALUE = zsbuf->level->clear_value;
 
          cs->TS_DEPTH_STATUS_BASE = zsbuf->ts_reloc;
@@ -345,6 +363,8 @@ etna_set_framebuffer_state(struct pipe_context *pctx,
       cs->RA_CENTROID_TABLE[9] = 0x886688a2;
       cs->RA_CENTROID_TABLE[10] = 0x888866aa;
       cs->RA_CENTROID_TABLE[11] = 0x668888a6;
+      if (VIV_FEATURE(screen, chipMinorFeatures4, SMALL_MSAA))
+         pe_logic_op |= VIVS_PE_LOGIC_OP_UNK24(0x5);
       break;
    }
 
@@ -354,9 +374,11 @@ etna_set_framebuffer_state(struct pipe_context *pctx,
    /* Single buffer setup. There is only one switch for this, not a separate
     * one per color buffer / depth buffer. To keep the logic simple always use
     * single buffer when this feature is available.
-    * note: the blob will use 2 in some situations, figure out why?
     */
-   pe_logic_op |= VIVS_PE_LOGIC_OP_SINGLE_BUFFER(screen->specs.single_buffer ? 3 : 0);
+   if (unlikely(target_linear))
+      pe_logic_op |= VIVS_PE_LOGIC_OP_SINGLE_BUFFER(1);
+   else if (screen->specs.single_buffer)
+      pe_logic_op |= VIVS_PE_LOGIC_OP_SINGLE_BUFFER(target_16bpp ? 3 : 2);
    cs->PE_LOGIC_OP = pe_logic_op;
 
    /* keep copy of original structure */
@@ -426,12 +448,15 @@ etna_set_viewport_states(struct pipe_context *pctx, unsigned start_slot,
 
 static void
 etna_set_vertex_buffers(struct pipe_context *pctx, unsigned start_slot,
-      unsigned num_buffers, const struct pipe_vertex_buffer *vb)
+      unsigned num_buffers, unsigned unbind_num_trailing_slots, bool take_ownership,
+      const struct pipe_vertex_buffer *vb)
 {
    struct etna_context *ctx = etna_context(pctx);
    struct etna_vertexbuf_state *so = &ctx->vertex_buffer;
 
-   util_set_vertex_buffers_mask(so->vb, &so->enabled_mask, vb, start_slot, num_buffers);
+   util_set_vertex_buffers_mask(so->vb, &so->enabled_mask, vb, start_slot,
+                                num_buffers, unbind_num_trailing_slots,
+                                take_ownership);
    so->count = util_last_bit(so->enabled_mask);
 
    for (unsigned idx = start_slot; idx < start_slot + num_buffers; ++idx) {
@@ -518,6 +543,7 @@ etna_vertex_elements_state_create(struct pipe_context *pctx,
    if (num_elements > screen->specs.vertex_max_elements) {
       BUG("number of elements (%u) exceeds chip maximum (%u)", num_elements,
           screen->specs.vertex_max_elements);
+      FREE(cs);
       return NULL;
    }
 
@@ -692,24 +718,37 @@ etna_update_zsa(struct etna_context *ctx)
    struct etna_zsa_state *zsa = etna_zsa_state(zsa_state);
    struct etna_screen *screen = ctx->screen;
    uint32_t new_pe_depth, new_ra_depth;
-   bool late_z_write = false, early_z_write = false,
+   bool early_z_allowed = !VIV_FEATURE(screen, chipFeatures, NO_EARLY_Z);
+   bool late_zs = false, early_zs = false,
         late_z_test = false, early_z_test = false;
 
-   if (zsa->z_write_enabled) {
+   /* Linear PE breaks the combination of early test with late write, as it
+    * seems RA and PE disagree about the buffer layout in this mode. Fall back
+    * to late Z always even though early Z write might be possible, as we don't
+    * know if any other draws to the same surface require late Z write.
+    */
+   if (ctx->framebuffer_s.nr_cbufs > 0) {
+      struct etna_surface *cbuf = etna_surface(ctx->framebuffer_s.cbufs[0]);
+      struct etna_resource *res = etna_resource(cbuf->base.texture);
+
+      if (res->layout == ETNA_LAYOUT_LINEAR)
+         early_z_allowed = false;
+   }
+
+   if (zsa->z_write_enabled || zsa->stencil_enabled) {
       if (VIV_FEATURE(screen, chipMinorFeatures5, RA_WRITE_DEPTH) &&
-          !VIV_FEATURE(screen, chipFeatures, NO_EARLY_Z) &&
-          !zsa->stencil_enabled &&
+          early_z_allowed &&
           !zsa_state->alpha_enabled &&
           !shader_state->writes_z &&
           !shader_state->uses_discard)
-         early_z_write = true;
+         early_zs = true;
       else
-         late_z_write = true;
+         late_zs = true;
    }
 
    if (zsa->z_test_enabled) {
-      if (!VIV_FEATURE(screen, chipFeatures, NO_EARLY_Z) &&
-          !zsa->stencil_modified &&
+      if (early_z_allowed &&
+          (!zsa->stencil_modified || early_zs) &&
           !shader_state->writes_z)
          early_z_test = true;
       else
@@ -721,7 +760,7 @@ etna_update_zsa(struct etna_context *ctx)
                      zsa_state->depth_func : PIPE_FUNC_ALWAYS) |
                   COND(zsa->z_write_enabled, VIVS_PE_DEPTH_CONFIG_WRITE_ENABLE) |
                   COND(early_z_test, VIVS_PE_DEPTH_CONFIG_EARLY_Z) |
-                  COND(!late_z_write && !late_z_test && !zsa->stencil_enabled,
+                  COND(!late_zs && !late_z_test,
                        VIVS_PE_DEPTH_CONFIG_DISABLE_ZS);
 
    /* blob sets this to 0x40000031 on GC7000, seems to make no difference,
@@ -730,13 +769,20 @@ etna_update_zsa(struct etna_context *ctx)
                   COND(early_z_test, VIVS_RA_EARLY_DEPTH_TEST_ENABLE);
 
    if (VIV_FEATURE(screen, chipMinorFeatures5, RA_WRITE_DEPTH)) {
-      if (!early_z_write)
+      if (!early_zs)
          new_ra_depth |= VIVS_RA_EARLY_DEPTH_WRITE_DISABLE;
       /* The new early hierarchical test seems to only work properly if depth
        * is also written from the early stage.
        */
-      if (late_z_test || (early_z_test && late_z_write))
+      if (late_z_test || (early_z_test && late_zs))
          new_ra_depth |= VIVS_RA_EARLY_DEPTH_HDEPTH_DISABLE;
+
+      if (ctx->framebuffer_s.nr_cbufs > 0) {
+         struct pipe_resource *res = ctx->framebuffer_s.cbufs[0]->texture;
+
+         if ((late_z_test || late_zs) && res->nr_samples > 1)
+            new_ra_depth |= VIVS_RA_EARLY_DEPTH_LATE_DEPTH_MSAA;
+      }
    }
 
    if (new_pe_depth != zsa->PE_DEPTH_CONFIG ||
@@ -745,6 +791,21 @@ etna_update_zsa(struct etna_context *ctx)
 
    zsa->PE_DEPTH_CONFIG = new_pe_depth;
    zsa->RA_DEPTH_CONFIG = new_ra_depth;
+
+   return true;
+}
+
+static bool
+etna_record_flush_resources(struct etna_context *ctx)
+{
+   struct pipe_framebuffer_state *fb = &ctx->framebuffer_s;
+
+   if (fb->nr_cbufs > 0) {
+      struct etna_surface *surf = etna_surface(fb->cbufs[0]);
+
+      if (!etna_resource(surf->prsc)->explicit_flush)
+         etna_context_add_flush_resource(ctx, surf->prsc);
+   }
 
    return true;
 }
@@ -775,7 +836,11 @@ static const struct etna_state_updater etna_state_updates[] = {
                             ETNA_DIRTY_RASTERIZER | ETNA_DIRTY_VIEWPORT,
    },
    {
-      etna_update_zsa, ETNA_DIRTY_ZSA | ETNA_DIRTY_SHADER,
+      etna_update_zsa, ETNA_DIRTY_ZSA | ETNA_DIRTY_SHADER |
+                       ETNA_DIRTY_FRAMEBUFFER,
+   },
+   {
+      etna_record_flush_resources, ETNA_DIRTY_FRAMEBUFFER,
    }
 };
 

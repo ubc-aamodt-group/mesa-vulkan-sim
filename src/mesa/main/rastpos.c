@@ -28,16 +28,19 @@
  * Raster position operations.
  */
 
-#include "glheader.h"
+#include "util/glheader.h"
 #include "context.h"
 #include "feedback.h"
 #include "macros.h"
 #include "mtypes.h"
 #include "rastpos.h"
 #include "state.h"
+#include "main/light.h"
 #include "main/viewport.h"
 #include "util/bitscan.h"
 
+#include "state_tracker/st_cb_rasterpos.h"
+#include "api_exec_decl.h"
 
 
 /**
@@ -144,6 +147,8 @@ shade_rastpos(struct gl_context *ctx,
    /*const*/ GLfloat (*base)[3] = ctx->Light._BaseColor;
    GLbitfield mask;
    GLfloat diffuseColor[4], specularColor[4];  /* for RGB mode only */
+
+   _mesa_update_light_materials(ctx);
 
    COPY_3V(diffuseColor, base[0]);
    diffuseColor[3] = CLAMP(
@@ -385,13 +390,15 @@ compute_texgen(struct gl_context *ctx, const GLfloat vObj[4], const GLfloat vEye
 
 
 /**
- * glRasterPos transformation.  Typically called via ctx->Driver.RasterPos().
+ * glRasterPos transformation.
  *
  * \param vObj  vertex position in object space
  */
 void
 _mesa_RasterPos(struct gl_context *ctx, const GLfloat vObj[4])
 {
+   ctx->PopAttribState |= GL_CURRENT_BIT;
+
    if (_mesa_arb_vertex_program_enabled(ctx)) {
       /* XXX implement this */
       _mesa_problem(ctx, "Vertex programs not implemented for glRasterPos");
@@ -533,13 +540,13 @@ rasterpos(GLfloat x, GLfloat y, GLfloat z, GLfloat w)
    p[2] = z;
    p[3] = w;
 
-   FLUSH_VERTICES(ctx, 0);
+   FLUSH_VERTICES(ctx, 0, 0);
    FLUSH_CURRENT(ctx, 0);
 
    if (ctx->NewState)
       _mesa_update_state( ctx );
 
-   ctx->Driver.RasterPos(ctx, p);
+   st_RasterPos(ctx, p);
 }
 
 
@@ -705,7 +712,7 @@ window_pos3f(GLfloat x, GLfloat y, GLfloat z)
    GET_CURRENT_CONTEXT(ctx);
    GLfloat z2;
 
-   FLUSH_VERTICES(ctx, 0);
+   FLUSH_VERTICES(ctx, 0, GL_CURRENT_BIT);
    FLUSH_CURRENT(ctx, 0);
 
    z2 = CLAMP(z, 0.0F, 1.0F)

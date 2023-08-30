@@ -90,11 +90,7 @@ opt_constant_if(nir_if *if_stmt, bool condition)
    nir_block *last_block = condition ? nir_if_last_then_block(if_stmt)
                                      : nir_if_last_else_block(if_stmt);
 
-   nir_foreach_instr_safe(instr, after) {
-      if (instr->type != nir_instr_type_phi)
-         break;
-
-      nir_phi_instr *phi = nir_instr_as_phi(instr);
+   nir_foreach_phi_safe(phi, after) {
       nir_ssa_def *def = NULL;
       nir_foreach_phi_src(phi_src, phi) {
          if (phi_src->pred != last_block)
@@ -106,8 +102,8 @@ opt_constant_if(nir_if *if_stmt, bool condition)
 
       assert(def);
       assert(phi->dest.is_ssa);
-      nir_ssa_def_rewrite_uses(&phi->dest.ssa, nir_src_for_ssa(def));
-      nir_instr_remove(instr);
+      nir_ssa_def_rewrite_uses(&phi->dest.ssa, def);
+      nir_instr_remove(&phi->instr);
    }
 
    /* The control flow list we're about to paste in may include a jump at the
@@ -141,7 +137,14 @@ def_only_used_in_cf_node(nir_ssa_def *def, void *_node)
    nir_block *before = nir_cf_node_as_block(nir_cf_node_prev(node));
    nir_block *after = nir_cf_node_as_block(nir_cf_node_next(node));
 
-   nir_foreach_use(use, def) {
+   nir_foreach_use_including_if(use, def) {
+      nir_block *block;
+
+      if (use->is_if)
+         block = nir_cf_node_as_block(nir_cf_node_prev(&use->parent_if->cf_node));
+      else
+         block = use->parent_instr->block;
+
       /* Because NIR is structured, we can easily determine whether or not a
        * value escapes a CF node by looking at the block indices of its uses
        * to see if they lie outside the bounds of the CF node.
@@ -155,18 +158,7 @@ def_only_used_in_cf_node(nir_ssa_def *def, void *_node)
        * corresponding predecessor is inside the loop or not because the value
        * can go through the phi into the outside world and escape the loop.
        */
-      if (use->parent_instr->block->index <= before->index ||
-          use->parent_instr->block->index >= after->index)
-         return false;
-   }
-
-   /* Same check for if-condition uses */
-   nir_foreach_if_use(use, def) {
-      nir_block *use_block =
-         nir_cf_node_as_block(nir_cf_node_prev(&use->parent_if->cf_node));
-
-      if (use_block->index <= before->index ||
-          use_block->index >= after->index)
+      if (block->index <= before->index || block->index >= after->index)
          return false;
    }
 
@@ -174,7 +166,7 @@ def_only_used_in_cf_node(nir_ssa_def *def, void *_node)
 }
 
 /*
- * Test if a loop node is dead. Such nodes are dead if:
+ * Test if a loop or if node is dead. Such nodes are dead if:
  *
  * 1) It has no side effects (i.e. intrinsics which could possibly affect the
  * state of the program aside from producing an SSA value, indicated by a lack
@@ -192,7 +184,7 @@ def_only_used_in_cf_node(nir_ssa_def *def, void *_node)
 static bool
 node_is_dead(nir_cf_node *node)
 {
-   assert(node->type == nir_cf_node_loop);
+   assert(node->type == nir_cf_node_loop || node->type == nir_cf_node_if);
 
    nir_block *after = nir_cf_node_as_block(nir_cf_node_next(node));
 
@@ -236,6 +228,42 @@ node_is_dead(nir_cf_node *node)
             if (!(nir_intrinsic_infos[intrin->intrinsic].flags &
                 NIR_INTRINSIC_CAN_ELIMINATE))
                return false;
+
+            switch (intrin->intrinsic) {
+            case nir_intrinsic_load_deref:
+            case nir_intrinsic_load_ssbo:
+            case nir_intrinsic_load_global:
+               /* If there's a memory barrier after the loop, a load might be
+                * required to happen before some other instruction after the
+                * barrier, so it is not valid to eliminate it -- unless we
+                * know we can reorder it.
+                *
+                * Consider only loads that the result can be affected by other
+                * invocations.
+                */
+               if (intrin->intrinsic == nir_intrinsic_load_deref) {
+                  nir_deref_instr *deref = nir_src_as_deref(intrin->src[0]);
+                  if (!nir_deref_mode_may_be(deref, nir_var_mem_ssbo |
+                                                    nir_var_mem_shared |
+                                                    nir_var_mem_global |
+                                                    nir_var_shader_out))
+                     break;
+               }
+               if (nir_intrinsic_access(intrin) & ACCESS_CAN_REORDER)
+                  break;
+               return false;
+
+            case nir_intrinsic_load_shared:
+            case nir_intrinsic_load_shared2_amd:
+            case nir_intrinsic_load_output:
+            case nir_intrinsic_load_per_vertex_output:
+               /* Same as above loads. */
+               return false;
+
+            default:
+               /* Do nothing. */
+               break;
+            }
          }
 
          if (!nir_foreach_ssa_def(instr, def_only_used_in_cf_node, node))
@@ -251,11 +279,15 @@ dead_cf_block(nir_block *block)
 {
    nir_if *following_if = nir_block_get_following_if(block);
    if (following_if) {
-      if (!nir_src_is_const(following_if->condition))
-         return false;
+      if (nir_src_is_const(following_if->condition)) {
+         opt_constant_if(following_if, nir_src_as_bool(following_if->condition));
+         return true;
+      }
 
-      opt_constant_if(following_if, nir_src_as_bool(following_if->condition));
-      return true;
+      if (node_is_dead(&following_if->cf_node)) {
+         nir_cf_node_remove(&following_if->cf_node);
+         return true;
+      }
    }
 
    nir_loop *following_loop = nir_block_get_following_loop(block);
@@ -333,6 +365,7 @@ dead_cf_list(struct exec_list *list, bool *list_ends_in_jump)
 
       case nir_cf_node_loop: {
          nir_loop *loop = nir_cf_node_as_loop(cur);
+         assert(!nir_loop_has_continue_construct(loop));
          bool dummy;
          progress |= dead_cf_list(&loop->body, &dummy);
 
@@ -364,6 +397,7 @@ opt_dead_cf_impl(nir_function_impl *impl)
 
    if (progress) {
       nir_metadata_preserve(impl, nir_metadata_none);
+      nir_rematerialize_derefs_in_use_blocks_impl(impl);
 
       /* The CF manipulation code called by this pass is smart enough to keep
        * from breaking any SSA use/def chains by replacing any uses of removed

@@ -436,22 +436,6 @@ iter_declaration(
          TXT( ", " );
          ENM( decl->Interp.Location, tgsi_interpolate_locations );
       }
-
-      if (decl->Interp.CylindricalWrap) {
-         TXT(", CYLWRAP_");
-         if (decl->Interp.CylindricalWrap & TGSI_CYLINDRICAL_WRAP_X) {
-            CHR('X');
-         }
-         if (decl->Interp.CylindricalWrap & TGSI_CYLINDRICAL_WRAP_Y) {
-            CHR('Y');
-         }
-         if (decl->Interp.CylindricalWrap & TGSI_CYLINDRICAL_WRAP_Z) {
-            CHR('Z');
-         }
-         if (decl->Interp.CylindricalWrap & TGSI_CYLINDRICAL_WRAP_W) {
-            CHR('W');
-         }
-      }
    }
 
    if (decl->Declaration.Invariant) {
@@ -461,18 +445,6 @@ iter_declaration(
    EOL();
 
    return TRUE;
-}
-
-void
-tgsi_dump_declaration(
-   const struct tgsi_full_declaration *decl )
-{
-   struct dump_ctx ctx;
-   memset(&ctx, 0, sizeof(ctx));
-
-   ctx.dump_printf = dump_ctx_printf;
-
-   iter_declaration( &ctx.iter, (struct tgsi_full_declaration *)decl );
 }
 
 static boolean
@@ -516,17 +488,6 @@ iter_property(
    return TRUE;
 }
 
-void tgsi_dump_property(
-   const struct tgsi_full_property *prop )
-{
-   struct dump_ctx ctx;
-   memset(&ctx, 0, sizeof(ctx));
-
-   ctx.dump_printf = dump_ctx_printf;
-
-   iter_property( &ctx.iter, (struct tgsi_full_property *)prop );
-}
-
 static boolean
 iter_immediate(
    struct tgsi_iterate_context *iter,
@@ -545,18 +506,6 @@ iter_immediate(
    EOL();
 
    return TRUE;
-}
-
-void
-tgsi_dump_immediate(
-   const struct tgsi_full_immediate *imm )
-{
-   struct dump_ctx ctx;
-   memset(&ctx, 0, sizeof(ctx));
-
-   ctx.dump_printf = dump_ctx_printf;
-
-   iter_immediate( &ctx.iter, (struct tgsi_full_immediate *)imm );
 }
 
 static boolean

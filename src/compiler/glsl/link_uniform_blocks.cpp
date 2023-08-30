@@ -26,9 +26,11 @@
 #include "ir_uniform.h"
 #include "link_uniform_block_active_visitor.h"
 #include "util/hash_table.h"
+#include "util/u_math.h"
 #include "program.h"
 #include "main/errors.h"
-#include "main/mtypes.h"
+#include "main/shader_types.h"
+#include "main/consts_exts.h"
 
 namespace {
 
@@ -70,10 +72,10 @@ private:
    {
       assert(type->is_struct());
       if (packing == GLSL_INTERFACE_PACKING_STD430)
-         this->offset = glsl_align(
+         this->offset = align(
             this->offset, type->std430_base_alignment(row_major));
       else
-         this->offset = glsl_align(
+         this->offset = align(
             this->offset, type->std140_base_alignment(row_major));
    }
 
@@ -91,10 +93,10 @@ private:
        *    multiple of the base alignment of the structure.
        */
       if (packing == GLSL_INTERFACE_PACKING_STD430)
-         this->offset = glsl_align(
+         this->offset = align(
             this->offset, type->std430_base_alignment(row_major));
       else
-         this->offset = glsl_align(
+         this->offset = align(
             this->offset, type->std140_base_alignment(row_major));
    }
 
@@ -168,7 +170,7 @@ private:
          size = type_for_size->std140_size(v->RowMajor);
       }
 
-      this->offset = glsl_align(this->offset, alignment);
+      this->offset = align(this->offset, alignment);
       v->Offset = this->offset;
 
       this->offset += size;
@@ -183,7 +185,7 @@ private:
        *    rounding up to the next multiple of the base alignment required
        *    for a vec4.
        */
-      this->buffer_size = glsl_align(this->offset, 16);
+      this->buffer_size = align(this->offset, 16);
    }
 
    bool use_std430_as_default;
@@ -224,7 +226,7 @@ static void process_block_array_leaf(const char *name, gl_uniform_block *blocks,
                                      unsigned *block_index,
                                      unsigned binding_offset,
                                      unsigned linearized_index,
-                                     struct gl_context *ctx,
+                                     const struct gl_constants *consts,
                                      struct gl_shader_program *prog);
 
 /**
@@ -238,7 +240,8 @@ process_block_array(struct uniform_block_array_elements *ub_array, char **name,
                     ubo_visitor *parcel, gl_uniform_buffer_variable *variables,
                     const struct link_uniform_block_active *const b,
                     unsigned *block_index, unsigned binding_offset,
-                    struct gl_context *ctx, struct gl_shader_program *prog,
+                    const struct gl_constants *consts,
+                    struct gl_shader_program *prog,
                     unsigned first_index)
 {
    for (unsigned j = 0; j < ub_array->num_array_elements; j++) {
@@ -253,12 +256,12 @@ process_block_array(struct uniform_block_array_elements *ub_array, char **name,
                                    ub_array->array->aoa_size);
          process_block_array(ub_array->array, name, new_length, blocks,
                              parcel, variables, b, block_index,
-                             binding_stride, ctx, prog, first_index);
+                             binding_stride, consts, prog, first_index);
       } else {
          process_block_array_leaf(*name, blocks,
                                   parcel, variables, b, block_index,
                                   binding_offset + element_idx,
-                                  *block_index - first_index, ctx, prog);
+                                  *block_index - first_index, consts, prog);
       }
    }
 }
@@ -270,12 +273,14 @@ process_block_array_leaf(const char *name,
                          const struct link_uniform_block_active *const b,
                          unsigned *block_index, unsigned binding_offset,
                          unsigned linearized_index,
-                         struct gl_context *ctx, struct gl_shader_program *prog)
+                         const struct gl_constants *consts,
+                         struct gl_shader_program *prog)
 {
    unsigned i = *block_index;
    const glsl_type *type =  b->type->without_array();
 
-   blocks[i].Name = ralloc_strdup(blocks, name);
+   blocks[i].name.string = ralloc_strdup(blocks, name);
+   resource_name_updated(&blocks[i].name);
    blocks[i].Uniforms = &variables[(*parcel).index];
 
    /* The ARB_shading_language_420pack spec says:
@@ -292,18 +297,18 @@ process_block_array_leaf(const char *name,
    blocks[i]._RowMajor = type->get_interface_row_major();
    blocks[i].linearized_array_index = linearized_index;
 
-   parcel->process(type, b->has_instance_name ? blocks[i].Name : "");
+   parcel->process(type, b->has_instance_name ? blocks[i].name.string : "");
 
    blocks[i].UniformBufferSize = parcel->buffer_size;
 
    /* Check SSBO size is lower than maximum supported size for SSBO */
    if (b->is_shader_storage &&
-       parcel->buffer_size > ctx->Const.MaxShaderStorageBlockSize) {
+       parcel->buffer_size > consts->MaxShaderStorageBlockSize) {
       linker_error(prog, "shader storage block `%s' has size %d, "
                    "which is larger than the maximum allowed (%d)",
                    b->type->name,
                    parcel->buffer_size,
-                   ctx->Const.MaxShaderStorageBlockSize);
+                   consts->MaxShaderStorageBlockSize);
    }
    blocks[i].NumUniforms =
       (unsigned)(ptrdiff_t)(&variables[parcel->index] - blocks[i].Uniforms);
@@ -335,7 +340,7 @@ resize_block_array(const glsl_type *type,
 }
 
 static void
-create_buffer_blocks(void *mem_ctx, struct gl_context *ctx,
+create_buffer_blocks(void *mem_ctx, const struct gl_constants *consts,
                      struct gl_shader_program *prog,
                      struct gl_uniform_block **out_blks, unsigned num_blocks,
                      struct hash_table *block_hash, unsigned num_variables,
@@ -360,7 +365,7 @@ create_buffer_blocks(void *mem_ctx, struct gl_context *ctx,
     * structures.
     */
    ubo_visitor parcel(blocks, variables, num_variables, prog,
-                      ctx->Const.UseSTD430AsDefaultPacking);
+                      consts->UseSTD430AsDefaultPacking);
 
    unsigned i = 0;
    hash_table_foreach (block_hash, entry) {
@@ -378,13 +383,13 @@ create_buffer_blocks(void *mem_ctx, struct gl_context *ctx,
 
             assert(b->has_instance_name);
             process_block_array(b->array, &name, name_length, blocks, &parcel,
-                                variables, b, &i, 0, ctx, prog,
+                                variables, b, &i, 0, consts, prog,
                                 i);
             ralloc_free(name);
          } else {
             process_block_array_leaf(block_type->name, blocks, &parcel,
                                      variables, b, &i, 0,
-                                     0, ctx, prog);
+                                     0, consts, prog);
          }
       }
    }
@@ -396,7 +401,7 @@ create_buffer_blocks(void *mem_ctx, struct gl_context *ctx,
 
 void
 link_uniform_blocks(void *mem_ctx,
-                    struct gl_context *ctx,
+                    const struct gl_constants *consts,
                     struct gl_shader_program *prog,
                     struct gl_linked_shader *shader,
                     struct gl_uniform_block **ubo_blocks,
@@ -445,7 +450,7 @@ link_uniform_blocks(void *mem_ctx,
 
       block_size.num_active_uniforms = 0;
       block_size.process(b->type->without_array(), "",
-                         ctx->Const.UseSTD430AsDefaultPacking);
+                         consts->UseSTD430AsDefaultPacking);
 
       if (b->array != NULL) {
          unsigned aoa_size = b->type->arrays_of_arrays_size();
@@ -468,9 +473,9 @@ link_uniform_blocks(void *mem_ctx,
 
    }
 
-   create_buffer_blocks(mem_ctx, ctx, prog, ubo_blocks, *num_ubo_blocks,
+   create_buffer_blocks(mem_ctx, consts, prog, ubo_blocks, *num_ubo_blocks,
                         block_hash, num_ubo_variables, true);
-   create_buffer_blocks(mem_ctx, ctx, prog, ssbo_blocks, *num_ssbo_blocks,
+   create_buffer_blocks(mem_ctx, consts, prog, ssbo_blocks, *num_ssbo_blocks,
                         block_hash, num_ssbo_variables, false);
 
    _mesa_hash_table_destroy(block_hash, NULL);
@@ -480,7 +485,7 @@ static bool
 link_uniform_blocks_are_compatible(const gl_uniform_block *a,
                                    const gl_uniform_block *b)
 {
-   assert(strcmp(a->Name, b->Name) == 0);
+   assert(strcmp(a->name.string, b->name.string) == 0);
 
    /* Page 35 (page 42 of the PDF) in section 4.3.7 of the GLSL 1.50 spec says:
     *
@@ -534,7 +539,7 @@ link_cross_validate_uniform_block(void *mem_ctx,
    for (unsigned int i = 0; i < *num_linked_blocks; i++) {
       struct gl_uniform_block *old_block = &(*linked_blocks)[i];
 
-      if (strcmp(old_block->Name, new_block->Name) == 0)
+      if (strcmp(old_block->name.string, new_block->name.string) == 0)
          return link_uniform_blocks_are_compatible(old_block, new_block)
             ? i : -1;
    }
@@ -554,7 +559,8 @@ link_cross_validate_uniform_block(void *mem_ctx,
           new_block->Uniforms,
           sizeof(*linked_block->Uniforms) * linked_block->NumUniforms);
 
-   linked_block->Name = ralloc_strdup(*linked_blocks, linked_block->Name);
+   linked_block->name.string = ralloc_strdup(*linked_blocks, linked_block->name.string);
+   resource_name_updated(&linked_block->name);
 
    for (unsigned int i = 0; i < linked_block->NumUniforms; i++) {
       struct gl_uniform_buffer_variable *ubo_var =

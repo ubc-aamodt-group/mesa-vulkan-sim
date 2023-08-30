@@ -25,7 +25,7 @@
  *
  **************************************************************************/
 
-#include "pipe/p_format.h"
+#include "util/format/u_formats.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_screen.h"
 
@@ -34,8 +34,10 @@
 #include "util/u_memory.h"
 
 #include <GL/gl.h>
+#include "stw_gdishim.h"
 #include "gldrv.h"
 #include "stw_device.h"
+#include "stw_framebuffer.h"
 #include "stw_pixelformat.h"
 #include "stw_tls.h"
 #include "stw_winsys.h"
@@ -141,10 +143,6 @@ stw_pixelformat_add(struct stw_device *stw_dev,
 {
    struct stw_pixelformat_info *pfi;
 
-   assert(stw_dev->pixelformat_extended_count < STW_MAX_PIXELFORMATS);
-   if (stw_dev->pixelformat_extended_count >= STW_MAX_PIXELFORMATS)
-      return;
-
    assert(util_format_get_component_bits(color->format, UTIL_FORMAT_COLORSPACE_RGB, 0) == color->bits.red);
    assert(util_format_get_component_bits(color->format, UTIL_FORMAT_COLORSPACE_RGB, 1) == color->bits.green);
    assert(util_format_get_component_bits(color->format, UTIL_FORMAT_COLORSPACE_RGB, 2) == color->bits.blue);
@@ -152,10 +150,13 @@ stw_pixelformat_add(struct stw_device *stw_dev,
    assert(util_format_get_component_bits(depth->format, UTIL_FORMAT_COLORSPACE_ZS, 0) == depth->bits.depth);
    assert(util_format_get_component_bits(depth->format, UTIL_FORMAT_COLORSPACE_ZS, 1) == depth->bits.stencil);
 
-   pfi = &stw_dev->pixelformats[stw_dev->pixelformat_extended_count];
+   pfi = util_dynarray_grow(&stw_dev->pixelformats,
+                            struct stw_pixelformat_info,
+                            1);
 
    memset(pfi, 0, sizeof *pfi);
 
+   pfi->iPixelFormat = util_dynarray_num_elements(&stw_dev->pixelformats, struct stw_pixelformat_info);
    pfi->pfd.nSize = sizeof pfi->pfd;
    pfi->pfd.nVersion = 1;
 
@@ -216,7 +217,6 @@ stw_pixelformat_add(struct stw_device *stw_dev,
       PIPE_FORMAT_R16G16B16A16_SNORM : PIPE_FORMAT_NONE;
 
    pfi->stvis.samples = samples;
-   pfi->stvis.render_buffer = ST_ATTACHMENT_INVALID;
 
    /* WGL_ARB_render_texture */
    if (color->bits.alpha)
@@ -224,11 +224,11 @@ stw_pixelformat_add(struct stw_device *stw_dev,
 
    pfi->bindToTextureRGB = TRUE;
 
-   ++stw_dev->pixelformat_extended_count;
-
    if (!extended) {
       ++stw_dev->pixelformat_count;
-      assert(stw_dev->pixelformat_count == stw_dev->pixelformat_extended_count);
+      assert(stw_dev->pixelformat_count ==
+             util_dynarray_num_elements(&stw_dev->pixelformats,
+                                        struct stw_pixelformat_info));
    }
 }
 
@@ -254,7 +254,17 @@ add_color_format_variants(const struct stw_pf_color_info *color_formats,
     * to force all pixel formats to have a particular number of samples.
     */
    {
-      const char *samples= getenv("SVGA_FORCE_MSAA");
+      const char *samples = getenv("WGL_FORCE_MSAA");
+      if (!samples) {
+         static bool warned = false;
+         samples = getenv("SVGA_FORCE_MSAA");
+         if (samples && !warned) {
+            fprintf(stderr, "*** SVGA_FORCE_MSAA is deprecated; "
+                    "use WGL_FORCE_MSAA instead ***\n");
+            warned = true;
+         }
+      }
+
       if (samples)
          force_samples = atoi(samples);
    }
@@ -315,7 +325,8 @@ stw_pixelformat_init(void)
    unsigned num_formats;
 
    assert(!stw_dev->pixelformat_count);
-   assert(!stw_dev->pixelformat_extended_count);
+
+   util_dynarray_init(&stw_dev->pixelformats, NULL);
 
    /* normal, displayable formats */
    num_formats = add_color_format_variants(stw_pf_color,
@@ -326,8 +337,9 @@ stw_pixelformat_init(void)
    add_color_format_variants(stw_pf_color_extended,
                              ARRAY_SIZE(stw_pf_color_extended), TRUE);
 
-   assert(stw_dev->pixelformat_count <= stw_dev->pixelformat_extended_count);
-   assert(stw_dev->pixelformat_extended_count <= STW_MAX_PIXELFORMATS);
+   assert(stw_dev->pixelformat_count <=
+          util_dynarray_num_elements(&stw_dev->pixelformats,
+                                     struct stw_pixelformat_info));
 }
 
 
@@ -347,7 +359,8 @@ stw_pixelformat_get_extended_count(HDC hdc)
    if (!stw_init_screen(hdc))
       return 0;
 
-   return stw_dev->pixelformat_extended_count;
+   return util_dynarray_num_elements(&stw_dev->pixelformats,
+                                     struct stw_pixelformat_info);
 }
 
 
@@ -361,11 +374,60 @@ stw_pixelformat_get_info(int iPixelFormat)
    }
 
    index = iPixelFormat - 1;
-   if (index >= stw_dev->pixelformat_extended_count) {
+   if (index >= util_dynarray_num_elements(&stw_dev->pixelformats,
+                                           struct stw_pixelformat_info)) {
       return NULL;
    }
 
-   return &stw_dev->pixelformats[index];
+   return util_dynarray_element(&stw_dev->pixelformats,
+                                struct stw_pixelformat_info,
+                                index);
+}
+
+/**
+ * Return the stw pixel format that most closely matches the pixel format
+ * on HDC.
+ * Used to get a pixel format when SetPixelFormat() hasn't been called before.
+ */
+int
+stw_pixelformat_guess(HDC hdc)
+{
+   int iPixelFormat = GetPixelFormat(hdc);
+   PIXELFORMATDESCRIPTOR pfd;
+
+   if (!iPixelFormat)
+      return 0;
+   if (!DescribePixelFormat(hdc, iPixelFormat, sizeof(pfd), &pfd))
+      return 0;
+   return stw_pixelformat_choose(hdc, &pfd);
+}
+
+const struct stw_pixelformat_info *
+stw_pixelformat_get_info_from_hdc(HDC hdc)
+{
+   /*
+    * GDI only knows about displayable pixel formats, so determine the pixel
+    * format from the framebuffer.
+    *
+    * This also allows to use a OpenGL DLL / ICD without installing.
+    */
+   struct stw_framebuffer *fb;
+   fb = stw_framebuffer_from_hdc(hdc);
+   if (fb) {
+      const struct stw_pixelformat_info *pfi = fb->pfi;
+      stw_framebuffer_unlock(fb);
+      return pfi;
+   }
+
+   /* Applications should call SetPixelFormat before creating a context,
+    * but not all do, and the opengl32 runtime seems to use a default
+    * pixel format in some cases, so use that.
+    */
+   int iPixelFormat = stw_pixelformat_guess(hdc);
+   if (!iPixelFormat)
+      return 0;
+   
+   return stw_pixelformat_get_info( iPixelFormat );
 }
 
 

@@ -47,9 +47,7 @@ public:
                    const nir_shader *shader,
                    void *mem_ctx,
                    bool no_spills,
-                   int shader_time_index);
-
-   virtual void nir_setup_inputs();
+                   bool debug_enabled);
 
 protected:
    virtual void setup_payload();

@@ -32,7 +32,6 @@
 #include "util/u_dynarray.h"
 #include "util/u_memory.h"
 
-#include <directx/d3d12.h>
 #include <dxguids/dxguids.h>
 
 struct d3d12_descriptor_pool {
@@ -77,9 +76,9 @@ d3d12_descriptor_heap_new(ID3D12Device *dev,
    heap->dev = dev;
    heap->desc_size = dev->GetDescriptorHandleIncrementSize(type);
    heap->size = num_descriptors * heap->desc_size;
-   heap->cpu_base = heap->heap->GetCPUDescriptorHandleForHeapStart().ptr;
+   heap->cpu_base = GetCPUDescriptorHandleForHeapStart(heap->heap).ptr;
    if (flags & D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE)
-      heap->gpu_base = heap->heap->GetGPUDescriptorHandleForHeapStart().ptr;
+      heap->gpu_base = GetGPUDescriptorHandleForHeapStart(heap->heap).ptr;
    util_dynarray_init(&heap->free_list, NULL);
 
    return heap;
@@ -193,7 +192,7 @@ d3d12_descriptor_heap_clear(struct d3d12_descriptor_heap *heap)
 }
 
 struct d3d12_descriptor_pool*
-d3d12_descriptor_pool_new(pipe_context *pctx,
+d3d12_descriptor_pool_new(struct d3d12_screen *screen,
                           D3D12_DESCRIPTOR_HEAP_TYPE type,
                           uint32_t num_descriptors)
 {
@@ -201,7 +200,7 @@ d3d12_descriptor_pool_new(pipe_context *pctx,
    if (!pool)
       return NULL;
 
-   pool->dev = d3d12_screen(pctx->screen)->dev;
+   pool->dev = screen->dev;
    pool->type = type;
    pool->num_descriptors = num_descriptors;
    list_inithead(&pool->heaps);

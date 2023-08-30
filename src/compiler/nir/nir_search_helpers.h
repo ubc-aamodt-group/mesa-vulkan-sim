@@ -33,7 +33,7 @@
 #include <math.h>
 
 static inline bool
-is_pos_power_of_two(UNUSED struct hash_table *ht, nir_alu_instr *instr,
+is_pos_power_of_two(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
                     unsigned src, unsigned num_components,
                     const uint8_t *swizzle)
 {
@@ -65,7 +65,7 @@ is_pos_power_of_two(UNUSED struct hash_table *ht, nir_alu_instr *instr,
 }
 
 static inline bool
-is_neg_power_of_two(UNUSED struct hash_table *ht, nir_alu_instr *instr,
+is_neg_power_of_two(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
                     unsigned src, unsigned num_components,
                     const uint8_t *swizzle)
 {
@@ -73,12 +73,15 @@ is_neg_power_of_two(UNUSED struct hash_table *ht, nir_alu_instr *instr,
    if (!nir_src_is_const(instr->src[src].src))
       return false;
 
+   int64_t int_min = u_intN_min(instr->src[src].src.ssa->bit_size);
+
    for (unsigned i = 0; i < num_components; i++) {
       nir_alu_type type = nir_op_infos[instr->op].input_types[src];
       switch (nir_alu_type_get_base_type(type)) {
       case nir_type_int: {
          int64_t val = nir_src_comp_as_int(instr->src[src].src, swizzle[i]);
-         if (val >= 0 || !util_is_power_of_two_or_zero64(-val))
+         /* "int_min" is a power-of-two, but negation can cause overflow. */
+         if (val == int_min || val >= 0 || !util_is_power_of_two_or_zero64(-val))
             return false;
          break;
       }
@@ -90,9 +93,28 @@ is_neg_power_of_two(UNUSED struct hash_table *ht, nir_alu_instr *instr,
    return true;
 }
 
+static inline bool
+is_bitcount2(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
+             unsigned src, unsigned num_components,
+             const uint8_t *swizzle)
+{
+   /* only constant srcs: */
+   if (!nir_src_is_const(instr->src[src].src))
+      return false;
+
+   for (unsigned i = 0; i < num_components; i++) {
+      uint64_t val = nir_src_comp_as_uint(instr->src[src].src, swizzle[i]);
+      if (util_bitcount64(val) != 2)
+         return false;
+   }
+
+   return true;
+}
+
 #define MULTIPLE(test)                                                  \
 static inline bool                                                      \
-is_unsigned_multiple_of_ ## test(UNUSED struct hash_table *ht, nir_alu_instr *instr, \
+is_unsigned_multiple_of_ ## test(UNUSED struct hash_table *ht,          \
+                                 const nir_alu_instr *instr,            \
                                  unsigned src, unsigned num_components, \
                                  const uint8_t *swizzle)                \
 {                                                                       \
@@ -117,8 +139,8 @@ MULTIPLE(32)
 MULTIPLE(64)
 
 static inline bool
-is_zero_to_one(UNUSED struct hash_table *ht, nir_alu_instr *instr, unsigned src,
-               unsigned num_components,
+is_zero_to_one(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
+               unsigned src, unsigned num_components,
                const uint8_t *swizzle)
 {
    /* only constant srcs: */
@@ -126,7 +148,8 @@ is_zero_to_one(UNUSED struct hash_table *ht, nir_alu_instr *instr, unsigned src,
       return false;
 
    for (unsigned i = 0; i < num_components; i++) {
-      switch (nir_op_infos[instr->op].input_types[src]) {
+      nir_alu_type type = nir_op_infos[instr->op].input_types[src];
+      switch (nir_alu_type_get_base_type(type)) {
       case nir_type_float: {
          double val = nir_src_comp_as_float(instr->src[src].src, swizzle[i]);
          if (isnan(val) || val < 0.0f || val > 1.0f)
@@ -148,7 +171,7 @@ is_zero_to_one(UNUSED struct hash_table *ht, nir_alu_instr *instr, unsigned src,
  * 1 while this function tests 0 < src < 1.
  */
 static inline bool
-is_gt_0_and_lt_1(UNUSED struct hash_table *ht, nir_alu_instr *instr,
+is_gt_0_and_lt_1(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
                  unsigned src, unsigned num_components,
                  const uint8_t *swizzle)
 {
@@ -157,7 +180,8 @@ is_gt_0_and_lt_1(UNUSED struct hash_table *ht, nir_alu_instr *instr,
       return false;
 
    for (unsigned i = 0; i < num_components; i++) {
-      switch (nir_op_infos[instr->op].input_types[src]) {
+      nir_alu_type type = nir_op_infos[instr->op].input_types[src];
+      switch (nir_alu_type_get_base_type(type)) {
       case nir_type_float: {
          double val = nir_src_comp_as_float(instr->src[src].src, swizzle[i]);
          if (isnan(val) || val <= 0.0f || val >= 1.0f)
@@ -172,8 +196,37 @@ is_gt_0_and_lt_1(UNUSED struct hash_table *ht, nir_alu_instr *instr,
    return true;
 }
 
+/**
+ * x & 1 != 0
+ */
 static inline bool
-is_not_const_zero(UNUSED struct hash_table *ht, nir_alu_instr *instr,
+is_odd(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
+       unsigned src, unsigned num_components,
+       const uint8_t *swizzle)
+{
+   /* only constant srcs: */
+   if (!nir_src_is_const(instr->src[src].src))
+      return false;
+
+   for (unsigned i = 0; i < num_components; i++) {
+      nir_alu_type type = nir_op_infos[instr->op].input_types[src];
+      switch (nir_alu_type_get_base_type(type)) {
+      case nir_type_int:
+      case nir_type_uint: {
+         if ((nir_src_comp_as_uint(instr->src[src].src, swizzle[i]) & 1) == 0)
+            return false;
+         break;
+      }
+      default:
+         return false;
+      }
+   }
+
+   return true;
+}
+
+static inline bool
+is_not_const_zero(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
                   unsigned src, unsigned num_components,
                   const uint8_t *swizzle)
 {
@@ -201,16 +254,96 @@ is_not_const_zero(UNUSED struct hash_table *ht, nir_alu_instr *instr,
    return true;
 }
 
+/** Is value unsigned less than the limit? */
 static inline bool
-is_not_const(UNUSED struct hash_table *ht, nir_alu_instr *instr, unsigned src,
-             UNUSED unsigned num_components,
+is_ult(const nir_alu_instr *instr, unsigned src, unsigned num_components, const uint8_t *swizzle,
+       uint64_t limit)
+{
+   /* only constant srcs: */
+   if (!nir_src_is_const(instr->src[src].src))
+      return false;
+
+   for (unsigned i = 0; i < num_components; i++) {
+      const uint64_t val =
+         nir_src_comp_as_uint(instr->src[src].src, swizzle[i]);
+
+      if (val >= limit)
+         return false;
+   }
+
+   return true;
+}
+
+/** Is value unsigned less than 32? */
+static inline bool
+is_ult_32(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
+          unsigned src, unsigned num_components,
+          const uint8_t *swizzle)
+{
+   return is_ult(instr, src, num_components, swizzle, 32);
+}
+
+/** Is value unsigned less than 0xfffc07fc? */
+static inline bool
+is_ult_0xfffc07fc(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
+                  unsigned src, unsigned num_components,
+                  const uint8_t *swizzle)
+{
+   return is_ult(instr, src, num_components, swizzle, 0xfffc07fcU);
+}
+
+/** Is the first 5 bits of value unsigned greater than or equal 2? */
+static inline bool
+is_first_5_bits_uge_2(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
+                      unsigned src, unsigned num_components,
+                      const uint8_t *swizzle)
+{
+   /* only constant srcs: */
+   if (!nir_src_is_const(instr->src[src].src))
+      return false;
+
+   for (unsigned i = 0; i < num_components; i++) {
+      const unsigned val =
+         nir_src_comp_as_uint(instr->src[src].src, swizzle[i]);
+
+      if ((val & 0x1f) < 2)
+         return false;
+   }
+
+   return true;
+}
+
+/** Is this a constant that could be either int16_t or uint16_t? */
+static inline bool
+is_16_bits(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
+           unsigned src, unsigned num_components,
+           const uint8_t *swizzle)
+{
+   /* only constant srcs: */
+   if (!nir_src_is_const(instr->src[src].src))
+      return false;
+
+   for (unsigned i = 0; i < num_components; i++) {
+      const int64_t val =
+         nir_src_comp_as_int(instr->src[src].src, swizzle[i]);
+
+      if (val > 0xffff || val < -0x8000)
+         return false;
+   }
+
+   return true;
+}
+
+static inline bool
+is_not_const(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
+             unsigned src, UNUSED unsigned num_components,
              UNUSED const uint8_t *swizzle)
 {
    return !nir_src_is_const(instr->src[src].src);
 }
 
 static inline bool
-is_not_fmul(struct hash_table *ht, nir_alu_instr *instr, unsigned src,
+is_not_fmul(struct hash_table *ht, const nir_alu_instr *instr, unsigned src,
             UNUSED unsigned num_components, UNUSED const uint8_t *swizzle)
 {
    nir_alu_instr *src_alu =
@@ -222,11 +355,11 @@ is_not_fmul(struct hash_table *ht, nir_alu_instr *instr, unsigned src,
    if (src_alu->op == nir_op_fneg)
       return is_not_fmul(ht, src_alu, 0, 0, NULL);
 
-   return src_alu->op != nir_op_fmul;
+   return src_alu->op != nir_op_fmul && src_alu->op != nir_op_fmulz;
 }
 
 static inline bool
-is_fmul(struct hash_table *ht, nir_alu_instr *instr, unsigned src,
+is_fmul(struct hash_table *ht, const nir_alu_instr *instr, unsigned src,
         UNUSED unsigned num_components, UNUSED const uint8_t *swizzle)
 {
    nir_alu_instr *src_alu =
@@ -238,11 +371,11 @@ is_fmul(struct hash_table *ht, nir_alu_instr *instr, unsigned src,
    if (src_alu->op == nir_op_fneg)
       return is_fmul(ht, src_alu, 0, 0, NULL);
 
-   return src_alu->op == nir_op_fmul;
+   return src_alu->op == nir_op_fmul || src_alu->op == nir_op_fmulz;
 }
 
 static inline bool
-is_fsign(nir_alu_instr *instr, unsigned src,
+is_fsign(const nir_alu_instr *instr, unsigned src,
          UNUSED unsigned num_components, UNUSED const uint8_t *swizzle)
 {
    nir_alu_instr *src_alu =
@@ -258,49 +391,34 @@ is_fsign(nir_alu_instr *instr, unsigned src,
 }
 
 static inline bool
-is_not_const_and_not_fsign(struct hash_table *ht, nir_alu_instr *instr, unsigned src,
-                           unsigned num_components, const uint8_t *swizzle)
+is_not_const_and_not_fsign(struct hash_table *ht, const nir_alu_instr *instr,
+                           unsigned src, unsigned num_components,
+                           const uint8_t *swizzle)
 {
    return is_not_const(ht, instr, src, num_components, swizzle) &&
           !is_fsign(instr, src, num_components, swizzle);
 }
 
 static inline bool
-is_used_once(nir_alu_instr *instr)
+is_used_once(const nir_alu_instr *instr)
 {
-   bool zero_if_use = list_is_empty(&instr->dest.dest.ssa.if_uses);
-   bool zero_use = list_is_empty(&instr->dest.dest.ssa.uses);
-
-   if (zero_if_use && zero_use)
-      return false;
-
-   if (!zero_if_use && list_is_singular(&instr->dest.dest.ssa.uses))
-     return false;
-
-   if (!zero_use && list_is_singular(&instr->dest.dest.ssa.if_uses))
-     return false;
-
-   if (!list_is_singular(&instr->dest.dest.ssa.if_uses) &&
-       !list_is_singular(&instr->dest.dest.ssa.uses))
-      return false;
-
-   return true;
+   return list_is_singular(&instr->dest.dest.ssa.uses);
 }
 
 static inline bool
-is_used_by_if(nir_alu_instr *instr)
+is_used_by_if(const nir_alu_instr *instr)
 {
-   return !list_is_empty(&instr->dest.dest.ssa.if_uses);
+   return nir_ssa_def_used_by_if(&instr->dest.dest.ssa);
 }
 
 static inline bool
-is_not_used_by_if(nir_alu_instr *instr)
+is_not_used_by_if(const nir_alu_instr *instr)
 {
-   return list_is_empty(&instr->dest.dest.ssa.if_uses);
+   return !is_used_by_if(instr);
 }
 
 static inline bool
-is_used_by_non_fsat(nir_alu_instr *instr)
+is_used_by_non_fsat(const nir_alu_instr *instr)
 {
    nir_foreach_use(src, &instr->dest.dest.ssa) {
       const nir_instr *const user_instr = src->parent_instr;
@@ -318,22 +436,76 @@ is_used_by_non_fsat(nir_alu_instr *instr)
    return false;
 }
 
+static inline bool
+is_only_used_as_float(const nir_alu_instr *instr)
+{
+   nir_foreach_use(src, &instr->dest.dest.ssa) {
+      const nir_instr *const user_instr = src->parent_instr;
+      if (user_instr->type != nir_instr_type_alu)
+         return false;
+
+      const nir_alu_instr *const user_alu = nir_instr_as_alu(user_instr);
+      assert(instr != user_alu);
+
+      unsigned index = (nir_alu_src*)container_of(src, nir_alu_src, src) - user_alu->src;
+      nir_alu_type type = nir_op_infos[user_alu->op].input_types[index];
+      if (nir_alu_type_get_base_type(type) != nir_type_float)
+         return false;
+   }
+
+   return true;
+}
+
+static inline bool
+is_only_used_by_fadd(const nir_alu_instr *instr)
+{
+   nir_foreach_use(src, &instr->dest.dest.ssa) {
+      const nir_instr *const user_instr = src->parent_instr;
+      if (user_instr->type != nir_instr_type_alu)
+         return false;
+
+      const nir_alu_instr *const user_alu = nir_instr_as_alu(user_instr);
+      assert(instr != user_alu);
+
+      if (user_alu->op == nir_op_fneg || user_alu->op == nir_op_fabs) {
+         if (!is_only_used_by_fadd(user_alu))
+            return false;
+      } else if (user_alu->op != nir_op_fadd) {
+         return false;
+      }
+   }
+
+   return true;
+}
+
+static inline bool
+only_lower_8_bits_used(const nir_alu_instr *instr)
+{
+   return (nir_ssa_def_bits_used(&instr->dest.dest.ssa) & ~0xffull) == 0;
+}
+
+static inline bool
+only_lower_16_bits_used(const nir_alu_instr *instr)
+{
+   return (nir_ssa_def_bits_used(&instr->dest.dest.ssa) & ~0xffffull) == 0;
+}
+
 /**
  * Returns true if a NIR ALU src represents a constant integer
  * of either 32 or 64 bits, and the higher word (bit-size / 2)
  * of all its components is zero.
  */
 static inline bool
-is_upper_half_zero(UNUSED struct hash_table *ht,
-                   nir_alu_instr *instr, unsigned src,
-                   unsigned num_components, const uint8_t *swizzle)
+is_upper_half_zero(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
+                   unsigned src, unsigned num_components,
+                   const uint8_t *swizzle)
 {
    if (nir_src_as_const_value(instr->src[src].src) == NULL)
       return false;
 
    for (unsigned i = 0; i < num_components; i++) {
       unsigned half_bit_size = nir_src_bit_size(instr->src[src].src) / 2;
-      uint32_t high_bits = ((1 << half_bit_size) - 1) << half_bit_size;
+      uint64_t high_bits = u_bit_consecutive64(half_bit_size, half_bit_size);
       if ((nir_src_comp_as_uint(instr->src[src].src,
                                 swizzle[i]) & high_bits) != 0) {
          return false;
@@ -349,17 +521,16 @@ is_upper_half_zero(UNUSED struct hash_table *ht,
  * of all its components is zero.
  */
 static inline bool
-is_lower_half_zero(UNUSED struct hash_table *ht,
-                   nir_alu_instr *instr, unsigned src,
-                   unsigned num_components, const uint8_t *swizzle)
+is_lower_half_zero(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
+                   unsigned src, unsigned num_components,
+                   const uint8_t *swizzle)
 {
    if (nir_src_as_const_value(instr->src[src].src) == NULL)
       return false;
 
    for (unsigned i = 0; i < num_components; i++) {
-      uint32_t low_bits =
-         (1 << (nir_src_bit_size(instr->src[src].src) / 2)) - 1;
-      if ((nir_src_comp_as_int(instr->src[src].src, swizzle[i]) & low_bits) != 0)
+      uint64_t low_bits = u_bit_consecutive64(0, nir_src_bit_size(instr->src[src].src) / 2);
+      if ((nir_src_comp_as_uint(instr->src[src].src, swizzle[i]) & low_bits) != 0)
          return false;
    }
 
@@ -367,19 +538,56 @@ is_lower_half_zero(UNUSED struct hash_table *ht,
 }
 
 static inline bool
-no_signed_wrap(nir_alu_instr *instr)
+is_upper_half_negative_one(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
+                           unsigned src, unsigned num_components,
+                           const uint8_t *swizzle)
+{
+   if (nir_src_as_const_value(instr->src[src].src) == NULL)
+      return false;
+
+   for (unsigned i = 0; i < num_components; i++) {
+      unsigned half_bit_size = nir_src_bit_size(instr->src[src].src) / 2;
+      uint64_t high_bits = u_bit_consecutive64(half_bit_size, half_bit_size);
+      if ((nir_src_comp_as_uint(instr->src[src].src,
+                                swizzle[i]) & high_bits) != high_bits) {
+         return false;
+      }
+   }
+
+   return true;
+}
+
+static inline bool
+is_lower_half_negative_one(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
+                           unsigned src, unsigned num_components,
+                           const uint8_t *swizzle)
+{
+   if (nir_src_as_const_value(instr->src[src].src) == NULL)
+      return false;
+
+   for (unsigned i = 0; i < num_components; i++) {
+      uint64_t low_bits = u_bit_consecutive64(0, nir_src_bit_size(instr->src[src].src) / 2);
+      if ((nir_src_comp_as_uint(instr->src[src].src, swizzle[i]) & low_bits) != low_bits)
+         return false;
+   }
+
+   return true;
+}
+
+static inline bool
+no_signed_wrap(const nir_alu_instr *instr)
 {
    return instr->no_signed_wrap;
 }
 
 static inline bool
-no_unsigned_wrap(nir_alu_instr *instr)
+no_unsigned_wrap(const nir_alu_instr *instr)
 {
    return instr->no_unsigned_wrap;
 }
 
 static inline bool
-is_integral(struct hash_table *ht, nir_alu_instr *instr, unsigned src,
+is_integral(struct hash_table *ht, const nir_alu_instr *instr, unsigned src,
             UNUSED unsigned num_components, UNUSED const uint8_t *swizzle)
 {
    const struct ssa_result_range r = nir_analyze_range(ht, instr, src);
@@ -389,45 +597,46 @@ is_integral(struct hash_table *ht, nir_alu_instr *instr, unsigned src,
 
 /**
  * Is the value finite?
- *
- * Doesn't actually use range tracking.  Just checks that the value is a
- * constant that is finite.
  */
 static inline bool
-is_finite(UNUSED struct hash_table *ht, nir_alu_instr *instr, unsigned src,
-          unsigned num_components, const uint8_t *swizzle)
+is_finite(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
+          unsigned src, UNUSED unsigned num_components,
+          UNUSED const uint8_t *swizzle)
 {
-   if (nir_src_as_const_value(instr->src[src].src) == NULL)
-      return false;
+   const struct ssa_result_range v = nir_analyze_range(ht, instr, src);
 
-   for (unsigned i = 0; i < num_components; i++) {
-      nir_alu_type type = nir_op_infos[instr->op].input_types[src];
-      switch (nir_alu_type_get_base_type(type)) {
-      case nir_type_float:
-         if (!isfinite(nir_src_comp_as_float(instr->src[src].src, swizzle[i])))
-            return false;
-         break;
-      case nir_type_bool:
-      case nir_type_int:
-      case nir_type_uint:
-         /* Non-float types are always finite. */
-         break;
-      default:
-         return false;
-      }
-   }
+   return v.is_finite;
+}
 
-   return true;
+static inline bool
+is_finite_not_zero(UNUSED struct hash_table *ht, const nir_alu_instr *instr,
+                   unsigned src, UNUSED unsigned num_components,
+                   UNUSED const uint8_t *swizzle)
+{
+   const struct ssa_result_range v = nir_analyze_range(ht, instr, src);
+
+   return v.is_finite &&
+          (v.range == lt_zero || v.range == gt_zero || v.range == ne_zero);
 }
 
 
 #define RELATION(r)                                                     \
 static inline bool                                                      \
-is_ ## r (struct hash_table *ht, nir_alu_instr *instr, unsigned src,                           \
-          UNUSED unsigned num_components, UNUSED const uint8_t *swizzle) \
+is_ ## r (struct hash_table *ht, const nir_alu_instr *instr,            \
+          unsigned src, UNUSED unsigned num_components,                 \
+          UNUSED const uint8_t *swizzle)                                \
 {                                                                       \
    const struct ssa_result_range v = nir_analyze_range(ht, instr, src);  \
    return v.range == r;                                                 \
+}                                                                       \
+                                                                        \
+static inline bool                                                      \
+is_a_number_ ## r (struct hash_table *ht, const nir_alu_instr *instr,   \
+                   unsigned src, UNUSED unsigned num_components,        \
+                   UNUSED const uint8_t *swizzle)                       \
+{                                                                       \
+   const struct ssa_result_range v = nir_analyze_range(ht, instr, src); \
+   return v.is_a_number && v.range == r;                                \
 }
 
 RELATION(lt_zero)
@@ -437,7 +646,7 @@ RELATION(ge_zero)
 RELATION(ne_zero)
 
 static inline bool
-is_not_negative(struct hash_table *ht, nir_alu_instr *instr, unsigned src,
+is_not_negative(struct hash_table *ht, const nir_alu_instr *instr, unsigned src,
                 UNUSED unsigned num_components, UNUSED const uint8_t *swizzle)
 {
    const struct ssa_result_range v = nir_analyze_range(ht, instr, src);
@@ -445,7 +654,18 @@ is_not_negative(struct hash_table *ht, nir_alu_instr *instr, unsigned src,
 }
 
 static inline bool
-is_not_positive(struct hash_table *ht, nir_alu_instr *instr, unsigned src,
+is_a_number_not_negative(struct hash_table *ht, const nir_alu_instr *instr,
+                         unsigned src, UNUSED unsigned num_components,
+                         UNUSED const uint8_t *swizzle)
+{
+   const struct ssa_result_range v = nir_analyze_range(ht, instr, src);
+   return v.is_a_number &&
+          (v.range == ge_zero || v.range == gt_zero || v.range == eq_zero);
+}
+
+
+static inline bool
+is_not_positive(struct hash_table *ht, const nir_alu_instr *instr, unsigned src,
                 UNUSED unsigned num_components, UNUSED const uint8_t *swizzle)
 {
    const struct ssa_result_range v = nir_analyze_range(ht, instr, src);
@@ -453,11 +673,39 @@ is_not_positive(struct hash_table *ht, nir_alu_instr *instr, unsigned src,
 }
 
 static inline bool
-is_not_zero(struct hash_table *ht, nir_alu_instr *instr, unsigned src,
+is_a_number_not_positive(struct hash_table *ht, const nir_alu_instr *instr,
+                         unsigned src, UNUSED unsigned num_components,
+                         UNUSED const uint8_t *swizzle)
+{
+   const struct ssa_result_range v = nir_analyze_range(ht, instr, src);
+   return v.is_a_number &&
+          (v.range == le_zero || v.range == lt_zero || v.range == eq_zero);
+}
+
+static inline bool
+is_not_zero(struct hash_table *ht, const nir_alu_instr *instr, unsigned src,
             UNUSED unsigned num_components, UNUSED const uint8_t *swizzle)
 {
    const struct ssa_result_range v = nir_analyze_range(ht, instr, src);
    return v.range == lt_zero || v.range == gt_zero || v.range == ne_zero;
+}
+
+static inline bool
+is_a_number_not_zero(struct hash_table *ht, const nir_alu_instr *instr,
+                     unsigned src, UNUSED unsigned num_components,
+                     UNUSED const uint8_t *swizzle)
+{
+   const struct ssa_result_range v = nir_analyze_range(ht, instr, src);
+   return v.is_a_number &&
+          (v.range == lt_zero || v.range == gt_zero || v.range == ne_zero);
+}
+
+static inline bool
+is_a_number(struct hash_table *ht, const nir_alu_instr *instr, unsigned src,
+            UNUSED unsigned num_components, UNUSED const uint8_t *swizzle)
+{
+   const struct ssa_result_range v = nir_analyze_range(ht, instr, src);
+   return v.is_a_number;
 }
 
 #endif /* _NIR_SEARCH_ */

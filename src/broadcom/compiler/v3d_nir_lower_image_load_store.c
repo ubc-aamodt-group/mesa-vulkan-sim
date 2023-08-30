@@ -43,6 +43,13 @@
 bool
 v3d_gl_format_is_return_32(enum pipe_format format)
 {
+        /* We can get a NONE format in Vulkan because we support the
+         * shaderStorageImageReadWithoutFormat feature. We consider these to
+         * always use 32-bit precision.
+         */
+        if (format == PIPE_FORMAT_NONE)
+                return true;
+
         const struct util_format_description *desc =
                 util_format_description(format);
         const struct util_format_channel_description *chan = &desc->channel[0];
@@ -84,10 +91,11 @@ pack_bits(nir_builder *b, nir_ssa_def *color, const unsigned *bits,
         return nir_vec(b, results, DIV_ROUND_UP(offset, 32));
 }
 
-static void
+static bool
 v3d_nir_lower_image_store(nir_builder *b, nir_intrinsic_instr *instr)
 {
         enum pipe_format format = nir_intrinsic_format(instr);
+        assert(format != PIPE_FORMAT_NONE);
         const struct util_format_description *desc =
                 util_format_description(format);
         const struct util_format_channel_description *r_chan = &desc->channel[0];
@@ -95,9 +103,9 @@ v3d_nir_lower_image_store(nir_builder *b, nir_intrinsic_instr *instr)
 
         b->cursor = nir_before_instr(&instr->instr);
 
-        nir_ssa_def *color = nir_channels(b,
-                                          nir_ssa_for_src(b, instr->src[3], 4),
-                                          (1 << num_components) - 1);
+        nir_ssa_def *color = nir_trim_vector(b,
+                                             nir_ssa_for_src(b, instr->src[3], 4),
+                                             num_components);
         nir_ssa_def *formatted = NULL;
 
         if (format == PIPE_FORMAT_R11G11B10_FLOAT) {
@@ -132,11 +140,13 @@ v3d_nir_lower_image_store(nir_builder *b, nir_intrinsic_instr *instr)
                 bool pack_mask = false;
                 if (r_chan->pure_integer &&
                     r_chan->type == UTIL_FORMAT_TYPE_SIGNED) {
-                        formatted = nir_format_clamp_sint(b, color, bits);
+                        /* We don't need to do any conversion or clamping in this case */
+                        formatted = color;
                         pack_mask = true;
                 } else if (r_chan->pure_integer &&
                            r_chan->type == UTIL_FORMAT_TYPE_UNSIGNED) {
-                        formatted = nir_format_clamp_uint(b, color, bits);
+                        /* We don't need to do any conversion or clamping in this case */
+                        formatted = color;
                 } else if (r_chan->normalized &&
                            r_chan->type == UTIL_FORMAT_TYPE_SIGNED) {
                         formatted = nir_format_float_to_snorm(b, color, bits);
@@ -157,16 +167,18 @@ v3d_nir_lower_image_store(nir_builder *b, nir_intrinsic_instr *instr)
         nir_instr_rewrite_src(&instr->instr, &instr->src[3],
                               nir_src_for_ssa(formatted));
         instr->num_components = formatted->num_components;
+
+        return true;
 }
 
-static void
+static bool
 v3d_nir_lower_image_load(nir_builder *b, nir_intrinsic_instr *instr)
 {
         static const unsigned bits16[] = {16, 16, 16, 16};
         enum pipe_format format = nir_intrinsic_format(instr);
 
         if (v3d_gl_format_is_return_32(format))
-                return;
+                return false;
 
         b->cursor = nir_after_instr(&instr->instr);
 
@@ -177,52 +189,48 @@ v3d_nir_lower_image_load(nir_builder *b, nir_intrinsic_instr *instr)
         } else if (util_format_is_pure_sint(format)) {
                 result = nir_format_unpack_sint(b, result, bits16, 4);
         } else {
-            nir_ssa_def *rg = nir_channel(b, result, 0);
-            nir_ssa_def *ba = nir_channel(b, result, 1);
-            result = nir_vec4(b,
-                              nir_unpack_half_2x16_split_x(b, rg),
-                              nir_unpack_half_2x16_split_y(b, rg),
-                              nir_unpack_half_2x16_split_x(b, ba),
-                              nir_unpack_half_2x16_split_y(b, ba));
+                nir_ssa_def *rg = nir_channel(b, result, 0);
+                nir_ssa_def *ba = nir_channel(b, result, 1);
+                result = nir_vec4(b,
+                                  nir_unpack_half_2x16_split_x(b, rg),
+                                  nir_unpack_half_2x16_split_y(b, rg),
+                                  nir_unpack_half_2x16_split_x(b, ba),
+                                  nir_unpack_half_2x16_split_y(b, ba));
         }
 
-        nir_ssa_def_rewrite_uses_after(&instr->dest.ssa, nir_src_for_ssa(result),
+        nir_ssa_def_rewrite_uses_after(&instr->dest.ssa, result,
                                        result->parent_instr);
+
+        return true;
 }
 
-void
+static bool
+v3d_nir_lower_image_load_store_cb(nir_builder *b,
+                                  nir_instr *instr,
+                                  void *_state)
+{
+        if (instr->type != nir_instr_type_intrinsic)
+                return false;
+
+        nir_intrinsic_instr *intr =
+                nir_instr_as_intrinsic(instr);
+
+        switch (intr->intrinsic) {
+        case nir_intrinsic_image_load:
+                return v3d_nir_lower_image_load(b, intr);
+        case nir_intrinsic_image_store:
+                return v3d_nir_lower_image_store(b, intr);
+        default:
+                return false;
+        }
+
+        return false;
+}
+
+bool
 v3d_nir_lower_image_load_store(nir_shader *s)
 {
-        nir_foreach_function(function, s) {
-                if (!function->impl)
-                        continue;
-
-                nir_builder b;
-                nir_builder_init(&b, function->impl);
-
-                nir_foreach_block(block, function->impl) {
-                        nir_foreach_instr_safe(instr, block) {
-                                if (instr->type != nir_instr_type_intrinsic)
-                                        continue;
-
-                                nir_intrinsic_instr *intr =
-                                        nir_instr_as_intrinsic(instr);
-
-                                switch (intr->intrinsic) {
-                                case nir_intrinsic_image_load:
-                                        v3d_nir_lower_image_load(&b, intr);
-                                        break;
-                                case nir_intrinsic_image_store:
-                                        v3d_nir_lower_image_store(&b, intr);
-                                        break;
-                                default:
-                                        break;
-                                }
-                        }
-                }
-
-                nir_metadata_preserve(function->impl,
-                                      nir_metadata_block_index |
-                                      nir_metadata_dominance);
-        }
+        return nir_shader_instructions_pass(s, v3d_nir_lower_image_load_store_cb,
+                                            nir_metadata_block_index |
+                                            nir_metadata_dominance, NULL);
 }

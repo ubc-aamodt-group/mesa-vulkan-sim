@@ -34,7 +34,7 @@
 
 #include "tgsi/tgsi_parse.h"
 
-#include "pipe/p_config.h"
+#include "util/detect.h"
 
 #include "r300_cb.h"
 #include "r300_context.h"
@@ -46,6 +46,8 @@
 #include "r300_fs.h"
 #include "r300_texture.h"
 #include "r300_vs.h"
+#include "compiler/r300_nir.h"
+#include "nir/nir_to_tgsi.h"
 
 /* r300_state: Functions used to initialize state context by translating
  * Gallium state objects into semi-native r300 state objects. */
@@ -888,7 +890,7 @@ void r300_mark_fb_state_dirty(struct r300_context *r300,
 
     if (r300->cmask_in_use) {
         r300->fb_state.size += 6;
-        if (r300->screen->caps.is_r500 && r300->screen->info.drm_minor >= 29) {
+        if (r300->screen->caps.is_r500) {
             r300->fb_state.size += 3;
         }
     }
@@ -917,7 +919,7 @@ r300_set_framebuffer_state(struct pipe_context* pipe,
 
     if (state->width > max_width || state->height > max_height) {
         fprintf(stderr, "r300: Implementation error: Render targets are too "
-        "big in %s, refusing to bind framebuffer state!\n", __FUNCTION__);
+        "big in %s, refusing to bind framebuffer state!\n", __func__);
         return;
     }
 
@@ -1034,15 +1036,43 @@ r300_set_framebuffer_state(struct pipe_context* pipe,
 static void* r300_create_fs_state(struct pipe_context* pipe,
                                   const struct pipe_shader_state* shader)
 {
+    struct r300_context* r300 = r300_context(pipe);
     struct r300_fragment_shader* fs = NULL;
 
     fs = (struct r300_fragment_shader*)CALLOC_STRUCT(r300_fragment_shader);
 
     /* Copy state directly into shader. */
     fs->state = *shader;
-    fs->state.tokens = tgsi_dup_tokens(shader->tokens);
 
-    return (void*)fs;
+    if (fs->state.type == PIPE_SHADER_IR_NIR) {
+       if (r300->screen->caps.is_r500)
+           NIR_PASS_V(shader->ir.nir, r300_transform_fs_trig_input);
+       fs->state.tokens = nir_to_tgsi(shader->ir.nir, pipe->screen);
+    } else {
+       assert(fs->state.type == PIPE_SHADER_IR_TGSI);
+       /* we need to keep a local copy of the tokens */
+       fs->state.tokens = tgsi_dup_tokens(fs->state.tokens);
+    }
+
+    /* Precompile the fragment shader at creation time to avoid jank at runtime.
+     * In most cases we won't have anything in the key at draw time.
+     */
+    struct r300_fragment_program_external_state precompile_state;
+    memset(&precompile_state, 0, sizeof(precompile_state));
+
+    struct tgsi_shader_info info;
+    tgsi_scan_shader(fs->state.tokens, &info);
+    for (int i = 0; i < PIPE_MAX_SHADER_SAMPLER_VIEWS; i++) {
+        if (info.sampler_targets[i] == TGSI_TEXTURE_SHADOW1D ||
+            info.sampler_targets[i] == TGSI_TEXTURE_SHADOW2D ||
+            info.sampler_targets[i] == TGSI_TEXTURE_SHADOWRECT) {
+            precompile_state.unit[i].compare_mode_enabled = true;
+            precompile_state.unit[i].texture_compare_func = PIPE_FUNC_LESS;
+        }
+    }
+    r300_pick_fragment_shader(r300, fs, &precompile_state);
+
+    return (void *)fs;
 }
 
 void r300_mark_fs_code_dirty(struct r300_context *r300)
@@ -1143,6 +1173,7 @@ static void* r300_create_rs_state(struct pipe_context* pipe,
 
     rs->rs.sprite_coord_enable = state->point_quad_rasterization *
                                  state->sprite_coord_enable;
+    r300_context(pipe)->is_point = false;
 
     /* Override some states for Draw. */
     rs->rs_draw.sprite_coord_enable = 0; /* We can do this in HW. */
@@ -1173,7 +1204,7 @@ static void* r300_create_rs_state(struct pipe_context* pipe,
          * Clamp to [0, max FB size] */
         float min_psiz = util_get_min_point_size(state);
         float max_psiz = pipe->screen->get_paramf(pipe->screen,
-                                        PIPE_CAPF_MAX_POINT_WIDTH);
+                                        PIPE_CAPF_MAX_POINT_SIZE);
         point_minmax =
             (pack_float_16_6x(min_psiz) << R300_GA_POINT_MINMAX_MIN_SHIFT) |
             (pack_float_16_6x(max_psiz) << R300_GA_POINT_MINMAX_MAX_SHIFT);
@@ -1188,7 +1219,7 @@ static void* r300_create_rs_state(struct pipe_context* pipe,
 
     /* Line control. */
     line_control = pack_float_16_6x(state->line_width) |
-        R300_GA_LINE_CNTL_END_TYPE_COMP;
+        (state->line_smooth ? R300_GA_LINE_CNTL_END_TYPE_COMP : R300_GA_LINE_CNTL_END_TYPE_SQR);
 
     /* Enable polygon mode */
     polygon_mode = 0;
@@ -1250,17 +1281,15 @@ static void* r300_create_rs_state(struct pipe_context* pipe,
     clip_rule = state->scissor ? 0xAAAA : 0xFFFF;
 
     /* Point sprites coord mode */
-    if (rs->rs.sprite_coord_enable) {
-        switch (state->sprite_coord_mode) {
-            case PIPE_SPRITE_COORD_UPPER_LEFT:
-                point_texcoord_top = 0.0f;
-                point_texcoord_bottom = 1.0f;
-                break;
-            case PIPE_SPRITE_COORD_LOWER_LEFT:
-                point_texcoord_top = 1.0f;
-                point_texcoord_bottom = 0.0f;
-                break;
-        }
+    switch (state->sprite_coord_mode) {
+        case PIPE_SPRITE_COORD_UPPER_LEFT:
+            point_texcoord_top = 0.0f;
+            point_texcoord_bottom = 1.0f;
+            break;
+        case PIPE_SPRITE_COORD_LOWER_LEFT:
+            point_texcoord_top = 1.0f;
+            point_texcoord_bottom = 0.0f;
+            break;
     }
 
     if (r300_screen(pipe->screen)->caps.has_tcl) {
@@ -1518,6 +1547,8 @@ static uint32_t r300_assign_texture_cache_region(unsigned index, unsigned num)
 static void r300_set_sampler_views(struct pipe_context* pipe,
                                    enum pipe_shader_type shader,
                                    unsigned start, unsigned count,
+                                   unsigned unbind_num_trailing_slots,
+                                   bool take_ownership,
                                    struct pipe_sampler_view** views)
 {
     struct r300_context* r300 = r300_context(pipe);
@@ -1528,13 +1559,16 @@ static void r300_set_sampler_views(struct pipe_context* pipe,
     unsigned tex_units = r300->screen->caps.num_tex_units;
     boolean dirty_tex = FALSE;
 
-    if (shader != PIPE_SHADER_FRAGMENT)
-       return;
-
     assert(start == 0);  /* non-zero not handled yet */
 
-    if (count > tex_units) {
-        return;
+    if (shader != PIPE_SHADER_FRAGMENT || count > tex_units) {
+       if (take_ownership) {
+          for (unsigned i = 0; i < count; i++) {
+             struct pipe_sampler_view *view = views[i];
+             pipe_sampler_view_reference(&view, NULL);
+          }
+       }
+       return;
     }
 
     /* Calculate the real number of views. */
@@ -1544,9 +1578,15 @@ static void r300_set_sampler_views(struct pipe_context* pipe,
     }
 
     for (i = 0; i < count; i++) {
-        pipe_sampler_view_reference(
-                (struct pipe_sampler_view**)&state->sampler_views[i],
-                views[i]);
+        if (take_ownership) {
+            pipe_sampler_view_reference(
+                    (struct pipe_sampler_view**)&state->sampler_views[i], NULL);
+            state->sampler_views[i] = (struct r300_sampler_view*)views[i];
+        } else {
+            pipe_sampler_view_reference(
+                    (struct pipe_sampler_view**)&state->sampler_views[i],
+                    views[i]);
+        }
 
         if (!views[i]) {
             continue;
@@ -1732,19 +1772,22 @@ static void r300_set_viewport_states(struct pipe_context* pipe,
 
 static void r300_set_vertex_buffers_hwtcl(struct pipe_context* pipe,
                                     unsigned start_slot, unsigned count,
+                                    unsigned unbind_num_trailing_slots,
+                                    bool take_ownership,
                                     const struct pipe_vertex_buffer* buffers)
 {
     struct r300_context* r300 = r300_context(pipe);
 
     util_set_vertex_buffers_count(r300->vertex_buffer,
                                   &r300->nr_vertex_buffers,
-                                  buffers, start_slot, count);
+                                  buffers, start_slot, count,
+                                  unbind_num_trailing_slots, take_ownership);
 
     /* There must be at least one vertex buffer set, otherwise it locks up. */
     if (!r300->nr_vertex_buffers) {
         util_set_vertex_buffers_count(r300->vertex_buffer,
                                       &r300->nr_vertex_buffers,
-                                      &r300->dummy_vb, 0, 1);
+                                      &r300->dummy_vb, 0, 1, 0, false);
     }
 
     r300->vertex_arrays_dirty = TRUE;
@@ -1752,6 +1795,8 @@ static void r300_set_vertex_buffers_hwtcl(struct pipe_context* pipe,
 
 static void r300_set_vertex_buffers_swtcl(struct pipe_context* pipe,
                                     unsigned start_slot, unsigned count,
+                                    unsigned unbind_num_trailing_slots,
+                                    bool take_ownership,
                                     const struct pipe_vertex_buffer* buffers)
 {
     struct r300_context* r300 = r300_context(pipe);
@@ -1759,8 +1804,10 @@ static void r300_set_vertex_buffers_swtcl(struct pipe_context* pipe,
 
     util_set_vertex_buffers_count(r300->vertex_buffer,
                                   &r300->nr_vertex_buffers,
-                                  buffers, start_slot, count);
-    draw_set_vertex_buffers(r300->draw, start_slot, count, buffers);
+                                  buffers, start_slot, count,
+                                  unbind_num_trailing_slots, take_ownership);
+    draw_set_vertex_buffers(r300->draw, start_slot, count,
+                            unbind_num_trailing_slots, buffers);
 
     if (!buffers)
         return;
@@ -1803,7 +1850,7 @@ static void r300_vertex_psc(struct r300_vertex_element_state *velems)
 
         if (i & 1) {
             vstream->vap_prog_stream_cntl[i >> 1] |= type << 16;
-            vstream->vap_prog_stream_cntl_ext[i >> 1] |= swizzle << 16;
+            vstream->vap_prog_stream_cntl_ext[i >> 1] |= (uint32_t)swizzle << 16;
         } else {
             vstream->vap_prog_stream_cntl[i >> 1] |= type;
             vstream->vap_prog_stream_cntl_ext[i >> 1] |= swizzle;
@@ -1896,10 +1943,48 @@ static void* r300_create_vs_state(struct pipe_context* pipe,
 
     /* Copy state directly into shader. */
     vs->state = *shader;
-    vs->state.tokens = tgsi_dup_tokens(shader->tokens);
 
+    if (vs->state.type == PIPE_SHADER_IR_NIR) {
+       static const struct nir_to_tgsi_options swtcl_options = {0};
+       static const struct nir_to_tgsi_options hwtcl_r300_options = {
+           .lower_cmp = true,
+           .lower_fabs = true,
+           .ubo_vec4_max = 0x00ff,
+       };
+       static const struct nir_to_tgsi_options hwtcl_r500_options = {
+           .ubo_vec4_max = 0x00ff,
+       };
+       const struct nir_to_tgsi_options *ntt_options;
+       if (r300->screen->caps.has_tcl) {
+           if (r300->screen->caps.is_r500) {
+               ntt_options = &hwtcl_r500_options;
+
+               /* Only nine should set both NTT shader name and
+                * use_legacy_math_rules and D3D9 already mandates
+                * the proper range for the trigonometric inputs.
+                */
+               struct shader_info *info = &(((struct nir_shader *)(shader->ir.nir))->info);
+               if (!info->use_legacy_math_rules ||
+                   !(info->name && !strcmp("TTN", info->name))) {
+                   NIR_PASS_V(shader->ir.nir, r300_transform_vs_trig_input);
+               }
+           }
+           else
+               ntt_options = &hwtcl_r300_options;
+       } else {
+           ntt_options = &swtcl_options;
+       }
+       vs->state.tokens = nir_to_tgsi_options(shader->ir.nir, pipe->screen,
+                                              ntt_options);
+    } else {
+       assert(vs->state.type == PIPE_SHADER_IR_TGSI);
+       /* we need to keep a local copy of the tokens */
+       vs->state.tokens = tgsi_dup_tokens(vs->state.tokens);
+    }
+
+    if (!vs->first)
+        vs->first = vs->shader = CALLOC_STRUCT(r300_vertex_shader_code);
     if (r300->screen->caps.has_tcl) {
-        r300_init_vs_outputs(r300, vs);
         r300_translate_vertex_shader(r300, vs);
     } else {
         r300_draw_init_vertex_shader(r300, vs);
@@ -1928,17 +2013,17 @@ static void r300_bind_vs_state(struct pipe_context* pipe, void* shader)
     if (r300->screen->caps.has_tcl) {
         unsigned fc_op_dwords = r300->screen->caps.is_r500 ? 3 : 2;
         r300_mark_atom_dirty(r300, &r300->vs_state);
-        r300->vs_state.size = vs->code.length + 9 +
+        r300->vs_state.size = vs->shader->code.length + 9 +
 			(R300_VS_MAX_FC_OPS * fc_op_dwords + 4);
 
         r300_mark_atom_dirty(r300, &r300->vs_constants);
         r300->vs_constants.size =
                 2 +
-                (vs->externals_count ? vs->externals_count * 4 + 3 : 0) +
-                (vs->immediates_count ? vs->immediates_count * 4 + 3 : 0);
+                (vs->shader->externals_count ? vs->shader->externals_count * 4 + 3 : 0) +
+                (vs->shader->immediates_count ? vs->shader->immediates_count * 4 + 3 : 0);
 
         ((struct r300_constant_buffer*)r300->vs_constants.state)->remap_table =
-                vs->code.constants_remap_table;
+                vs->shader->code.constants_remap_table;
 
         r300_mark_atom_dirty(r300, &r300->pvs_flush);
     } else {
@@ -1953,8 +2038,13 @@ static void r300_delete_vs_state(struct pipe_context* pipe, void* shader)
     struct r300_vertex_shader* vs = (struct r300_vertex_shader*)shader;
 
     if (r300->screen->caps.has_tcl) {
-        rc_constants_destroy(&vs->code.constants);
-        FREE(vs->code.constants_remap_table);
+        while (vs->shader) {
+            rc_constants_destroy(&vs->shader->code.constants);
+            FREE(vs->shader->code.constants_remap_table);
+            vs->shader = vs->shader->next;
+            FREE(vs->first);
+            vs->first = vs->shader;
+	}
     } else {
         draw_delete_vertex_shader(r300->draw,
                 (struct draw_vertex_shader*)vs->draw_vs);
@@ -1966,6 +2056,7 @@ static void r300_delete_vs_state(struct pipe_context* pipe, void* shader)
 
 static void r300_set_constant_buffer(struct pipe_context *pipe,
                                      enum pipe_shader_type shader, uint index,
+                                     bool take_ownership,
                                      const struct pipe_constant_buffer *cb)
 {
     struct r300_context* r300 = r300_context(pipe);
@@ -1993,7 +2084,7 @@ static void r300_set_constant_buffer(struct pipe_context *pipe,
         struct r300_resource *rbuf = r300_resource(cb->buffer);
 
         if (rbuf && rbuf->malloced_buffer)
-            mapped = (uint32_t*)rbuf->malloced_buffer;
+            mapped = (uint32_t*)(rbuf->malloced_buffer + cb->buffer_offset);
         else
             return;
     }
@@ -2005,8 +2096,7 @@ static void r300_set_constant_buffer(struct pipe_context *pipe,
 
     if (shader == PIPE_SHADER_VERTEX) {
         if (r300->screen->caps.has_tcl) {
-            struct r300_vertex_shader *vs =
-                    (struct r300_vertex_shader*)r300->vs_state.state;
+            struct r300_vertex_shader *vs = r300_vs(r300);
 
             if (!vs) {
                 cbuf->buffer_base = 0;
@@ -2014,9 +2104,9 @@ static void r300_set_constant_buffer(struct pipe_context *pipe,
             }
 
             cbuf->buffer_base = r300->vs_const_base;
-            r300->vs_const_base += vs->code.constants.Count;
+            r300->vs_const_base += vs->shader->code.constants.Count;
             if (r300->vs_const_base > R500_MAX_PVS_CONST_VECS) {
-                r300->vs_const_base = vs->code.constants.Count;
+                r300->vs_const_base = vs->shader->code.constants.Count;
                 cbuf->buffer_base = 0;
                 r300_mark_atom_dirty(r300, &r300->pvs_flush);
             }

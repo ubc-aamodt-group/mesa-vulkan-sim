@@ -24,6 +24,7 @@
 
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
+#include "util/u_draw.h"
 #include "util/u_inlines.h"
 #include "util/format/u_format.h"
 #include "translate/translate.h"
@@ -95,7 +96,7 @@ nvc0_vertex_state_create(struct pipe_context *pipe,
             }
             so->element[i].state = nvc0_vertex_format[fmt].vtx;
             so->need_conversion = true;
-            pipe_debug_message(&nouveau_context(pipe)->debug, FALLBACK,
+            util_debug_message(&nouveau_context(pipe)->debug, FALLBACK,
                                "Converting vertex element %d, no hw format %s",
                                i, util_format_name(ve->src_format));
         }
@@ -461,6 +462,7 @@ nvc0_vertex_arrays_validate(struct nvc0_context *nvc0)
    if (update_vertex) {
       const unsigned n = MAX2(vertex->num_elements, nvc0->state.num_vtxelts);
 
+      simple_mtx_assert_locked(&nvc0->screen->state_lock);
       nvc0->state.constant_vbos = const_vbos;
       nvc0->state.constant_elts = 0;
       nvc0->state.num_vtxelts = vertex->num_elements;
@@ -529,7 +531,7 @@ nvc0_vertex_arrays_validate(struct nvc0_context *nvc0)
 }
 
 #define NVC0_PRIM_GL_CASE(n) \
-   case PIPE_PRIM_##n: return NVC0_3D_VERTEX_BEGIN_GL_PRIMITIVE_##n
+   case MESA_PRIM_##n: return NVC0_3D_VERTEX_BEGIN_GL_PRIMITIVE_##n
 
 static inline unsigned
 nvc0_prim_gl(unsigned prim)
@@ -556,13 +558,9 @@ nvc0_prim_gl(unsigned prim)
 }
 
 static void
-nvc0_draw_vbo_kick_notify(struct nouveau_pushbuf *push)
+nvc0_draw_vbo_kick_notify(struct nouveau_context *context)
 {
-   struct nvc0_screen *screen = push->user_priv;
-
-   nouveau_fence_update(&screen->base, true);
-
-   NOUVEAU_DRV_STAT(&screen->base, pushbuf_count, 1);
+   _nouveau_fence_update(context->screen, true);
 }
 
 static void
@@ -787,7 +785,7 @@ nvc0_draw_stream_output(struct nvc0_context *nvc0,
    }
 
    while (num_instances--) {
-      nouveau_pushbuf_space(push, 16, 0, 1);
+      PUSH_SPACE_EX(push, 16, 0, 1);
       BEGIN_NVC0(push, NVC0_3D(VERTEX_BEGIN_GL), 1);
       PUSH_DATA (push, mode);
       BEGIN_NVC0(push, NVC0_3D(DRAW_TFB_BASE), 1);
@@ -804,12 +802,13 @@ nvc0_draw_stream_output(struct nvc0_context *nvc0,
 
 static void
 nvc0_draw_indirect(struct nvc0_context *nvc0, const struct pipe_draw_info *info,
+                   unsigned drawid_offset,
                    const struct pipe_draw_indirect_info *indirect)
 {
    struct nouveau_pushbuf *push = nvc0->base.pushbuf;
    struct nv04_resource *buf = nv04_resource(indirect->buffer);
    struct nv04_resource *buf_count = nv04_resource(indirect->indirect_draw_count);
-   unsigned size, macro, count = indirect->draw_count, drawid = info->drawid;
+   unsigned size, macro, count = indirect->draw_count, drawid = drawid_offset;
    uint32_t offset = buf->offset + indirect->offset;
    struct nvc0_screen *screen = nvc0->screen;
 
@@ -867,10 +866,10 @@ nvc0_draw_indirect(struct nvc0_context *nvc0, const struct pipe_draw_info *info,
          pushes = draws;
       }
 
-      nouveau_pushbuf_space(push, 16, 0, pushes + !!buf_count);
-      PUSH_REFN(push, buf->bo, NOUVEAU_BO_RD | buf->domain);
+      PUSH_SPACE_EX(push, 16, 0, pushes + !!buf_count);
+      PUSH_REF1(push, buf->bo, NOUVEAU_BO_RD | buf->domain);
       if (buf_count)
-         PUSH_REFN(push, buf_count->bo, NOUVEAU_BO_RD | buf_count->domain);
+         PUSH_REF1(push, buf_count->bo, NOUVEAU_BO_RD | buf_count->domain);
       PUSH_DATA(push,
                 NVC0_FIFO_PKHDR_1I(0, macro, 3 + !!buf_count + draws * size));
       PUSH_DATA(push, nvc0_prim_gl(info->mode));
@@ -923,18 +922,13 @@ nvc0_update_prim_restart(struct nvc0_context *nvc0, bool en, uint32_t index)
 
 void
 nvc0_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
+              unsigned drawid_offset,
               const struct pipe_draw_indirect_info *indirect,
-              const struct pipe_draw_start_count *draws,
+              const struct pipe_draw_start_count_bias *draws,
               unsigned num_draws)
 {
    if (num_draws > 1) {
-      struct pipe_draw_info tmp_info = *info;
-
-      for (unsigned i = 0; i < num_draws; i++) {
-         nvc0_draw_vbo(pipe, &tmp_info, indirect, &draws[i], 1);
-         if (tmp_info.increment_draw_id)
-            tmp_info.drawid++;
-      }
+      util_draw_multi(pipe, info, drawid_offset, indirect, draws, num_draws);
       return;
    }
 
@@ -949,7 +943,7 @@ nvc0_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
 
    /* NOTE: caller must ensure that (min_index + index_bias) is >= 0 */
    if (info->index_bounds_valid) {
-      nvc0->vb_elt_first = info->min_index + (info->index_size ? info->index_bias : 0);
+      nvc0->vb_elt_first = info->min_index + (info->index_size ? draws->index_bias : 0);
       nvc0->vb_elt_limit = info->max_index - info->min_index;
    } else {
       nvc0->vb_elt_first = 0;
@@ -979,9 +973,9 @@ nvc0_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
       }
    }
 
-   if (info->mode == PIPE_PRIM_PATCHES &&
-       nvc0->state.patch_vertices != info->vertices_per_patch) {
-      nvc0->state.patch_vertices = info->vertices_per_patch;
+   if (info->mode == MESA_PRIM_PATCHES &&
+       nvc0->state.patch_vertices != nvc0->patch_vertices) {
+      nvc0->state.patch_vertices = nvc0->patch_vertices;
       PUSH_SPACE(push, 1);
       IMMED_NVC0(push, NVC0_3D(PATCH_VERTICES), nvc0->state.patch_vertices);
    }
@@ -1027,6 +1021,8 @@ nvc0_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
    BCTX_REFN_bo(nvc0->bufctx_3d, 3D_TEXT, vram_domain | NOUVEAU_BO_RD,
                 screen->text);
 
+   simple_mtx_lock(&nvc0->screen->state_lock);
+
    nvc0_state_validate_3d(nvc0, ~0);
 
    if (nvc0->vertprog->vp.need_draw_parameters && (!indirect || indirect->count_from_stream_output)) {
@@ -1037,9 +1033,9 @@ nvc0_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
       PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(0));
       BEGIN_1IC0(push, NVC0_3D(CB_POS), 1 + 3);
       PUSH_DATA (push, NVC0_CB_AUX_DRAW_INFO);
-      PUSH_DATA (push, info->index_size ? info->index_bias : 0);
+      PUSH_DATA (push, info->index_size ? draws->index_bias : 0);
       PUSH_DATA (push, info->start_instance);
-      PUSH_DATA (push, info->drawid);
+      PUSH_DATA (push, drawid_offset);
    }
 
    if (nvc0->screen->base.class_3d < NVE4_3D_CLASS &&
@@ -1050,7 +1046,7 @@ nvc0_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
                  nvc0->seamless_cube_map ? NVC0_3D_TEX_MISC_SEAMLESS_CUBE_MAP : 0);
    }
 
-   push->kick_notify = nvc0_draw_vbo_kick_notify;
+   nvc0->base.kick_notify = nvc0_draw_vbo_kick_notify;
 
    for (s = 0; s < 5 && !nvc0->cb_dirty; ++s) {
       if (nvc0->constbuf_coherent[s])
@@ -1082,7 +1078,7 @@ nvc0_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
 
    if (nvc0->state.vbo_mode) {
       if (indirect && indirect->buffer)
-         nvc0_push_vbo_indirect(nvc0, info, indirect, &draws[0]);
+         nvc0_push_vbo_indirect(nvc0, info, drawid_offset, indirect, &draws[0]);
       else
          nvc0_push_vbo(nvc0, info, indirect, &draws[0]);
       goto cleanup;
@@ -1113,7 +1109,7 @@ nvc0_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
    }
 
    if (unlikely(indirect && indirect->buffer)) {
-      nvc0_draw_indirect(nvc0, info, indirect);
+      nvc0_draw_indirect(nvc0, info, drawid_offset, indirect);
    } else
    if (unlikely(indirect && indirect->count_from_stream_output)) {
       nvc0_draw_stream_output(nvc0, info, indirect);
@@ -1126,7 +1122,7 @@ nvc0_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
 
       nvc0_draw_elements(nvc0, shorten, info,
                          info->mode, draws[0].start, draws[0].count,
-                         info->instance_count, info->index_bias, info->index_size);
+                         info->instance_count, draws->index_bias, info->index_size);
    } else {
       nvc0_draw_arrays(nvc0,
                        info->mode, draws[0].start, draws[0].count,
@@ -1134,7 +1130,10 @@ nvc0_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
    }
 
 cleanup:
-   push->kick_notify = nvc0_default_kick_notify;
+   PUSH_KICK(push);
+   simple_mtx_unlock(&nvc0->screen->state_lock);
+
+   nvc0->base.kick_notify = nvc0_default_kick_notify;
 
    nvc0_release_user_vbufs(nvc0);
 

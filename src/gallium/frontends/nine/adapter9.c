@@ -38,8 +38,7 @@ static bool
 has_sm3(struct pipe_screen *hal)
 {
     return hal->get_param(hal, PIPE_CAP_FRAGMENT_SHADER_TEXTURE_LOD) &&
-           hal->get_param(hal, PIPE_CAP_FRAGMENT_SHADER_DERIVATIVES) &&
-           hal->get_param(hal, PIPE_CAP_VERTEX_SHADER_SATURATE);
+           hal->get_param(hal, PIPE_CAP_FRAGMENT_SHADER_DERIVATIVES);
 }
 
 HRESULT
@@ -75,9 +74,9 @@ NineAdapter9_ctor( struct NineAdapter9 *This,
     /* checks minimum requirements, most are vs3/ps3 strict requirements */
     if (!has_sm3(hal) ||
         hal->get_shader_param(hal, PIPE_SHADER_VERTEX,
-                              PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE) < 256 * sizeof(float[4]) ||
+                              PIPE_SHADER_CAP_MAX_CONST_BUFFER0_SIZE) < 256 * sizeof(float[4]) ||
         hal->get_shader_param(hal, PIPE_SHADER_FRAGMENT,
-                              PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE) < 244 * sizeof(float[4]) ||
+                              PIPE_SHADER_CAP_MAX_CONST_BUFFER0_SIZE) < 244 * sizeof(float[4]) ||
         hal->get_shader_param(hal, PIPE_SHADER_VERTEX,
                               PIPE_SHADER_CAP_MAX_TEMPS) < 32 ||
         hal->get_shader_param(hal, PIPE_SHADER_FRAGMENT,
@@ -94,7 +93,7 @@ NineAdapter9_ctor( struct NineAdapter9 *This,
     }
     /* for r500 */
     if (hal->get_shader_param(hal, PIPE_SHADER_VERTEX,
-                              PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE) < 276 * sizeof(float[4]) || /* we put bool and int constants with float constants */
+                              PIPE_SHADER_CAP_MAX_CONST_BUFFER0_SIZE) < 276 * sizeof(float[4]) || /* we put bool and int constants with float constants */
         hal->get_shader_param(hal, PIPE_SHADER_VERTEX,
                               PIPE_SHADER_CAP_MAX_TEMPS) < 40 || /* we use some more temp registers */
         hal->get_shader_param(hal, PIPE_SHADER_FRAGMENT,
@@ -328,12 +327,20 @@ NineAdapter9_CheckDeviceFormat( struct NineAdapter9 *This,
     }
 
     bind = 0;
-    if (Usage & D3DUSAGE_RENDERTARGET) bind |= PIPE_BIND_RENDER_TARGET;
+    if (Usage & D3DUSAGE_RENDERTARGET) {
+        if (depth_stencil_format(CheckFormat))
+            return D3DERR_NOTAVAILABLE;
+        bind |= PIPE_BIND_RENDER_TARGET;
+    }
     if (Usage & D3DUSAGE_DEPTHSTENCIL) {
         if (!depth_stencil_format(CheckFormat))
             return D3DERR_NOTAVAILABLE;
         bind |= d3d9_get_pipe_depth_format_bindings(CheckFormat);
     }
+
+    if ((Usage & D3DUSAGE_QUERY_VERTEXTEXTURE) &&
+        !screen->get_shader_param(screen, PIPE_SHADER_VERTEX, PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS))
+        return D3DERR_NOTAVAILABLE;
 
     /* API hack because setting RT[0] to NULL is forbidden */
     if (CheckFormat == D3DFMT_NULL && bind == PIPE_BIND_RENDER_TARGET &&
@@ -378,6 +385,7 @@ NineAdapter9_CheckDeviceFormat( struct NineAdapter9 *This,
          * on NV chips). */
         if (Usage == 0)
             bind |= PIPE_BIND_RENDER_TARGET; /* A current requirement of our impl, which we should get rid of. */
+        break;
     default:
         break;
     }
@@ -641,7 +649,8 @@ NineAdapter9_GetDeviceCaps( struct NineAdapter9 *This,
                                D3DPIPECAP(MIXED_COLORBUFFER_FORMATS, D3DPMISCCAPS_MRTINDEPENDENTBITDEPTHS) |
                                D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING |
                                D3DPMISCCAPS_FOGVERTEXCLAMPED;
-    if (!screen->get_param(screen, PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION))
+    if (!screen->get_param(screen, PIPE_CAP_VS_WINDOW_SPACE_POSITION) &&
+        !screen->get_param(screen, PIPE_CAP_DEPTH_CLIP_DISABLE))
         pCaps->PrimitiveMiscCaps |= D3DPMISCCAPS_CLIPTLVERTS;
 
     pCaps->RasterCaps =
@@ -823,7 +832,6 @@ NineAdapter9_GetDeviceCaps( struct NineAdapter9 *This,
                            D3DTEXOPCAPS_LERP;
 
     pCaps->MaxTextureBlendStages = 8; /* XXX wine */
-        (DWORD)screen->get_param(screen, PIPE_CAP_BLEND_EQUATION_SEPARATE);
     pCaps->MaxSimultaneousTextures = 8;
 
     pCaps->VertexProcessingCaps = D3DVTXPCAPS_TEXGEN |
@@ -840,7 +848,7 @@ NineAdapter9_GetDeviceCaps( struct NineAdapter9 *This,
     pCaps->MaxVertexBlendMatrices = 4; /* 1 vec4 BLENDWEIGHT/INDICES input */
     pCaps->MaxVertexBlendMatrixIndex = 8; /* D3DTS_WORLDMATRIX(0..8) */
 
-    pCaps->MaxPointSize = screen->get_paramf(screen, PIPE_CAPF_MAX_POINT_WIDTH);
+    pCaps->MaxPointSize = screen->get_paramf(screen, PIPE_CAPF_MAX_POINT_SIZE);
 
     pCaps->MaxPrimitiveCount = 0x555555; /* <- wine, really 0xFFFFFFFF; */
     pCaps->MaxVertexIndex = 0xFFFFFF; /* <- wine, really 0xFFFFFFFF */

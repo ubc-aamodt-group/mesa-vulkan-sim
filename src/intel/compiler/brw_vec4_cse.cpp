@@ -75,8 +75,8 @@ is_expression(const vec4_instruction *const inst)
    case VEC4_OPCODE_UNPACK_UNIFORM:
    case SHADER_OPCODE_FIND_LIVE_CHANNEL:
    case SHADER_OPCODE_BROADCAST:
-   case TCS_OPCODE_SET_INPUT_URB_OFFSETS:
-   case TCS_OPCODE_SET_OUTPUT_URB_OFFSETS:
+   case VEC4_TCS_OPCODE_SET_INPUT_URB_OFFSETS:
+   case VEC4_TCS_OPCODE_SET_OUTPUT_URB_OFFSETS:
       return true;
    case SHADER_OPCODE_RCP:
    case SHADER_OPCODE_RSQ:
@@ -261,9 +261,9 @@ vec4_visitor::opt_cse_local(bblock_t *block, const vec4_live_variables &live)
          /* Kill all AEB entries that write a different value to or read from
           * the flag register if we just wrote it.
           */
-         if (inst->writes_flag()) {
+         if (inst->writes_flag(devinfo)) {
             if (entry->generator->reads_flag() ||
-                (entry->generator->writes_flag() &&
+                (entry->generator->writes_flag(devinfo) &&
                  !instructions_match(inst, entry->generator))) {
                entry->remove();
                ralloc_free(entry);

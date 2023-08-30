@@ -46,13 +46,11 @@ extern "C" {
 #endif
 
 
-struct dd_function_table;
 struct draw_context;
 struct draw_stage;
 struct gen_mipmap_state;
 struct st_context;
 struct st_program;
-struct st_perf_monitor_group;
 struct u_upload_mgr;
 
 #define ST_L3_PINNING_DISABLED 0xffffffff
@@ -64,6 +62,10 @@ struct st_bitmap_cache
    /** Bounds of region used in window coords */
    GLint xmin, ymin, xmax, ymax;
 
+   /** GL states */
+   struct gl_program *fp;
+   bool scissor_enabled;
+   bool clamp_frag_color;
    GLfloat color[4];
 
    /** Bitmap's Z position */
@@ -121,12 +123,13 @@ struct st_zombie_shader_node
 
 struct st_context
 {
-   struct st_context_iface iface;
-
    struct gl_context *ctx;
    struct pipe_screen *screen;
    struct pipe_context *pipe;
    struct cso_context *cso_context;
+
+   struct pipe_frontend_screen *frontend_screen; /* e.g. dri_screen */
+   void *frontend_context; /* e.g. dri_context */
 
    struct draw_context *draw;  /**< For selection/feedback/rastpos only */
    struct draw_stage *feedback_stage;  /**< For GL_FEEDBACK rendermode */
@@ -137,21 +140,35 @@ struct st_context
 
    GLboolean clamp_frag_color_in_shader;
    GLboolean clamp_vert_color_in_shader;
-   boolean clamp_frag_depth_in_shader;
    boolean has_stencil_export; /**< can do shader stencil export? */
    boolean has_time_elapsed;
    boolean has_etc1;
    boolean has_etc2;
+   boolean transcode_etc;
+   boolean transcode_astc;
    boolean has_astc_2d_ldr;
    boolean has_astc_5x5_ldr;
+   boolean astc_void_extents_need_denorm_flush;
+   boolean has_s3tc;
+   boolean has_rgtc;
+   boolean has_latc;
+   boolean has_bptc;
    boolean prefer_blit_based_texture_transfer;
+   boolean allow_compute_based_texture_transfer;
+   boolean force_compute_based_texture_transfer;
+   boolean force_specialized_compute_transfer;
    boolean force_persample_in_shader;
    boolean has_shareable_shaders;
    boolean has_half_float_packing;
    boolean has_multi_draw_indirect;
+   boolean has_indirect_partial_stride;
+   boolean has_occlusion_query;
    boolean has_single_pipe_stat;
+   boolean has_pipeline_stat;
+   boolean has_indep_blend_enable;
    boolean has_indep_blend_func;
    boolean needs_rgb_dst_alpha_override;
+   boolean can_dither;
    boolean can_bind_const_buffer_as_vertex;
    boolean lower_flatshade;
    boolean lower_alpha_test;
@@ -160,6 +177,7 @@ struct st_context
    boolean lower_ucp;
    boolean prefer_real_buffer_in_constbuf0;
    boolean has_conditional_render;
+   boolean lower_rect_tex;
 
    /* There are consequences for drivers wanting to call st_finalize_nir
     * twice, once before shader caching and once after lowering for shader
@@ -181,15 +199,15 @@ struct st_context
 
    boolean needs_texcoord_semantic;
    boolean apply_texture_swizzle_to_border_color;
-   boolean texture_buffer_sampler;
+   boolean use_format_with_border_color;
+   boolean alpha_border_color_is_not_w;
+   boolean emulate_gl_clamp;
 
-   /* On old libGL's for linux we need to invalidate the drawables
-    * on glViewpport calls, this is set via a option.
-    */
-   boolean invalidate_on_gl_viewport;
    boolean draw_needs_minmax_index;
    boolean has_hw_atomics;
 
+   boolean validate_all_dirty_states;
+   boolean can_null_texture;
 
    /* driver supports scissored clears */
    boolean can_scissor_clear;
@@ -205,8 +223,6 @@ struct st_context
       struct pipe_sampler_state frag_samplers[PIPE_MAX_SAMPLERS];
       GLuint num_vert_samplers;
       GLuint num_frag_samplers;
-      struct pipe_sampler_view *vert_sampler_views[PIPE_MAX_SAMPLERS];
-      struct pipe_sampler_view *frag_sampler_views[PIPE_MAX_SAMPLERS];
       GLuint num_sampler_views[PIPE_SHADER_TYPES];
       unsigned num_images[PIPE_SHADER_TYPES];
       struct pipe_clip_state clip;
@@ -236,19 +252,8 @@ struct st_context
          PIPE_MAX_SAMPLE_LOCATION_GRID_SIZE * 32];
    } state;
 
-   uint64_t dirty; /**< dirty states */
-
    /** This masks out unused shader resources. Only valid in draw calls. */
    uint64_t active_states;
-
-   /* If true, further analysis of states is required to know if something
-    * has changed. Used mainly for shaders.
-    */
-   bool gfx_shaders_may_be_dirty;
-   bool compute_shader_may_be_dirty;
-
-   GLboolean vertdata_edgeflags;
-   GLboolean edgeflag_culls_prims;
 
    /**
     * The number of currently active queries (excluding timer queries).
@@ -258,12 +263,12 @@ struct st_context
 
    union {
       struct {
-         struct st_program *vp;    /**< Currently bound vertex program */
-         struct st_program *tcp; /**< Currently bound tess control program */
-         struct st_program *tep; /**< Currently bound tess eval program */
-         struct st_program *gp;  /**< Currently bound geometry program */
-         struct st_program *fp;  /**< Currently bound fragment program */
-         struct st_program *cp;   /**< Currently bound compute program */
+         struct gl_program *vp;    /**< Currently bound vertex program */
+         struct gl_program *tcp; /**< Currently bound tess control program */
+         struct gl_program *tep; /**< Currently bound tess eval program */
+         struct gl_program *gp;  /**< Currently bound geometry program */
+         struct gl_program *fp;  /**< Currently bound fragment program */
+         struct gl_program *cp;   /**< Currently bound compute program */
       };
       struct gl_program *current_program[MESA_SHADER_STAGES];
    };
@@ -279,7 +284,6 @@ struct st_context
    struct {
       struct pipe_rasterizer_state rasterizer;
       struct pipe_sampler_state sampler;
-      struct pipe_sampler_state atlas_sampler;
       enum pipe_format tex_format;
       struct st_bitmap_cache cache;
    } bitmap;
@@ -321,14 +325,29 @@ struct st_context
       struct pipe_blend_state upload_blend;
       void *vs;
       void *gs;
-      void *upload_fs[3][2];
-      void *download_fs[3][PIPE_MAX_TEXTURE_TYPES][2];
+      void *upload_fs[5][2];
+      /**
+       * For drivers supporting formatless storing
+       * (PIPE_CAP_IMAGE_STORE_FORMATTED) it is a pointer to the download FS;
+       * for those not supporting it, it is a pointer to an array of
+       * PIPE_FORMAT_COUNT elements, where each element is a pointer to the
+       * download FS using that PIPE_FORMAT as the storing format.
+       */
+      void *download_fs[5][PIPE_MAX_TEXTURE_TYPES][2];
+      struct hash_table *shaders;
       bool upload_enabled;
       bool download_enabled;
       bool rgba_only;
       bool layers;
       bool use_gs;
    } pbo;
+
+   struct {
+      struct gl_program **progs;
+      struct pipe_resource *bc1_endpoint_buf;
+      struct pipe_sampler_view *astc_luts[5];
+      struct hash_table *astc_partition_tables;
+   } texcompress_compute;
 
    /** for drawing with st_util_vertex */
    struct cso_velems_state util_velems;
@@ -342,6 +361,7 @@ struct st_context
 
    /* The number of vertex buffers from the last call of validate_arrays. */
    unsigned last_num_vbuffers;
+   bool uses_user_vertex_buffers;
 
    unsigned last_used_atomic_bindings[PIPE_SHADER_TYPES];
    unsigned last_num_ssbos[PIPE_SHADER_TYPES];
@@ -350,8 +370,6 @@ struct st_context
    int32_t read_stamp;
 
    struct st_config_options options;
-
-   struct st_perf_monitor_group *perfmon;
 
    enum pipe_reset_status reset_status;
 
@@ -378,6 +396,39 @@ struct st_context
       struct st_zombie_shader_node list;
       simple_mtx_t mutex;
    } zombie_shaders;
+
+   struct hash_table *hw_select_shaders;
+};
+
+/**
+ * Represent the attributes of a context.
+ */
+struct st_context_attribs
+{
+   /**
+    * The profile and minimal version to support.
+    *
+    * The valid profiles and versions are rendering API dependent.  The latest
+    * version satisfying the request should be returned.
+    */
+   gl_api profile;
+   int major, minor;
+
+   /** Mask of ST_CONTEXT_FLAG_x bits */
+   unsigned flags;
+
+   /** Mask of PIPE_CONTEXT_x bits */
+   unsigned context_flags;
+
+   /**
+    * The visual of the framebuffers the context will be bound to.
+    */
+   struct st_visual visual;
+
+   /**
+    * Configuration options.
+    */
+   struct st_config_options options;
 };
 
 
@@ -396,11 +447,23 @@ st_create_context(gl_api api, struct pipe_context *pipe,
                   const struct gl_config *visual,
                   struct st_context *share,
                   const struct st_config_options *options,
-                  bool no_error);
+                  bool no_error, bool has_egl_image_validate);
 
 extern void
 st_destroy_context(struct st_context *st);
 
+extern void
+st_context_flush(struct st_context *st, unsigned flags,
+                 struct pipe_fence_handle **fence,
+                 void (*before_flush_cb) (void*), void* args);
+
+extern bool
+st_context_teximage(struct st_context *st, GLenum target,
+                    int level, enum pipe_format pipe_format,
+                    struct pipe_resource *tex, bool mipmap);
+
+extern void
+st_context_invalidate_state(struct st_context *st, unsigned flags);
 
 extern void
 st_invalidate_buffers(struct st_context *st);
@@ -423,25 +486,41 @@ const struct nir_shader_compiler_options *
 st_get_nir_compiler_options(struct st_context *st, gl_shader_stage stage);
 
 
-/**
- * Wrapper for struct gl_framebuffer.
- * This is an opaque type to the outside world.
- */
-struct st_framebuffer
-{
-   struct gl_framebuffer Base;
+void st_invalidate_state(struct gl_context *ctx);
+void st_set_background_context(struct gl_context *ctx,
+                               struct util_queue_monitoring *queue_info);
 
-   struct st_framebuffer_iface *iface;
-   enum st_attachment_type statts[ST_ATTACHMENT_COUNT];
-   unsigned num_statts;
-   int32_t stamp;
-   int32_t iface_stamp;
-   uint32_t iface_ID;
+void
+st_api_query_versions(struct pipe_frontend_screen *fscreen,
+                      struct st_config_options *options,
+                      int *gl_core_version,
+                      int *gl_compat_version,
+                      int *gl_es1_version,
+                      int *gl_es2_version);
 
-   /* list of framebuffer objects */
-   struct list_head head;
-};
+struct st_context *
+st_api_create_context(struct pipe_frontend_screen *fscreen,
+                      const struct st_context_attribs *attribs,
+                      enum st_context_error *error,
+                      struct st_context *shared_ctx);
 
+bool
+st_api_make_current(struct st_context *st,
+                    struct pipe_frontend_drawable *stdrawi,
+                    struct pipe_frontend_drawable *streadi);
+
+struct st_context *
+st_api_get_current(void);
+
+void
+st_api_destroy_drawable(struct pipe_frontend_drawable *drawable);
+
+void
+st_screen_destroy(struct pipe_frontend_screen *fscreen);
+
+typedef void (*st_update_func_t)(struct st_context *st);
+
+extern st_update_func_t st_update_functions[ST_NUM_ATOMS];
 
 #ifdef __cplusplus
 }

@@ -153,6 +153,7 @@ struct schedule_state {
 	void (*CalcScore)(struct schedule_instruction *);
 	long max_tex_group;
 	unsigned PrevBlockHasTex:1;
+	unsigned PrevBlockHasKil:1;
 	unsigned TEXCount;
 	unsigned Opt:1;
 };
@@ -161,11 +162,11 @@ static struct reg_value ** get_reg_valuep(struct schedule_state * s,
 		rc_register_file file, unsigned int index, unsigned int chan)
 {
 	if (file != RC_FILE_TEMPORARY)
-		return 0;
+		return NULL;
 
 	if (index >= RC_REGISTER_MAX_INDEX) {
-		rc_error(s->C, "%s: index %i out of bounds\n", __FUNCTION__, index);
-		return 0;
+		rc_error(s->C, "%s: index %i out of bounds\n", __func__, index);
+		return NULL;
 	}
 
 	return &s->Temporary[index].Values[chan];
@@ -367,45 +368,41 @@ static void calc_score_readers(struct schedule_instruction * sinst)
  */
 static void commit_update_reads(struct schedule_state * s,
 					struct schedule_instruction * sinst){
-	unsigned int i;
-	for(i = 0; i < sinst->NumReadValues; ++i) {
-		struct reg_value * v = sinst->ReadValues[i];
-		assert(v->NumReaders > 0);
-		v->NumReaders--;
-		if (!v->NumReaders) {
-			if (v->Next) {
-				decrease_dependencies(s, v->Next->Writer);
+	do {
+		for(unsigned int i = 0; i < sinst->NumReadValues; ++i) {
+			struct reg_value * v = sinst->ReadValues[i];
+			assert(v->NumReaders > 0);
+			v->NumReaders--;
+			if (!v->NumReaders) {
+				if (v->Next) {
+					decrease_dependencies(s, v->Next->Writer);
+				}
 			}
 		}
-	}
-	if (sinst->PairedInst) {
-		commit_update_reads(s, sinst->PairedInst);
-	}
+	} while ((sinst = sinst->PairedInst));
 }
 
 static void commit_update_writes(struct schedule_state * s,
 					struct schedule_instruction * sinst){
-	unsigned int i;
-	for(i = 0; i < sinst->NumWriteValues; ++i) {
-		struct reg_value * v = sinst->WriteValues[i];
-		if (v->NumReaders) {
-			for(struct reg_value_reader * r = v->Readers; r; r = r->Next) {
-				decrease_dependencies(s, r->Reader);
+	do {
+		for(unsigned int i = 0; i < sinst->NumWriteValues; ++i) {
+			struct reg_value * v = sinst->WriteValues[i];
+			if (v->NumReaders) {
+				for(struct reg_value_reader * r = v->Readers; r; r = r->Next) {
+					decrease_dependencies(s, r->Reader);
+				}
+			} else {
+				/* This happens in instruction sequences of the type
+				 *  OP r.x, ...;
+				 *  OP r.x, r.x, ...;
+				 * See also the subtlety in how instructions that both
+				 * read and write the same register are scanned.
+				 */
+				if (v->Next)
+					decrease_dependencies(s, v->Next->Writer);
 			}
-		} else {
-			/* This happens in instruction sequences of the type
-			 *  OP r.x, ...;
-			 *  OP r.x, r.x, ...;
-			 * See also the subtlety in how instructions that both
-			 * read and write the same register are scanned.
-			 */
-			if (v->Next)
-				decrease_dependencies(s, v->Next->Writer);
 		}
-	}
-	if (sinst->PairedInst) {
-		commit_update_writes(s, sinst->PairedInst);
-	}
+	} while ((sinst = sinst->PairedInst));
 }
 
 static void notify_sem_wait(struct schedule_state *s)
@@ -477,7 +474,7 @@ static void emit_all_tex(struct schedule_state * s, struct rc_instruction * befo
 		readytex = readytex->NextReady;
 	}
 	readytex = s->ReadyTEX;
-	s->ReadyTEX = 0;
+	s->ReadyTEX = NULL;
 	while(readytex){
 		DBG("%i: commit TEX writes\n", readytex->Instruction->IP);
 		commit_update_writes(s, readytex);
@@ -497,7 +494,7 @@ static void emit_all_tex(struct schedule_state * s, struct rc_instruction * befo
  * dst_full is an rgb instruction, meaning that it has a vector instruction(rgb)
  * but no scalar instruction (alpha).
  * @return 0 if merging the presubtract sources fails.
- * @retrun 1 if merging the presubtract sources succeeds.
+ * @return 1 if merging the presubtract sources succeeds.
  */
 static int merge_presub_sources(
 	struct rc_pair_instruction * dst_full,
@@ -572,6 +569,15 @@ static int merge_presub_sources(
 		/* Shuffle the sources, so we can put the
 		 * presubtract source in the correct place. */
 		for(arg = 0; arg < info->NumSrcRegs; arg++) {
+			/* If the arg does read both from rgb and alpha, then we need to rewrite
+			 * both sources and the code currently doesn't handle this.
+			 * FIXME: This is definitely solvable, however shader-db shows it is
+			 * not worth the effort.
+			 */
+			if (rc_source_type_swz(dst_full->RGB.Arg[arg].Swizzle) & RC_SOURCE_ALPHA &&
+				rc_source_type_swz(dst_full->RGB.Arg[arg].Swizzle) & RC_SOURCE_RGB)
+				return 0;
+
 			/*If this arg does not read from an rgb source,
 			 * do nothing. */
 			if (!(rc_source_type_swz(dst_full->RGB.Arg[arg].Swizzle)
@@ -757,6 +763,7 @@ static void presub_nop(struct rc_instruction * emitted) {
 }
 
 static void rgb_to_alpha_remap (
+	struct schedule_state * s,
 	struct rc_instruction * inst,
 	struct rc_pair_instruction_arg * arg,
 	rc_register_file old_file,
@@ -776,7 +783,7 @@ static void rgb_to_alpha_remap (
 	/* This conversion is not possible, we must have made a mistake in
 	 * is_rgb_to_alpha_possible. */
 	if (new_src_index < 0) {
-		assert(0);
+        rc_error(s->C, "rgb_to_alpha_remap failed to allocate src.\n");
 		return;
 	}
 
@@ -802,7 +809,6 @@ static int can_convert_opcode_to_alpha(unsigned int opcode)
 	case RC_OPCODE_DP2:
 	case RC_OPCODE_DP3:
 	case RC_OPCODE_DP4:
-	case RC_OPCODE_DPH:
 		return 0;
 	default:
 		return 1;
@@ -838,7 +844,7 @@ static void is_rgb_to_alpha_possible(
 	}
 
 	/* Make sure the source only reads the register component that we
-	 * are going to be convering from.  It is OK if the instruction uses
+	 * are going to be converting from.  It is OK if the instruction uses
 	 * this component more than once.
 	 * XXX If the index we will be converting to is the same as the
 	 * current index, then it is OK to read from more than one component.
@@ -892,6 +898,16 @@ static int convert_rgb_to_alpha(
 	if (sched_inst->GlobalReaders.Abort)
 		return 0;
 
+	/* Even though we checked that we can convert to alpha previously, it is
+	 * possible that another rgb source of the reader instructions was already
+	 * converted to alpha and we thus have no longer free alpha sources.
+	 */
+	for(i = 0; i < sched_inst->GlobalReaders.ReaderCount; i++) {
+		struct rc_reader reader = sched_inst->GlobalReaders.Readers[i];
+		if (reader.Inst->U.P.Alpha.Src[2].Used)
+			return 0;
+	}
+
 	if (!pair_inst->RGB.WriteMask)
 		return 0;
 
@@ -921,8 +937,6 @@ static int convert_rgb_to_alpha(
 					rc_mask_to_swizzle(old_mask));
 			new_index = i;
 			*new_regvalp = *old_regvalp;
-			*old_regvalp = NULL;
-			new_regvalp = get_reg_valuep(s, RC_FILE_TEMPORARY, i, 3);
 			break;
 		}
 	}
@@ -970,7 +984,7 @@ static int convert_rgb_to_alpha(
 
 	for(i = 0; i < sched_inst->GlobalReaders.ReaderCount; i++) {
 		struct rc_reader reader = sched_inst->GlobalReaders.Readers[i];
-		rgb_to_alpha_remap(reader.Inst, reader.U.P.Arg,
+		rgb_to_alpha_remap(s, reader.Inst, reader.U.P.Arg,
 					RC_FILE_TEMPORARY, old_swz, new_index);
 	}
 	return 1;
@@ -1106,6 +1120,7 @@ static void emit_instruction(
 	for (tex_ptr = s->ReadyTEX; tex_ptr; tex_ptr = tex_ptr->NextReady) {
 		if (tex_ptr->Instruction->U.I.Opcode == RC_OPCODE_KIL) {
 			emit_all_tex(s, before);
+			s->PrevBlockHasKil = 1;
 			return;
 		}
 		tex_count++;
@@ -1116,7 +1131,7 @@ static void emit_instruction(
 
 	if (tex_count >= s->max_tex_group || max_score == -1
 		|| (s->TEXCount > 0 && tex_count == s->TEXCount)
-		|| (!s->C->is_r500 && tex_count > 0 && max_score == -1)) {
+		|| (tex_count > 0 && max_score < NO_OUTPUT_SCORE)) {
 		emit_all_tex(s, before);
 	} else {
 
@@ -1198,7 +1213,7 @@ static void scan_read(void * data, struct rc_instruction * inst,
 	(*v)->NumReaders++;
 
 	if (s->Current->NumReadValues >= 12) {
-		rc_error(s->C, "%s: NumReadValues overflow\n", __FUNCTION__);
+		rc_error(s->C, "%s: NumReadValues overflow\n", __func__);
 	} else {
 		s->Current->ReadValues[s->Current->NumReadValues++] = *v;
 	}
@@ -1232,7 +1247,7 @@ static void scan_write(void * data, struct rc_instruction * inst,
 	*pv = newv;
 
 	if (s->Current->NumWriteValues >= 4) {
-		rc_error(s->C, "%s: NumWriteValues overflow\n", __FUNCTION__);
+		rc_error(s->C, "%s: NumWriteValues overflow\n", __func__);
 	} else {
 		s->Current->WriteValues[s->Current->NumWriteValues++] = newv;
 	}
@@ -1339,6 +1354,16 @@ void rc_pair_schedule(struct radeon_compiler *cc, void *user)
 		struct rc_instruction * first;
 
 		if (is_controlflow(inst)) {
+			/* The TexSemWait flag is already properly set for ALU
+			 * instructions using the results of normal TEX lookup,
+			 * however it was found empirically that TEXKIL also needs
+			 * synchronization with the control flow. This might not be optimal,
+			 * however the docs don't offer any guidance in this matter.
+			 */
+			if (s.PrevBlockHasKil) {
+				inst->U.I.TexSemWait = 1;
+				s.PrevBlockHasKil = 0;
+			}
 			inst = inst->Next;
 			continue;
 		}

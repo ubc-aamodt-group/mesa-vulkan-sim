@@ -67,16 +67,16 @@ cmp_ubo_range_entry(const void *va, const void *vb)
    const struct ubo_range_entry *a = va;
    const struct ubo_range_entry *b = vb;
 
-   /* Rank based on scores */
+   /* Rank based on scores, descending order */
    int delta = score(b) - score(a);
 
-   /* Then use the UBO block index as a tie-breaker */
+   /* Then use the UBO block index as a tie-breaker, descending order */
    if (delta == 0)
       delta = b->range.block - a->range.block;
 
-   /* Finally use the UBO offset as a second tie-breaker */
+   /* Finally use the start offset as a second tie-breaker, ascending order */
    if (delta == 0)
-      delta = b->range.block - a->range.block;
+      delta = a->range.start - b->range.start;
 
    return delta;
 }
@@ -128,16 +128,8 @@ analyze_ubos_block(struct ubo_analysis_state *state, nir_block *block)
       case nir_intrinsic_load_uniform:
       case nir_intrinsic_image_deref_load:
       case nir_intrinsic_image_deref_store:
-      case nir_intrinsic_image_deref_atomic_add:
-      case nir_intrinsic_image_deref_atomic_imin:
-      case nir_intrinsic_image_deref_atomic_umin:
-      case nir_intrinsic_image_deref_atomic_imax:
-      case nir_intrinsic_image_deref_atomic_umax:
-      case nir_intrinsic_image_deref_atomic_and:
-      case nir_intrinsic_image_deref_atomic_or:
-      case nir_intrinsic_image_deref_atomic_xor:
-      case nir_intrinsic_image_deref_atomic_exchange:
-      case nir_intrinsic_image_deref_atomic_comp_swap:
+      case nir_intrinsic_image_deref_atomic:
+      case nir_intrinsic_image_deref_atomic_swap:
       case nir_intrinsic_image_deref_size:
          state->uses_regular_uniforms = true;
          continue;
@@ -149,9 +141,9 @@ analyze_ubos_block(struct ubo_analysis_state *state, nir_block *block)
          continue; /* Not a uniform or UBO intrinsic */
       }
 
-      if (nir_src_is_const(intrin->src[0]) &&
+      if (brw_nir_ubo_surface_index_is_pushable(intrin->src[0]) &&
           nir_src_is_const(intrin->src[1])) {
-         const int block = nir_src_as_uint(intrin->src[0]);
+         const int block = brw_nir_ubo_surface_index_get_push_block(intrin->src[0]);
          const unsigned byte_offset = nir_src_as_uint(intrin->src[1]);
          const int offset = byte_offset / 32;
 
@@ -200,14 +192,6 @@ brw_nir_analyze_ubo_ranges(const struct brw_compiler *compiler,
                            const struct brw_vs_prog_key *vs_key,
                            struct brw_ubo_range out_ranges[4])
 {
-   const struct gen_device_info *devinfo = compiler->devinfo;
-
-   if ((devinfo->gen <= 7 && !devinfo->is_haswell) ||
-       !compiler->scalar_stage[nir->info.stage]) {
-      memset(out_ranges, 0, 4 * sizeof(struct brw_ubo_range));
-      return;
-   }
-
    void *mem_ctx = ralloc_context(NULL);
 
    struct ubo_analysis_state state = {

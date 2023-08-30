@@ -24,7 +24,6 @@ Build EGL
               -D egl=enabled \
               -D gles1=enabled \
               -D gles2=enabled \
-              -D dri-drivers=... \
               -D gallium-drivers=...
 
    The main library and OpenGL is enabled by default. The first two
@@ -90,12 +89,6 @@ at runtime
    the main library uses the first platform listed in
    ``-D platforms=...`` as the native platform.
 
-   Extensions like ``EGL_MESA_drm_display`` define new functions to
-   create displays for non-native platforms. These extensions are
-   usually used by applications that support non-native platforms.
-   Setting this variable is probably required only for some of the demos
-   found in mesa/demo repository.
-
 ``EGL_LOG_LEVEL``
    This changes the log level of the main library and the drivers. The
    valid values are: ``debug``, ``info``, ``warning``, and ``fatal``.
@@ -159,7 +152,7 @@ EGL Drivers
 
 ``egl_dri2``
    This driver supports several platforms: ``android``, ``device``,
-   ``drm, ``surfaceless``, ``wayland`` and ``x11``. It functions as
+   ``drm``, ``surfaceless``, ``wayland`` and ``x11``. It functions as
    a DRI driver loader. For ``x11`` support, it talks to the X server
    directly using (XCB-)DRI3 protocol when available, and falls back to
    DRI2 if necessary (can be forced with ``LIBGL_DRI3_DISABLE``).

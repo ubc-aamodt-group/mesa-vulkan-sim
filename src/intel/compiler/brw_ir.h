@@ -90,21 +90,28 @@ struct backend_reg : private brw_reg
 struct bblock_t;
 
 struct backend_instruction : public exec_node {
-   bool is_3src(const struct gen_device_info *devinfo) const;
+   bool is_3src(const struct brw_compiler *compiler) const;
    bool is_tex() const;
    bool is_math() const;
+   bool is_control_flow_begin() const;
+   bool is_control_flow_end() const;
    bool is_control_flow() const;
    bool is_commutative() const;
    bool can_do_source_mods() const;
    bool can_do_saturate() const;
    bool can_do_cmod() const;
    bool reads_accumulator_implicitly() const;
-   bool writes_accumulator_implicitly(const struct gen_device_info *devinfo) const;
+   bool writes_accumulator_implicitly(const struct intel_device_info *devinfo) const;
 
-   void remove(bblock_t *block);
+   /**
+    * Instructions that use indirect addressing have additional register
+    * regioning restrictions.
+    */
+   bool uses_indirect_addressing() const;
+
+   void remove(bblock_t *block, bool defer_later_block_ip_updates = false);
    void insert_after(bblock_t *block, backend_instruction *inst);
    void insert_before(bblock_t *block, backend_instruction *inst);
-   void insert_before(bblock_t *block, exec_list *list);
 
    /**
     * True if the instruction has side effects other than writing to
@@ -152,6 +159,7 @@ struct backend_instruction {
    uint8_t target; /**< MRT target. */
    uint8_t sfid; /**< SFID for SEND instructions */
    uint32_t desc; /**< SEND[S] message descriptor immediate */
+   uint32_t ex_desc; /**< SEND[S] extended message descriptor immediate */
    unsigned size_written; /**< Data written to the destination register in bytes. */
 
    enum opcode opcode; /* BRW_OPCODE_* or FS_OPCODE_* */
@@ -167,6 +175,19 @@ struct backend_instruction {
    bool check_tdr:1; /**< Only valid for SEND; turns it into a SENDC */
    bool send_has_side_effects:1; /**< Only valid for SHADER_OPCODE_SEND */
    bool send_is_volatile:1; /**< Only valid for SHADER_OPCODE_SEND */
+   bool send_ex_desc_scratch:1; /**< Only valid for SHADER_OPCODE_SEND, use
+                                 *   the scratch surface offset to build
+                                 *   extended descriptor
+                                 */
+   bool send_ex_bso:1; /**< Only for SHADER_OPCODE_SEND, use extended bindless
+                        *   surface offset (26bits instead of 20bits)
+                        */
+   bool predicate_trivial:1; /**< The predication mask applied to this
+                              *   instruction is guaranteed to be uniform and
+                              *   a superset of the execution mask of the
+                              *   present block, no currently enabled channels
+                              *   will be disabled by the predicate.
+                              */
    bool eot:1;
 
    /* Chooses which flag subregister (f0.0 to f1.1) is used for conditional

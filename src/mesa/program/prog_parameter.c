@@ -28,7 +28,7 @@
  * \author Brian Paul
  */
 
-#include "main/glheader.h"
+#include "util/glheader.h"
 #include "main/macros.h"
 #include "main/errors.h"
 #include "util/u_memory.h"
@@ -180,7 +180,7 @@ _mesa_free_parameter_list(struct gl_program_parameter_list *paramList)
    }
    free(paramList->Parameters);
    align_free(paramList->ParameterValues);
-   free(paramList);
+   FREE(paramList);
 }
 
 
@@ -199,12 +199,15 @@ _mesa_reserve_parameter_storage(struct gl_program_parameter_list *paramList,
 {
    const GLuint oldNum = paramList->NumParameters;
    const unsigned oldValNum = paramList->NumParameterValues;
+   const unsigned needSizeValues = oldValNum + reserve_values * 4;
 
    if (paramList->DisallowRealloc &&
        (oldNum + reserve_params > paramList->Size ||
-        oldValNum + reserve_values > paramList->SizeValues)) {
-      _mesa_problem(NULL, "Parameter storage reallocation disallowed. This "
-              "is a Mesa bug. Increase the reservation size in the code.");
+        needSizeValues > paramList->SizeValues)) {
+      _mesa_problem(NULL, "Parameter storage reallocation disallowed.\n"
+                          "This is a Mesa bug.\n"
+                          "Increase the reservation size in the code (wanted bytes %u, have %u || wanted values %u have %u).",
+                          oldNum + reserve_params, paramList->Size, needSizeValues, paramList->SizeValues);
       abort();
    }
 
@@ -218,18 +221,22 @@ _mesa_reserve_parameter_storage(struct gl_program_parameter_list *paramList,
                  paramList->Size * sizeof(struct gl_program_parameter));
    }
 
-   if (oldValNum + reserve_values > paramList->SizeValues) {
-      paramList->SizeValues += 4 * reserve_values;
+   if (needSizeValues > paramList->SizeValues) {
+      unsigned oldSize = paramList->SizeValues;
+      paramList->SizeValues = needSizeValues + 16; /* alloc some extra */
 
       paramList->ParameterValues = (gl_constant_value *)
          align_realloc(paramList->ParameterValues,         /* old buf */
-                       oldNum * 4 * sizeof(gl_constant_value),/* old sz */
+                       oldValNum * sizeof(gl_constant_value),/* old sz */
                        /* Overallocate the size by 12 because matrix rows can
                         * be allocated partially but fetch_state always writes
                         * 4 components (16 bytes).
                         */
-                       paramList->SizeValues * 4 * sizeof(gl_constant_value) +
+                       paramList->SizeValues * sizeof(gl_constant_value) +
                        12, 16);
+      /* The values are written to the shader cache, so clear them. */
+      memset(paramList->ParameterValues + oldSize, 0,
+             (paramList->SizeValues - oldSize) * sizeof(gl_constant_value));
    }
 }
 
@@ -278,7 +285,8 @@ _mesa_add_parameter(struct gl_program_parameter_list *paramList,
    else if (_mesa_gl_datatype_is_64bit(datatype))
       oldValNum = align(oldValNum, 2); /* pad start to 64-bit */
 
-   _mesa_reserve_parameter_storage(paramList, 1, DIV_ROUND_UP(padded_size, 4));
+   unsigned elements = (oldValNum - paramList->NumParameterValues) + padded_size;
+   _mesa_reserve_parameter_storage(paramList, 1, DIV_ROUND_UP(elements, 4));
 
    if (!paramList->Parameters ||
        !paramList->ParameterValues) {
@@ -348,6 +356,9 @@ _mesa_add_parameter(struct gl_program_parameter_list *paramList,
       unreachable("invalid parameter type");
    }
 
+   assert(paramList->NumParameters <= paramList->Size);
+   assert(paramList->NumParameterValues <= paramList->SizeValues);
+
    return (GLint) oldNum;
 }
 
@@ -366,7 +377,7 @@ _mesa_add_parameter(struct gl_program_parameter_list *paramList,
  */
 GLint
 _mesa_add_typed_unnamed_constant(struct gl_program_parameter_list *paramList,
-                           const gl_constant_value values[4], GLuint size,
+                           const gl_constant_value *values, GLuint size,
                            GLenum datatype, GLuint *swizzleOut)
 {
    GLint pos;

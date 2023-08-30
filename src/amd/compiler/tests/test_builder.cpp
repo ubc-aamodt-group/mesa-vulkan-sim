@@ -27,8 +27,8 @@ using namespace aco;
 
 BEGIN_TEST(builder.v_mul_imm)
    for (unsigned i = GFX8; i <= GFX10; i++) {
-      //>> v1: %a, v1: %b, s1: %c, s1: %d, s2: %_:exec = p_startpgm
-      if (!setup_cs("v1 v1 s1 s1", (chip_class)i))
+      //>> v1: %a, v1: %b, s1: %c, s1: %d = p_startpgm
+      if (!setup_cs("v1 v1 s1 s1", (amd_gfx_level)i))
          continue;
 
       /* simple optimizations */

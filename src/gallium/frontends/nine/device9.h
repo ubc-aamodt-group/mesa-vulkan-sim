@@ -29,6 +29,7 @@
 #include "adapter9.h"
 
 #include "nine_helpers.h"
+#include "nine_memory_helper.h"
 #include "nine_state.h"
 
 struct gen_mipmap_state;
@@ -89,11 +90,11 @@ struct NineDevice9
 
     boolean is_recording;
     boolean in_scene;
+    unsigned end_scene_since_present;
 
     uint16_t vs_const_size;
     uint16_t ps_const_size;
     uint16_t max_vs_const_f;
-    uint16_t max_ps_const_f;
 
     struct pipe_resource *dummy_texture;
     struct pipe_sampler_view *dummy_sampler_view;
@@ -126,12 +127,16 @@ struct NineDevice9
     } cursor;
 
     struct {
-        boolean user_vbufs;
         boolean user_sw_vbufs;
         boolean window_space_position_support;
+        boolean disabling_depth_clipping_support;
         boolean vs_integer;
         boolean ps_integer;
         boolean offset_units_unscaled;
+        boolean alpha_test_emulation;
+        boolean always_output_pointsize;
+        boolean emulate_ucp;
+        boolean shader_emulate_features;
     } driver_caps;
 
     struct {
@@ -148,6 +153,8 @@ struct NineDevice9
 
     struct hud_context *hud; /* NULL if hud is disabled */
 
+    struct nine_allocator *allocator;
+
     /* dummy vbo (containing 0 0 0 0) to bind if vertex shader input
      * is not bound to anything by the vertex declaration */
     struct pipe_resource *dummy_vbo;
@@ -160,6 +167,12 @@ struct NineDevice9
     boolean swvp;
     /* pure device */
     boolean pure;
+
+    unsigned frame_count; /* It's ok if we overflow */
+
+    /* Ex */
+    int gpu_priority;
+    unsigned max_frame_latency;
 };
 static inline struct NineDevice9 *
 NineDevice9( void *data )

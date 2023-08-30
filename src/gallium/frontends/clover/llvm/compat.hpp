@@ -38,55 +38,95 @@
 
 #include <llvm/Config/llvm-config.h>
 
+#include <llvm/Analysis/TargetLibraryInfo.h>
+#include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Type.h>
 #include <llvm/Linker/Linker.h>
+#include <llvm/Support/CodeGen.h>
+#include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/IPO.h>
 #include <llvm/Transforms/Utils/Cloning.h>
-#include <llvm/Target/TargetMachine.h>
-
-#include <llvm/IR/LegacyPassManager.h>
-#include <llvm/Analysis/TargetLibraryInfo.h>
 
 #include <clang/Basic/TargetInfo.h>
 #include <clang/Frontend/CompilerInstance.h>
+#include <clang/Lex/PreprocessorOptions.h>
 
-#if LLVM_VERSION_MAJOR >= 10
-#include <llvm/Support/CodeGen.h>
+#if LLVM_VERSION_MAJOR >= 14
+#include <llvm/MC/TargetRegistry.h>
+#else
+#include <llvm/Support/TargetRegistry.h>
+#endif
+
+#if LLVM_VERSION_MAJOR >= 17
+#include <llvm/TargetParser/Triple.h>
+#else
+#include <llvm/ADT/Triple.h>
 #endif
 
 namespace clover {
    namespace llvm {
       namespace compat {
 
-#if LLVM_VERSION_MAJOR >= 10
          const auto CGFT_ObjectFile = ::llvm::CGFT_ObjectFile;
          const auto CGFT_AssemblyFile = ::llvm::CGFT_AssemblyFile;
          typedef ::llvm::CodeGenFileType CodeGenFileType;
-#else
-         const auto CGFT_ObjectFile = ::llvm::TargetMachine::CGFT_ObjectFile;
-         const auto CGFT_AssemblyFile =
-            ::llvm::TargetMachine::CGFT_AssemblyFile;
-         typedef ::llvm::TargetMachine::CodeGenFileType CodeGenFileType;
-#endif
 
-#if LLVM_VERSION_MAJOR >= 10
          const clang::InputKind ik_opencl = clang::Language::OpenCL;
-#else
-         const clang::InputKind ik_opencl = clang::InputKind::OpenCL;
-#endif
 
          template<typename T> inline bool
          create_compiler_invocation_from_args(clang::CompilerInvocation &cinv,
                                               T copts,
                                               clang::DiagnosticsEngine &diag)
          {
-#if LLVM_VERSION_MAJOR >= 10
             return clang::CompilerInvocation::CreateFromArgs(
                cinv, copts, diag);
+         }
+
+         static inline void
+         compiler_set_lang_defaults(std::unique_ptr<clang::CompilerInstance> &c,
+                                    clang::InputKind ik, const ::llvm::Triple& triple,
+                                    clang::LangStandard::Kind d)
+         {
+#if LLVM_VERSION_MAJOR >= 15
+            c->getLangOpts().setLangDefaults(c->getLangOpts(), ik.getLanguage(), triple,
 #else
-            return clang::CompilerInvocation::CreateFromArgs(
-               cinv, copts.data(), copts.data() + copts.size(), diag);
+            c->getInvocation().setLangDefaults(c->getLangOpts(), ik, triple,
 #endif
+#if LLVM_VERSION_MAJOR >= 12
+                                               c->getPreprocessorOpts().Includes,
+#else
+                                               c->getPreprocessorOpts(),
+#endif
+                                               d);
+         }
+
+         static inline unsigned
+         get_abi_type_alignment(::llvm::DataLayout dl, ::llvm::Type *type)
+         {
+#if LLVM_VERSION_MAJOR >= 16
+            return dl.getABITypeAlign(type).value();
+#else
+            return dl.getABITypeAlignment(type);
+#endif
+         }
+
+         static inline bool
+         is_scalable_vector(const ::llvm::Type *type)
+         {
+            return ::llvm::isa<::llvm::ScalableVectorType>(type);
+         }
+
+         static inline bool
+         is_fixed_vector(const ::llvm::Type *type)
+         {
+            return ::llvm::isa<::llvm::FixedVectorType>(type);
+         }
+
+         static inline unsigned
+         get_fixed_vector_elements(const ::llvm::Type *type)
+         {
+            return ::llvm::cast<::llvm::FixedVectorType>(type)->getNumElements();
          }
       }
    }

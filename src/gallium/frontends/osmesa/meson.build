@@ -20,7 +20,6 @@
 
 osmesa_st_c_args = []
 if with_platform_windows
-  osmesa_st_c_args += ['-DBUILD_GL32', '-DWIN32_LEAN_AND_MEAN']
   if not with_shared_glapi
     osmesa_st_c_args += ['-D_GLAPI_NO_EXPORTS']
   endif
@@ -33,4 +32,5 @@ libosmesa_st = static_library(
   include_directories : [
     inc_include, inc_src, inc_gallium, inc_gallium_aux, inc_mapi, inc_mesa,
   ],
+  dependencies : [idep_mesautil],
 )

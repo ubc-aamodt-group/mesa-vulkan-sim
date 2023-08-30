@@ -93,27 +93,6 @@ tgsi_get_opcode_name(enum tgsi_opcode opcode)
 }
 
 
-const char *
-tgsi_get_processor_name(enum pipe_shader_type processor)
-{
-   switch (processor) {
-   case PIPE_SHADER_VERTEX:
-      return "vertex shader";
-   case PIPE_SHADER_FRAGMENT:
-      return "fragment shader";
-   case PIPE_SHADER_GEOMETRY:
-      return "geometry shader";
-   case PIPE_SHADER_TESS_CTRL:
-      return "tessellation control shader";
-   case PIPE_SHADER_TESS_EVAL:
-      return "tessellation evaluation shader";
-   case PIPE_SHADER_COMPUTE:
-      return "compute shader";
-   default:
-      return "unknown shader type!";
-   }
-}
-
 /**
  * Infer the type (of the dst) of the opcode.
  *
@@ -201,7 +180,6 @@ tgsi_opcode_infer_type(enum tgsi_opcode opcode)
    case TGSI_OPCODE_DSQRT:
    case TGSI_OPCODE_DMAD:
    case TGSI_OPCODE_DLDEXP:
-   case TGSI_OPCODE_DFRACEXP:
    case TGSI_OPCODE_DFRAC:
    case TGSI_OPCODE_DRSQ:
    case TGSI_OPCODE_DTRUNC:
@@ -335,8 +313,5 @@ tgsi_opcode_infer_src_type(enum tgsi_opcode opcode, uint src_idx)
 enum tgsi_opcode_type
 tgsi_opcode_infer_dst_type(enum tgsi_opcode opcode, uint dst_idx)
 {
-   if (dst_idx == 1 && opcode == TGSI_OPCODE_DFRACEXP)
-      return TGSI_TYPE_SIGNED;
-
    return tgsi_opcode_infer_type(opcode);
 }

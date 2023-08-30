@@ -43,6 +43,8 @@
 #include "radeon_program_pair.h"
 #include "r300_fragprog_swizzle.h"
 
+#include "util/compiler.h"
+
 
 struct r300_emit_state {
 	struct r300_fragment_program_compiler * compiler;
@@ -59,7 +61,7 @@ struct r300_emit_state {
 
 #define error(fmt, args...) do {			\
 		rc_error(&c->Base, "%s::%s(): " fmt "\n",	\
-			__FILE__, __FUNCTION__, ##args);	\
+			__FILE__, __func__, ##args);	\
 	} while(0)
 
 static unsigned int get_msbs_alu(unsigned int bits)
@@ -112,9 +114,9 @@ static unsigned int translate_rgb_opcode(struct r300_fragment_program_compiler *
 	case RC_OPCODE_FRC: return R300_ALU_OUTC_FRC;
 	default:
 		error("translate_rgb_opcode: Unknown opcode %s", rc_get_opcode_info(opcode)->Name);
-		/* fall through */
+		FALLTHROUGH;
 	case RC_OPCODE_NOP:
-		/* fall through */
+		FALLTHROUGH;
 	case RC_OPCODE_MAD: return R300_ALU_OUTC_MAD;
 	case RC_OPCODE_MAX: return R300_ALU_OUTC_MAX;
 	case RC_OPCODE_MIN: return R300_ALU_OUTC_MIN;
@@ -134,9 +136,9 @@ static unsigned int translate_alpha_opcode(struct r300_fragment_program_compiler
 	case RC_OPCODE_LG2: return R300_ALU_OUTA_LG2;
 	default:
 		error("translate_rgb_opcode: Unknown opcode %s", rc_get_opcode_info(opcode)->Name);
-		/* fall through */
+		FALLTHROUGH;
 	case RC_OPCODE_NOP:
-		/* fall through */
+		FALLTHROUGH;
 	case RC_OPCODE_MAD: return R300_ALU_OUTA_MAD;
 	case RC_OPCODE_MAX: return R300_ALU_OUTA_MAX;
 	case RC_OPCODE_MIN: return R300_ALU_OUTA_MIN;
@@ -155,7 +157,11 @@ static int emit_alu(struct r300_emit_state * emit, struct rc_pair_instruction* i
 	PROG_CODE;
 
 	if (code->alu.length >= c->Base.max_alu_insts) {
-		error("Too many ALU instructions");
+		/* rc_recompute_ips does not give an exact count, because it counts extra stuff
+		 * like BEGINTEX, but here it is intended to be only approximative anyway,
+		 * just to give some idea how close to the limit we are. */
+		rc_error(&c->Base, "Too many ALU instructions used: %u, max: %u.\n",
+		         rc_recompute_ips(&c->Base), c->Base.max_alu_insts);
 		return 0;
 	}
 

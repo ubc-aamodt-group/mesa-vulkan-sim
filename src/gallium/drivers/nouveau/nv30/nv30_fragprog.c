@@ -25,10 +25,12 @@
 
 #include "draw/draw_context.h"
 #include "tgsi/tgsi_parse.h"
+#include "nir/nir_to_tgsi.h"
 
 #include "nv_object.xml.h"
 #include "nv30/nv30-40_3d.xml.h"
 #include "nv30/nv30_context.h"
+#include "nv30/nv30_winsys.h"
 #include "nv30/nvfx_shader.h"
 
 static void
@@ -140,7 +142,14 @@ nv30_fp_state_create(struct pipe_context *pipe,
    if (!fp)
       return NULL;
 
-   fp->pipe.tokens = tgsi_dup_tokens(cso->tokens);
+   if (cso->type == PIPE_SHADER_IR_NIR) {
+      fp->pipe.tokens = nir_to_tgsi(cso->ir.nir, pipe->screen);
+   } else {
+      assert(cso->type == PIPE_SHADER_IR_TGSI);
+      /* we need to keep a local copy of the tokens */
+      fp->pipe.tokens = tgsi_dup_tokens(cso->tokens);
+   }
+
    tgsi_scan_shader(fp->pipe.tokens, &fp->info);
    return fp;
 }

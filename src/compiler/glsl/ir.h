@@ -35,6 +35,7 @@
 #include "list.h"
 #include "ir_visitor.h"
 #include "ir_hierarchical_visitor.h"
+#include "util/glheader.h"
 
 #ifdef __cplusplus
 
@@ -147,12 +148,10 @@ public:
    #define AS_BASE(TYPE)                                \
    class ir_##TYPE *as_##TYPE()                         \
    {                                                    \
-      assume(this != NULL);                             \
       return is_##TYPE() ? (ir_##TYPE *) this : NULL;   \
    }                                                    \
    const class ir_##TYPE *as_##TYPE() const             \
    {                                                    \
-      assume(this != NULL);                             \
       return is_##TYPE() ? (ir_##TYPE *) this : NULL;   \
    }
 
@@ -164,12 +163,10 @@ public:
    #define AS_CHILD(TYPE) \
    class ir_##TYPE * as_##TYPE() \
    { \
-      assume(this != NULL);                                         \
       return ir_type == ir_type_##TYPE ? (ir_##TYPE *) this : NULL; \
    }                                                                      \
    const class ir_##TYPE * as_##TYPE() const                              \
    {                                                                      \
-      assume(this != NULL);                                               \
       return ir_type == ir_type_##TYPE ? (const ir_##TYPE *) this : NULL; \
    }
    AS_CHILD(variable)
@@ -233,8 +230,6 @@ public:
 
    virtual ir_constant *constant_expression_value(void *mem_ctx,
                                                   struct hash_table *variable_context = NULL);
-
-   ir_rvalue *as_rvalue_to_saturate();
 
    virtual bool is_lvalue(const struct _mesa_glsl_parse_state * = NULL) const
    {
@@ -400,7 +395,6 @@ depth_layout_string(ir_depth_layout layout);
  */
 struct ir_state_slot {
    gl_state_index16 tokens[STATE_LENGTH];
-   int swizzle;
 };
 
 
@@ -616,6 +610,13 @@ public:
              this->name != this->name_storage;
    }
 
+   inline bool is_fb_fetch_color_output() const
+   {
+      return this->data.fb_fetch_output &&
+             this->data.location != FRAG_RESULT_DEPTH &&
+             this->data.location != FRAG_RESULT_STENCIL;
+   }
+
    /**
     * Enable emitting extension warnings for this variable
     */
@@ -764,15 +765,6 @@ public:
       unsigned is_implicit_initializer:1;
 
       /**
-       * Is this variable a generic output or input that has not yet been matched
-       * up to a variable in another stage of the pipeline?
-       *
-       * This is used by the linker as scratch storage while assigning locations
-       * to generic inputs and outputs.
-       */
-      unsigned is_unmatched_generic_inout:1;
-
-      /**
        * Is this varying used by transform feedback?
        *
        * This is used by the linker to decide if it's safe to pack the varying.
@@ -891,6 +883,12 @@ public:
        * ARB_bindless_texture.
        */
       unsigned bound:1;
+
+      /**
+       * Non-zero if the variable shall not be implicitly converted during
+       * functions matching.
+       */
+      unsigned implicit_conversion_prohibited:1;
 
       /**
        * Emit a warning if this variable is accessed.
@@ -1072,12 +1070,6 @@ public:
  */
 typedef bool (*builtin_available_predicate)(const _mesa_glsl_parse_state *);
 
-#define MAKE_INTRINSIC_FOR_TYPE(op, t) \
-   ir_intrinsic_generic_ ## op - ir_intrinsic_generic_load + ir_intrinsic_ ## t ## _ ## load
-
-#define MAP_INTRINSIC_TO_TYPE(i, t) \
-   ir_intrinsic_id(int(i) - int(ir_intrinsic_generic_load) + int(ir_intrinsic_ ## t ## _ ## load))
-
 enum ir_intrinsic_id {
    ir_intrinsic_invalid = 0,
 
@@ -1126,17 +1118,7 @@ enum ir_intrinsic_id {
    ir_intrinsic_image_samples,
    ir_intrinsic_image_atomic_inc_wrap,
    ir_intrinsic_image_atomic_dec_wrap,
-
-   ir_intrinsic_ssbo_load,
-   ir_intrinsic_ssbo_store = MAKE_INTRINSIC_FOR_TYPE(store, ssbo),
-   ir_intrinsic_ssbo_atomic_add = MAKE_INTRINSIC_FOR_TYPE(atomic_add, ssbo),
-   ir_intrinsic_ssbo_atomic_and = MAKE_INTRINSIC_FOR_TYPE(atomic_and, ssbo),
-   ir_intrinsic_ssbo_atomic_or = MAKE_INTRINSIC_FOR_TYPE(atomic_or, ssbo),
-   ir_intrinsic_ssbo_atomic_xor = MAKE_INTRINSIC_FOR_TYPE(atomic_xor, ssbo),
-   ir_intrinsic_ssbo_atomic_min = MAKE_INTRINSIC_FOR_TYPE(atomic_min, ssbo),
-   ir_intrinsic_ssbo_atomic_max = MAKE_INTRINSIC_FOR_TYPE(atomic_max, ssbo),
-   ir_intrinsic_ssbo_atomic_exchange = MAKE_INTRINSIC_FOR_TYPE(atomic_exchange, ssbo),
-   ir_intrinsic_ssbo_atomic_comp_swap = MAKE_INTRINSIC_FOR_TYPE(atomic_comp_swap, ssbo),
+   ir_intrinsic_image_sparse_load,
 
    ir_intrinsic_memory_barrier,
    ir_intrinsic_shader_clock,
@@ -1157,16 +1139,7 @@ enum ir_intrinsic_id {
 
    ir_intrinsic_helper_invocation,
 
-   ir_intrinsic_shared_load,
-   ir_intrinsic_shared_store = MAKE_INTRINSIC_FOR_TYPE(store, shared),
-   ir_intrinsic_shared_atomic_add = MAKE_INTRINSIC_FOR_TYPE(atomic_add, shared),
-   ir_intrinsic_shared_atomic_and = MAKE_INTRINSIC_FOR_TYPE(atomic_and, shared),
-   ir_intrinsic_shared_atomic_or = MAKE_INTRINSIC_FOR_TYPE(atomic_or, shared),
-   ir_intrinsic_shared_atomic_xor = MAKE_INTRINSIC_FOR_TYPE(atomic_xor, shared),
-   ir_intrinsic_shared_atomic_min = MAKE_INTRINSIC_FOR_TYPE(atomic_min, shared),
-   ir_intrinsic_shared_atomic_max = MAKE_INTRINSIC_FOR_TYPE(atomic_max, shared),
-   ir_intrinsic_shared_atomic_exchange = MAKE_INTRINSIC_FOR_TYPE(atomic_exchange, shared),
-   ir_intrinsic_shared_atomic_comp_swap = MAKE_INTRINSIC_FOR_TYPE(atomic_comp_swap, shared),
+   ir_intrinsic_is_sparse_texels_resident,
 };
 
 /*@{*/
@@ -1454,7 +1427,7 @@ public:
 
 class ir_assignment : public ir_instruction {
 public:
-   ir_assignment(ir_rvalue *lhs, ir_rvalue *rhs, ir_rvalue *condition = NULL);
+   ir_assignment(ir_rvalue *lhs, ir_rvalue *rhs);
 
    /**
     * Construct an assignment with an explicit write mask
@@ -1463,8 +1436,7 @@ public:
     * Since a write mask is supplied, the LHS must already be a bare
     * \c ir_dereference.  The cannot be any swizzles in the LHS.
     */
-   ir_assignment(ir_dereference *lhs, ir_rvalue *rhs, ir_rvalue *condition,
-		 unsigned write_mask);
+   ir_assignment(ir_dereference *lhs, ir_rvalue *rhs, unsigned write_mask);
 
    virtual ir_assignment *clone(void *mem_ctx, struct hash_table *ht) const;
 
@@ -1509,12 +1481,6 @@ public:
     * Value being assigned
     */
    ir_rvalue *rhs;
-
-   /**
-    * Optional condition for the assignment.
-    */
-   ir_rvalue *condition;
-
 
    /**
     * Component mask written
@@ -1872,30 +1838,32 @@ enum ir_texture_opcode {
  * selected from \c ir_texture_opcodes.  In the printed IR, these will
  * appear as:
  *
- *                                    Texel offset (0 or an expression)
- *                                    | Projection divisor
- *                                    | |  Shadow comparator
- *                                    | |  |
- *                                    v v  v
- * (tex <type> <sampler> <coordinate> 0 1 ( ))
- * (txb <type> <sampler> <coordinate> 0 1 ( ) <bias>)
- * (txl <type> <sampler> <coordinate> 0 1 ( ) <lod>)
- * (txd <type> <sampler> <coordinate> 0 1 ( ) (dPdx dPdy))
- * (txf <type> <sampler> <coordinate> 0       <lod>)
+ *                                             Texel offset (0 or an expression)
+ *                                             | Projection divisor
+ *                                             | |  Shadow comparator
+ *                                             | |  |   Lod clamp
+ *                                             | |  |   |
+ *                                             v v  v   v
+ * (tex <type> <sampler> <coordinate> <sparse> 0 1 ( ) ( ))
+ * (txb <type> <sampler> <coordinate> <sparse> 0 1 ( ) ( ) <bias>)
+ * (txl <type> <sampler> <coordinate> <sparse> 0 1 ( )     <lod>)
+ * (txd <type> <sampler> <coordinate> <sparse> 0 1 ( ) ( ) (dPdx dPdy))
+ * (txf <type> <sampler> <coordinate> <sparse> 0	         <lod>)
  * (txf_ms
- *      <type> <sampler> <coordinate>         <sample_index>)
+ *      <type> <sampler> <coordinate> <sparse>             <sample_index>)
  * (txs <type> <sampler> <lod>)
  * (lod <type> <sampler> <coordinate>)
- * (tg4 <type> <sampler> <coordinate> <offset> <component>)
+ * (tg4 <type> <sampler> <coordinate> <sparse>             <offset> <component>)
  * (query_levels <type> <sampler>)
  * (samples_identical <sampler> <coordinate>)
  */
 class ir_texture : public ir_rvalue {
 public:
-   ir_texture(enum ir_texture_opcode op)
+   ir_texture(enum ir_texture_opcode op, bool sparse = false)
       : ir_rvalue(ir_type_texture),
         op(op), sampler(NULL), coordinate(NULL), projector(NULL),
-        shadow_comparator(NULL), offset(NULL)
+        shadow_comparator(NULL), offset(NULL), clamp(NULL),
+        is_sparse(sparse)
    {
       memset(&lod_info, 0, sizeof(lod_info));
    }
@@ -1956,6 +1924,9 @@ public:
    /** Texel offset. */
    ir_rvalue *offset;
 
+   /** Lod clamp. */
+   ir_rvalue *clamp;
+
    union {
       ir_rvalue *lod;		/**< Floating point LOD */
       ir_rvalue *bias;		/**< Floating point LOD bias */
@@ -1966,6 +1937,9 @@ public:
 	 ir_rvalue *dPdy;	/**< Partial derivative of coordinate wrt Y */
       } grad;
    } lod_info;
+
+   /* Whether a sparse texture */
+   bool is_sparse;
 };
 
 
@@ -2509,25 +2483,12 @@ _mesa_glsl_initialize_variables(exec_list *instructions,
 extern void
 reparent_ir(exec_list *list, void *mem_ctx);
 
-extern void
-do_set_program_inouts(exec_list *instructions, struct gl_program *prog,
-                      gl_shader_stage shader_stage);
-
 extern char *
 prototype_string(const glsl_type *return_type, const char *name,
 		 exec_list *parameters);
 
 const char *
 mode_string(const ir_variable *var);
-
-/**
- * Built-in / reserved GL variables names start with "gl_"
- */
-static inline bool
-is_gl_identifier(const char *s)
-{
-   return s && s[0] == 'g' && s[1] == 'l' && s[2] == '_';
-}
 
 extern "C" {
 #endif /* __cplusplus */

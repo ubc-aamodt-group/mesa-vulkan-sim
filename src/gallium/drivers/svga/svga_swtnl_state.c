@@ -1,5 +1,5 @@
 /**********************************************************
- * Copyright 2008-2009 VMware, Inc.  All rights reserved.
+ * Copyright 2008-2022 VMware, Inc.  All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
@@ -56,17 +56,17 @@ set_draw_viewport(struct svga_context *svga)
    float adjy = 0.0f;
 
    if (svga_have_vgpu10(svga)) {
-      if (svga->curr.reduced_prim == PIPE_PRIM_TRIANGLES) {
+      if (svga->curr.reduced_prim == MESA_PRIM_TRIANGLES) {
          adjy = 0.25;
       }
    }
    else {
       switch (svga->curr.reduced_prim) {
-      case PIPE_PRIM_POINTS:
+      case MESA_PRIM_POINTS:
          adjx = SVGA_POINT_ADJ_X;
          adjy = SVGA_POINT_ADJ_Y;
          break;
-      case PIPE_PRIM_LINES:
+      case MESA_PRIM_LINES:
          /* XXX: This is to compensate for the fact that wide lines are
           * going to be drawn with triangles, but we're not catching all
           * cases where that will happen.
@@ -81,7 +81,7 @@ set_draw_viewport(struct svga_context *svga)
             adjy = SVGA_LINE_ADJ_Y;
          }
          break;
-      case PIPE_PRIM_TRIANGLES:
+      case MESA_PRIM_TRIANGLES:
          adjx += SVGA_TRIANGLE_ADJ_X;
          adjy += SVGA_TRIANGLE_ADJ_Y;
          break;
@@ -114,7 +114,7 @@ update_swtnl_draw(struct svga_context *svga, uint64_t dirty)
 
    if (dirty & SVGA_NEW_VBUFFER)
       draw_set_vertex_buffers(svga->swtnl.draw, 0,
-                              svga->curr.num_vertex_buffers,
+                              svga->curr.num_vertex_buffers, 0,
                               svga->curr.vb);
 
    if (dirty & SVGA_NEW_VELEMENT)
@@ -248,8 +248,8 @@ svga_swtnl_update_vdecl(struct svga_context *svga)
    nr_decls++;
 
    for (i = 0; i < fs->base.info.num_inputs; i++) {
-      const enum tgsi_semantic sem_name = fs->base.info.input_semantic_name[i];
-      const unsigned sem_index = fs->base.info.input_semantic_index[i];
+      const enum tgsi_semantic sem_name = fs->base.tgsi_info.input_semantic_name[i];
+      const unsigned sem_index = fs->base.tgsi_info.input_semantic_index[i];
 
       src = draw_find_shader_output(draw, sem_name, sem_index);
 
@@ -270,6 +270,13 @@ svga_swtnl_update_vdecl(struct svga_context *svga)
          vdecl[nr_decls].identity.type = SVGA3D_DECLTYPE_FLOAT4;
          vdecl[nr_decls].identity.usageIndex =
             svga_remap_generic_index(fs->generic_remap_table, sem_index);
+         offset += 16;
+         nr_decls++;
+         break;
+      case TGSI_SEMANTIC_TEXCOORD:
+         draw_emit_vertex_attr(vinfo, EMIT_4F, src);
+         vdecl[nr_decls].identity.usage = SVGA3D_DECLUSAGE_TEXCOORD;
+         vdecl[nr_decls].identity.type = SVGA3D_DECLTYPE_FLOAT4;
          offset += 16;
          nr_decls++;
          break;

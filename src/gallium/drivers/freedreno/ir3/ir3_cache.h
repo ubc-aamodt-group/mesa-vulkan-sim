@@ -27,7 +27,11 @@
 #ifndef IR3_CACHE_H_
 #define IR3_CACHE_H_
 
+#include "pipe/p_state.h"
+
 #include "ir3/ir3_shader.h"
+
+BEGINC;
 
 /*
  * An in-memory cache for mapping shader state objects plus shader key to
@@ -37,8 +41,14 @@
 
 /* key into program state cache */
 struct ir3_cache_key {
-	struct ir3_shader *vs, *hs, *ds, *gs, *fs;  // 5 pointers
-	struct ir3_shader_key key;             // 7 dwords
+   struct ir3_shader_state *vs, *hs, *ds, *gs, *fs; // 5 pointers
+   struct ir3_shader_key key;                       // 7 dwords
+
+   /* Additional state that effects the cached program state, but
+    * not the compiled shader:
+    */
+   unsigned clip_plane_enable : PIPE_MAX_CLIP_PLANES;
+   unsigned patch_vertices;
 };
 
 /* per-gen backend program state object should subclass this for it's
@@ -46,37 +56,37 @@ struct ir3_cache_key {
  * allocated on the stack
  */
 struct ir3_program_state {
-	struct ir3_cache_key key;
+   struct ir3_cache_key key;
 };
 
 struct ir3_cache_funcs {
-	struct ir3_program_state *(*create_state)(void *data,
-			struct ir3_shader_variant *bs,  /* binning pass vs */
-			struct ir3_shader_variant *vs,
-			struct ir3_shader_variant *hs,
-			struct ir3_shader_variant *ds,
-			struct ir3_shader_variant *gs,
-			struct ir3_shader_variant *fs,
-			const struct ir3_shader_key *key);
-	void (*destroy_state)(void *data, struct ir3_program_state *state);
+   struct ir3_program_state *(*create_state)(
+      void *data, struct ir3_shader_variant *bs, /* binning pass vs */
+      struct ir3_shader_variant *vs, struct ir3_shader_variant *hs,
+      struct ir3_shader_variant *ds, struct ir3_shader_variant *gs,
+      struct ir3_shader_variant *fs, const struct ir3_cache_key *key);
+   void (*destroy_state)(void *data, struct ir3_program_state *state);
 };
 
 struct ir3_cache;
 
 /* construct a shader cache.  Free with ralloc_free() */
-struct ir3_cache * ir3_cache_create(const struct ir3_cache_funcs *funcs, void *data);
+struct ir3_cache *ir3_cache_create(const struct ir3_cache_funcs *funcs,
+                                   void *data);
 void ir3_cache_destroy(struct ir3_cache *cache);
 
 /* debug callback is used for shader-db logs in case the lookup triggers
  * shader variant compilation.
  */
-struct ir3_program_state * ir3_cache_lookup(struct ir3_cache *cache,
-		const struct ir3_cache_key *key,
-		struct pipe_debug_callback *debug);
+struct ir3_program_state *ir3_cache_lookup(struct ir3_cache *cache,
+                                           const struct ir3_cache_key *key,
+                                           struct util_debug_callback *debug);
 
 /* call when an API level state object is destroyed, to invalidate
  * cache entries which reference that state object.
  */
 void ir3_cache_invalidate(struct ir3_cache *cache, void *stobj);
+
+ENDC;
 
 #endif /* IR3_CACHE_H_ */

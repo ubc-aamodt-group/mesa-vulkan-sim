@@ -34,9 +34,9 @@
  */
 
 
-#include "pipe/p_config.h"
+#include "util/detect.h"
 
-#if defined(PIPE_OS_LINUX) || defined(PIPE_OS_BSD) || defined(PIPE_OS_SOLARIS)
+#if DETECT_OS_LINUX || DETECT_OS_BSD || DETECT_OS_SOLARIS
 #include <unistd.h>
 #include <sched.h>
 #endif
@@ -45,7 +45,7 @@
 #include "pipe/p_compiler.h"
 #include "pipe/p_defines.h"
 #include "util/u_debug.h"
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 #include "util/u_memory.h"
 #include "util/list.h"
 
@@ -207,7 +207,7 @@ fenced_manager_dump_locked(struct fenced_manager *fenced_mgr)
    curr = fenced_mgr->unfenced.next;
    next = curr->next;
    while (curr != &fenced_mgr->unfenced) {
-      fenced_buf = LIST_ENTRY(struct fenced_buffer, curr, head);
+      fenced_buf = list_entry(curr, struct fenced_buffer, head);
       assert(!fenced_buf->fence);
       debug_printf("%10p %"PRIu64" %8u %7s\n",
                    (void *) fenced_buf,
@@ -222,7 +222,7 @@ fenced_manager_dump_locked(struct fenced_manager *fenced_mgr)
    next = curr->next;
    while (curr != &fenced_mgr->fenced) {
       int signaled;
-      fenced_buf = LIST_ENTRY(struct fenced_buffer, curr, head);
+      fenced_buf = list_entry(curr, struct fenced_buffer, head);
       assert(fenced_buf->buffer);
       signaled = ops->fence_signalled(ops, fenced_buf->fence, 0);
       debug_printf("%10p %"PRIu64" %8u %7s %10p %s\n",
@@ -401,7 +401,7 @@ fenced_manager_check_signalled_locked(struct fenced_manager *fenced_mgr,
    curr = fenced_mgr->fenced.next;
    next = curr->next;
    while (curr != &fenced_mgr->fenced) {
-      fenced_buf = LIST_ENTRY(struct fenced_buffer, curr, head);
+      fenced_buf = list_entry(curr, struct fenced_buffer, head);
 
       if (fenced_buf->fence != prev_fence) {
          int signaled;
@@ -455,7 +455,7 @@ fenced_manager_free_gpu_storage_locked(struct fenced_manager *fenced_mgr)
    curr = fenced_mgr->unfenced.next;
    next = curr->next;
    while (curr != &fenced_mgr->unfenced) {
-      fenced_buf = LIST_ENTRY(struct fenced_buffer, curr, head);
+      fenced_buf = list_entry(curr, struct fenced_buffer, head);
 
       /* We can only move storage if the buffer is not mapped and not
        * validated.
@@ -645,7 +645,7 @@ fenced_buffer_copy_storage_to_cpu_locked(struct fenced_buffer *fenced_buf)
 
 
 static void
-fenced_buffer_destroy(struct pb_buffer *buf)
+fenced_buffer_destroy(void *winsys, struct pb_buffer *buf)
 {
    struct fenced_buffer *fenced_buf = fenced_buffer(buf);
    struct fenced_manager *fenced_mgr = fenced_buf->mgr;
@@ -908,7 +908,7 @@ fenced_bufmgr_create_buffer(struct pb_manager *mgr,
       goto no_buffer;
 
    pipe_reference_init(&fenced_buf->base.reference, 1);
-   fenced_buf->base.alignment = desc->alignment;
+   fenced_buf->base.alignment_log2 = util_logbase2(desc->alignment);
    fenced_buf->base.usage = desc->usage;
    fenced_buf->base.size = size;
    fenced_buf->size = size;
@@ -979,7 +979,7 @@ fenced_bufmgr_destroy(struct pb_manager *mgr)
    /* Wait on outstanding fences. */
    while (fenced_mgr->num_fenced) {
       mtx_unlock(&fenced_mgr->mutex);
-#if defined(PIPE_OS_LINUX) || defined(PIPE_OS_BSD) || defined(PIPE_OS_SOLARIS)
+#if DETECT_OS_LINUX || DETECT_OS_BSD || DETECT_OS_SOLARIS
       sched_yield();
 #endif
       mtx_lock(&fenced_mgr->mutex);

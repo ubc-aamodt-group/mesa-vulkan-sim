@@ -23,12 +23,12 @@
 #include "pipe/p_defines.h"
 
 #include "compiler/nir/nir.h"
-#include "tgsi/tgsi_ureg.h"
+#include "compiler/nir/nir_builder.h"
 #include "util/blob.h"
 
 #include "nvc0/nvc0_context.h"
 
-#include "codegen/nv50_ir_driver.h"
+#include "nv50_ir_driver.h"
 #include "nvc0/nve4_compute.h"
 
 /* NOTE: Using a[0x270] in FP may cause an error even if we're using less than
@@ -290,18 +290,18 @@ nvc0_vp_gen_header(struct nvc0_program *vp, struct nv50_ir_prog_info_out *info)
 static void
 nvc0_tp_get_tess_mode(struct nvc0_program *tp, struct nv50_ir_prog_info_out *info)
 {
-   if (info->prop.tp.outputPrim == PIPE_PRIM_MAX) {
+   if (info->prop.tp.outputPrim == MESA_PRIM_COUNT) {
       tp->tp.tess_mode = ~0;
       return;
    }
    switch (info->prop.tp.domain) {
-   case PIPE_PRIM_LINES:
+   case MESA_PRIM_LINES:
       tp->tp.tess_mode = NVC0_3D_TESS_MODE_PRIM_ISOLINES;
       break;
-   case PIPE_PRIM_TRIANGLES:
+   case MESA_PRIM_TRIANGLES:
       tp->tp.tess_mode = NVC0_3D_TESS_MODE_PRIM_TRIANGLES;
       break;
-   case PIPE_PRIM_QUADS:
+   case MESA_PRIM_QUADS:
       tp->tp.tess_mode = NVC0_3D_TESS_MODE_PRIM_QUADS;
       break;
    default:
@@ -312,16 +312,16 @@ nvc0_tp_get_tess_mode(struct nvc0_program *tp, struct nv50_ir_prog_info_out *inf
    /* It seems like lines want the "CW" bit to indicate they're connected, and
     * spit out errors in dmesg when the "CONNECTED" bit is set.
     */
-   if (info->prop.tp.outputPrim != PIPE_PRIM_POINTS) {
-      if (info->prop.tp.domain == PIPE_PRIM_LINES)
+   if (info->prop.tp.outputPrim != MESA_PRIM_POINTS) {
+      if (info->prop.tp.domain == MESA_PRIM_LINES)
          tp->tp.tess_mode |= NVC0_3D_TESS_MODE_CW;
       else
          tp->tp.tess_mode |= NVC0_3D_TESS_MODE_CONNECTED;
    }
 
    /* Winding only matters for triangles/quads, not lines. */
-   if (info->prop.tp.domain != PIPE_PRIM_LINES &&
-       info->prop.tp.outputPrim != PIPE_PRIM_POINTS &&
+   if (info->prop.tp.domain != MESA_PRIM_LINES &&
+       info->prop.tp.outputPrim != MESA_PRIM_POINTS &&
        info->prop.tp.winding > 0)
       tp->tp.tess_mode |= NVC0_3D_TESS_MODE_CW;
 
@@ -395,15 +395,15 @@ nvc0_gp_gen_header(struct nvc0_program *gp, struct nv50_ir_prog_info_out *info)
    gp->hdr[2] = MIN2(info->prop.gp.instanceCount, 32) << 24;
 
    switch (info->prop.gp.outputPrim) {
-   case PIPE_PRIM_POINTS:
+   case MESA_PRIM_POINTS:
       gp->hdr[3] = 0x01000000;
       gp->hdr[0] |= 0xf0000000;
       break;
-   case PIPE_PRIM_LINE_STRIP:
+   case MESA_PRIM_LINE_STRIP:
       gp->hdr[3] = 0x06000000;
       gp->hdr[0] |= 0x10000000;
       break;
-   case PIPE_PRIM_TRIANGLE_STRIP:
+   case MESA_PRIM_TRIANGLE_STRIP:
       gp->hdr[3] = 0x07000000;
       gp->hdr[0] |= 0x10000000;
       break;
@@ -572,7 +572,7 @@ nvc0_program_dump(struct nvc0_program *prog)
 bool
 nvc0_program_translate(struct nvc0_program *prog, uint16_t chipset,
                        struct disk_cache *disk_shader_cache,
-                       struct pipe_debug_callback *debug)
+                       struct util_debug_callback *debug)
 {
    struct blob blob;
    size_t cache_size;
@@ -686,7 +686,7 @@ nvc0_program_translate(struct nvc0_program *prog, uint16_t chipset,
    prog->relocs = info_out.bin.relocData;
    prog->fixups = info_out.bin.fixupData;
    if (info_out.target >= NVISA_GV100_CHIPSET)
-      prog->num_gprs = MIN2(info_out.bin.maxGPR + 5, 256); //XXX: why?
+      prog->num_gprs = MIN2(info_out.bin.maxGPR + 5, 255); //XXX: why?
    else
       prog->num_gprs = MAX2(4, (info_out.bin.maxGPR + 1));
    prog->cp.smem_size = info_out.bin.smemSize;
@@ -751,7 +751,7 @@ nvc0_program_translate(struct nvc0_program *prog, uint16_t chipset,
       prog->tfb = nvc0_program_create_tfb_state(&info_out,
                                                 &prog->pipe.stream_output);
 
-   pipe_debug_message(debug, SHADER_INFO,
+   util_debug_message(debug, SHADER_INFO,
                       "type: %d, local: %d, shared: %d, gpr: %d, inst: %d, bytes: %d, cached: %zd",
                       prog->type, info_out.bin.tlsSpace, info_out.bin.smemSize,
                       prog->num_gprs, info_out.bin.instructions,
@@ -884,6 +884,7 @@ nvc0_program_upload(struct nvc0_context *nvc0, struct nvc0_program *prog)
          size += TU102_SHADER_HEADER_SIZE;
    }
 
+   simple_mtx_assert_locked(&nvc0->screen->state_lock);
    ret = nvc0_program_alloc_code(nvc0, prog);
    if (ret) {
       struct nouveau_heap *heap = screen->text_heap;
@@ -905,7 +906,7 @@ nvc0_program_upload(struct nvc0_context *nvc0, struct nvc0_program *prog)
       IMMED_NVC0(nvc0->base.pushbuf, NVC0_3D(SERIALIZE), 0);
 
       if ((screen->text->size << 1) <= (1 << 23)) {
-         ret = nvc0_screen_resize_text_area(screen, screen->text->size << 1);
+         ret = nvc0_screen_resize_text_area(screen, nvc0->base.pushbuf, screen->text->size << 1);
          if (ret) {
             NOUVEAU_ERR("Error allocating TEXT area: %d\n", ret);
             return false;
@@ -990,8 +991,11 @@ nvc0_program_destroy(struct nvc0_context *nvc0, struct nvc0_program *prog)
    const struct pipe_shader_state pipe = prog->pipe;
    const ubyte type = prog->type;
 
-   if (prog->mem)
+   if (prog->mem) {
+      if (nvc0)
+         simple_mtx_assert_locked(&nvc0->screen->state_lock);
       nouveau_heap_free(&prog->mem);
+   }
    FREE(prog->code); /* may be 0 for hardcoded shaders */
    FREE(prog->relocs);
    FREE(prog->fixups);
@@ -1010,14 +1014,18 @@ nvc0_program_destroy(struct nvc0_context *nvc0, struct nvc0_program *prog)
 void
 nvc0_program_init_tcp_empty(struct nvc0_context *nvc0)
 {
-   struct ureg_program *ureg;
+   const nir_shader_compiler_options *options =
+      nv50_ir_nir_shader_compiler_options(nvc0->screen->base.device->chipset,
+                                          PIPE_SHADER_TESS_CTRL);
 
-   ureg = ureg_create(PIPE_SHADER_TESS_CTRL);
-   if (!ureg)
-      return;
+   struct nir_builder b =
+      nir_builder_init_simple_shader(MESA_SHADER_TESS_CTRL, options,
+                                     "tcp_empty");
+   b.shader->info.tess.tcs_vertices_out = 1;
 
-   ureg_property(ureg, TGSI_PROPERTY_TCS_VERTICES_OUT, 1);
-   ureg_END(ureg);
+   nir_validate_shader(b.shader, "in nvc0_program_init_tcp_empty");
 
-   nvc0->tcp_empty = ureg_create_shader_and_destroy(ureg, &nvc0->base.pipe);
+   struct pipe_shader_state state;
+   pipe_shader_state_from_nir(&state, b.shader);
+   nvc0->tcp_empty = nvc0->base.pipe.create_tcs_state(&nvc0->base.pipe, &state);
 }

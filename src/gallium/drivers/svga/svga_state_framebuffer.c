@@ -87,8 +87,7 @@ emit_fb_vgpu9(struct svga_context *svga)
       /* Set the rendered-to flag */
       struct pipe_surface *s = curr->cbufs[i];
       if (s) {
-         svga_set_texture_rendered_to(svga_texture(s->texture),
-                                      s->u.tex.first_layer, s->u.tex.level);
+         svga_set_texture_rendered_to(svga_texture(s->texture));
       }
    }
 
@@ -119,8 +118,7 @@ emit_fb_vgpu9(struct svga_context *svga)
       /* Set the rendered-to flag */
       struct pipe_surface *s = curr->zsbuf;
       if (s) {
-         svga_set_texture_rendered_to(svga_texture(s->texture),
-                                      s->u.tex.first_layer, s->u.tex.level);
+         svga_set_texture_rendered_to(svga_texture(s->texture));
       }
    }
 
@@ -225,8 +223,7 @@ emit_fb_vgpu10(struct svga_context *svga)
          last_rtv = i;
 
          /* Set the rendered-to flag */
-         svga_set_texture_rendered_to(svga_texture(s->texture),
-                                      s->u.tex.first_layer, s->u.tex.level);
+         svga_set_texture_rendered_to(svga_texture(s->texture));
       }
       else {
          rtv[i] = NULL;
@@ -247,8 +244,7 @@ emit_fb_vgpu10(struct svga_context *svga)
       }
 
       /* Set the rendered-to flag */
-      svga_set_texture_rendered_to(svga_texture(s->texture),
-                                      s->u.tex.first_layer, s->u.tex.level);
+      svga_set_texture_rendered_to(svga_texture(s->texture));
    }
    else {
       dsv = NULL;
@@ -564,7 +560,7 @@ get_viewport_prescale(struct svga_context *svga,
           * adjustments for VGPU10.  But when we draw wide points with
           * a GS we need an X adjustment in order to be conformant.
           */
-         if (svga->curr.reduced_prim == PIPE_PRIM_POINTS &&
+         if (svga->curr.reduced_prim == MESA_PRIM_POINTS &&
              svga->curr.rast->pointsize > 1.0f) {
             adjust_x = 0.5;
          }
@@ -613,6 +609,10 @@ get_viewport_prescale(struct svga_context *svga,
       prescale->scale[2] *= 2.0f;
       prescale->translate[2] -= 0.5f;
    }
+
+   /* Clamp depth range, making sure it's between 0 and 1 */
+   range_min = CLAMP(range_min, 0.0f, 1.0f);
+   range_max = CLAMP(range_max, 0.0f, 1.0f);
 
    if (prescale->enabled) {
       float H[2];

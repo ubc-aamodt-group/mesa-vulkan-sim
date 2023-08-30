@@ -39,8 +39,9 @@
 enum pipe_error
 svga_swtnl_draw_vbo(struct svga_context *svga,
                     const struct pipe_draw_info *info,
+                    unsigned drawid_offset,
                     const struct pipe_draw_indirect_info *indirect,
-                    const struct pipe_draw_start_count *draw_one)
+                    const struct pipe_draw_start_count_bias *draw_one)
 {
    struct pipe_transfer *vb_transfer[PIPE_MAX_ATTRIBS] = { 0 };
    struct pipe_transfer *ib_transfer = NULL;
@@ -114,7 +115,8 @@ svga_swtnl_draw_vbo(struct svga_context *svga,
          svga->curr.constbufs[PIPE_SHADER_VERTEX][i].buffer->width0);
    }
 
-   draw_vbo(draw, info, indirect, draw_one, 1);
+   draw_vbo(draw, info, drawid_offset, indirect, draw_one, 1,
+	    svga->patch_vertices);
 
    draw_flush(svga->swtnl.draw);
 
@@ -180,6 +182,11 @@ svga_init_swtnl(struct svga_context *svga)
    /* must be done before installing Draw stages */
    util_blitter_cache_all_shaders(svga->blitter);
 
+   const nir_alu_type bool_type =
+      screen->screen.get_shader_param(&screen->screen, PIPE_SHADER_FRAGMENT,
+                                      PIPE_SHADER_CAP_INTEGERS) ?
+      nir_type_bool32 : nir_type_float32;
+
    if (!screen->haveLineSmooth)
       draw_install_aaline_stage(svga->swtnl.draw, &svga->pipe);
 
@@ -187,7 +194,7 @@ svga_init_swtnl(struct svga_context *svga)
    draw_enable_line_stipple(svga->swtnl.draw, !screen->haveLineStipple);
 
    /* always install AA point stage */
-   draw_install_aapoint_stage(svga->swtnl.draw, &svga->pipe);
+   draw_install_aapoint_stage(svga->swtnl.draw, &svga->pipe, bool_type);
 
    /* Set wide line threshold above device limit (so we'll never really use it)
     */

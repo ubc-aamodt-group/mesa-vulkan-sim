@@ -22,14 +22,13 @@
  */
 
 #include <gtest/gtest.h>
-#include "main/glheader.h"
 
 #include "glapi/glapi.h"
 #include "glapitable.h"
 
 struct name_offset {
    const char *name;
-   unsigned int offset;
+   size_t offset;
 };
 
 extern const struct name_offset linux_gl_abi[];
@@ -1131,8 +1130,8 @@ const struct name_offset known_dispatch[] = {
    { "glGetAttribLocation", _O(GetAttribLocation) },
    { "glDrawBuffers", _O(DrawBuffers) },
    { "glClampColor", _O(ClampColor) },
-   { "glDrawArraysInstancedARB", _O(DrawArraysInstancedARB) },
-   { "glDrawElementsInstancedARB", _O(DrawElementsInstancedARB) },
+   { "glDrawArraysInstanced", _O(DrawArraysInstanced) },
+   { "glDrawElementsInstanced", _O(DrawElementsInstanced) },
    { "glRenderbufferStorageMultisample", _O(RenderbufferStorageMultisample) },
    { "glFramebufferTexture", _O(FramebufferTexture) },
    { "glProgramParameteri", _O(ProgramParameteri) },
@@ -1290,7 +1289,7 @@ const struct name_offset known_dispatch[] = {
    { "glSecondaryColor3usv", _O(SecondaryColor3usv) },
    { "glSecondaryColorPointer", _O(SecondaryColorPointer) },
    { "glMultiDrawArrays", _O(MultiDrawArrays) },
-   { "glMultiDrawElementsEXT", _O(MultiDrawElementsEXT) },
+   { "glMultiDrawElements", _O(MultiDrawElements) },
    { "glFogCoordPointer", _O(FogCoordPointer) },
    { "glFogCoordd", _O(FogCoordd) },
    { "glFogCoorddv", _O(FogCoorddv) },

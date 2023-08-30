@@ -15,11 +15,11 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * FELIX KUEHLING, OR ANY OTHER CONTRIBUTORS BE LIABLE FOR ANY CLAIM, 
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR 
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE 
+ * FELIX KUEHLING, OR ANY OTHER CONTRIBUTORS BE LIABLE FOR ANY CLAIM,
+ * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+ * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
  * OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- * 
+ *
  */
 /**
  * \file xmlconfig.h
@@ -37,12 +37,6 @@
 
 #ifdef __cplusplus
 extern "C" {
-#endif
-
-#if defined(ANDROID) || defined(_WIN32)
-#define WITH_XMLCONFIG 0
-#else
-#define WITH_XMLCONFIG 1
 #endif
 
 #define STRING_CONF_MAXLEN 1024
@@ -111,7 +105,7 @@ typedef struct driOptionDescription {
 
    driOptionInfo info;
    driOptionValue value;
-   driEnumDescription enums[4];
+   driEnumDescription enums[5];
 } driOptionDescription;
 
 /** Returns an XML string describing the options for the driver. */
@@ -139,6 +133,7 @@ void driParseOptionInfo(driOptionCache *info,
 void driParseConfigFiles(driOptionCache *cache, const driOptionCache *info,
                          int screenNum, const char *driverName,
                          const char *kernelDriverName,
+                         const char *deviceName,
                          const char *applicationName, uint32_t applicationVersion,
                          const char *engineName, uint32_t engineVersion);
 /** \brief Destroy option info

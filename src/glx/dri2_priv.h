@@ -37,6 +37,8 @@
 extern "C" {
 #endif
 
+#include "GL/internal/mesa_interface.h"
+
 struct dri2_screen {
    struct glx_screen base;
 
@@ -44,6 +46,7 @@ struct dri2_screen {
    __GLXDRIscreen vtable;
    const __DRIdri2Extension *dri2;
    const __DRIcoreExtension *core;
+   const __DRImesaCoreExtension *mesa;
 
    const __DRI2flushExtension *f;
    const __DRI2configQueryExtension *config;
@@ -58,12 +61,6 @@ struct dri2_screen {
    int fd;
 
    int show_fps_interval;
-};
-
-struct dri2_context
-{
-   struct glx_context base;
-   __DRIcontext *driContext;
 };
 
 _X_HIDDEN int
@@ -82,6 +79,11 @@ _X_HIDDEN int
 dri2_interop_export_object(struct glx_context *ctx,
                            struct mesa_glinterop_export_in *in,
                            struct mesa_glinterop_export_out *out);
+
+_X_HIDDEN int
+dri2_interop_flush_objects(struct glx_context *ctx,
+                           unsigned count, struct mesa_glinterop_export_in *objects,
+                           GLsync *sync);
 
 #ifdef __cplusplus
 }

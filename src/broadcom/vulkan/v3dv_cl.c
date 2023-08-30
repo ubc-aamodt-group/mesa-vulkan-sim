@@ -1,5 +1,5 @@
 /*
- * Copyright © 2019 Raspberry Pi
+ * Copyright © 2019 Raspberry Pi Ltd
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -22,6 +22,13 @@
  */
 
 #include "v3dv_private.h"
+
+/* We don't expect that the packets we use in this file change across hw
+ * versions, so we just explicitly set the V3D_VERSION and include v3dx_pack
+ * here
+ */
+#define V3D_VERSION 33
+#include "broadcom/common/v3d_macros.h"
 #include "broadcom/cle/v3dx_pack.h"
 
 void
@@ -51,6 +58,14 @@ v3dv_cl_destroy(struct v3dv_cl *cl)
 static bool
 cl_alloc_bo(struct v3dv_cl *cl, uint32_t space, bool use_branch)
 {
+   /* If we are growing, double the BO allocation size to reduce the number
+    * of allocations with large command buffers. This has a very significant
+    * impact on the number of draw calls per second reported by vkoverhead.
+    */
+   space = align(space, 4096);
+   if (cl->bo)
+      space = MAX2(cl->bo->size * 2, space);
+
    struct v3dv_bo *bo = v3dv_bo_alloc(cl->job->device, space, "CL", true);
    if (!bo) {
       fprintf(stderr, "failed to allocate memory for command list\n");
@@ -72,9 +87,9 @@ cl_alloc_bo(struct v3dv_cl *cl, uint32_t space, bool use_branch)
       cl_emit(cl, BRANCH, branch) {
          branch.address = v3dv_cl_address(bo, 0);
       }
+   } else {
+      v3dv_job_add_bo_unchecked(cl->job, bo);
    }
-
-   v3dv_job_add_bo(cl->job, bo);
 
    cl->bo = bo;
    cl->base = cl->bo->map;
@@ -101,8 +116,30 @@ v3dv_cl_ensure_space(struct v3dv_cl *cl, uint32_t space, uint32_t alignment)
 void
 v3dv_cl_ensure_space_with_branch(struct v3dv_cl *cl, uint32_t space)
 {
-   if (v3dv_cl_offset(cl) + space + cl_packet_length(BRANCH) <= cl->size)
+   /* We do not want to emit branches from secondary command lists, instead,
+    * we will branch to them when we execute them in a primary using
+    * 'branch to sub list' commands, expecting each linked secondary to
+    * end with a 'return from sub list' command.
+    */
+   bool needs_return_from_sub_list = false;
+   if (cl->job->type == V3DV_JOB_TYPE_GPU_CL_SECONDARY && cl->size > 0)
+         needs_return_from_sub_list = true;
+
+   /*
+    * The CLE processor in the simulator tries to read V3D_CL_MAX_INSTR_SIZE
+    * bytes form the CL for each new instruction. If the last instruction in our
+    * CL is smaller than that, and there are not at least V3D_CL_MAX_INSTR_SIZE
+    * bytes until the end of the BO, it will read out of bounds and possibly
+    * cause a GMP violation interrupt to trigger. Ensure we always have at
+    * least that many bytes available to read with the last instruction.
+    */
+   space += V3D_CL_MAX_INSTR_SIZE;
+
+   if (v3dv_cl_offset(cl) + space <= cl->size)
       return;
 
-   cl_alloc_bo(cl, space, true);
+   if (needs_return_from_sub_list)
+      cl_emit(cl, RETURN_FROM_SUB_LIST, ret);
+
+   cl_alloc_bo(cl, space, !needs_return_from_sub_list);
 }

@@ -132,29 +132,6 @@ remove_dead_write_vars_local(void *mem_ctx, nir_shader *shader, nir_block *block
 
       nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
       switch (intrin->intrinsic) {
-      case nir_intrinsic_control_barrier:
-      case nir_intrinsic_group_memory_barrier:
-      case nir_intrinsic_memory_barrier: {
-         clear_unused_for_modes(&unused_writes, nir_var_shader_out |
-                                                nir_var_mem_ssbo |
-                                                nir_var_mem_shared |
-                                                nir_var_mem_global);
-         break;
-      }
-
-      case nir_intrinsic_memory_barrier_buffer:
-         clear_unused_for_modes(&unused_writes, nir_var_mem_ssbo |
-                                                nir_var_mem_global);
-         break;
-
-      case nir_intrinsic_memory_barrier_shared:
-         clear_unused_for_modes(&unused_writes, nir_var_mem_shared);
-         break;
-
-      case nir_intrinsic_memory_barrier_tcs_patch:
-         clear_unused_for_modes(&unused_writes, nir_var_shader_out);
-         break;
-
       case nir_intrinsic_scoped_barrier: {
          if (nir_intrinsic_memory_semantics(intrin) & NIR_MEMORY_RELEASE) {
             clear_unused_for_modes(&unused_writes,
@@ -166,6 +143,22 @@ remove_dead_write_vars_local(void *mem_ctx, nir_shader *shader, nir_block *block
       case nir_intrinsic_emit_vertex:
       case nir_intrinsic_emit_vertex_with_counter: {
          clear_unused_for_modes(&unused_writes, nir_var_shader_out);
+         break;
+      }
+
+      case nir_intrinsic_execute_callable:
+      case nir_intrinsic_rt_execute_callable: {
+         /* Mark payload as it can be used by the callee */
+         nir_deref_instr *src = nir_src_as_deref(intrin->src[1]);
+         clear_unused_for_read(&unused_writes, src);
+         break;
+      }
+
+      case nir_intrinsic_trace_ray:
+      case nir_intrinsic_rt_trace_ray: {
+         /* Mark payload as it can be used by the callees */
+         nir_deref_instr *src = nir_src_as_deref(intrin->src[10]);
+         clear_unused_for_read(&unused_writes, src);
          break;
       }
 

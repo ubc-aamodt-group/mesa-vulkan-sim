@@ -1,5 +1,10 @@
+.vscode*
 *.pyc
 *.pyo
 *.out
-build
-.vscode
+/build
+/lvpipe_build
+/lib
+/gpgpusimShaders/
+
+

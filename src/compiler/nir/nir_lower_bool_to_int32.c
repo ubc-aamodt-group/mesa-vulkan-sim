@@ -22,6 +22,7 @@
  */
 
 #include "nir.h"
+#include "nir_builder.h"
 
 static bool
 assert_ssa_def_is_not_1bit(nir_ssa_def *def, UNUSED void *unused)
@@ -65,9 +66,6 @@ lower_alu_instr(nir_alu_instr *alu)
       /* These we expect to have booleans but the opcode doesn't change */
       break;
 
-   case nir_op_f2b1: alu->op = nir_op_f2b32; break;
-   case nir_op_i2b1: alu->op = nir_op_i2b32; break;
-
    case nir_op_b2b32:
    case nir_op_b2b1:
       /* We're mutating instructions in a dominance-preserving order so our
@@ -103,6 +101,8 @@ lower_alu_instr(nir_alu_instr *alu)
 
    case nir_op_bcsel: alu->op = nir_op_b32csel; break;
 
+   case nir_op_fisfinite: alu->op = nir_op_fisfinite32; break;
+
    default:
       assert(alu->dest.dest.ssa.bit_size > 1);
       for (unsigned i = 0; i < op_info->num_inputs; i++)
@@ -117,62 +117,67 @@ lower_alu_instr(nir_alu_instr *alu)
 }
 
 static bool
-nir_lower_bool_to_int32_impl(nir_function_impl *impl)
+lower_tex_instr(nir_tex_instr *tex)
 {
    bool progress = false;
-
-   nir_foreach_block(block, impl) {
-      nir_foreach_instr_safe(instr, block) {
-         switch (instr->type) {
-         case nir_instr_type_alu:
-            progress |= lower_alu_instr(nir_instr_as_alu(instr));
-            break;
-
-         case nir_instr_type_load_const: {
-            nir_load_const_instr *load = nir_instr_as_load_const(instr);
-            if (load->def.bit_size == 1) {
-               nir_const_value *value = load->value;
-               for (unsigned i = 0; i < load->def.num_components; i++)
-                  load->value[i].u32 = value[i].b ? NIR_TRUE : NIR_FALSE;
-               load->def.bit_size = 32;
-               progress = true;
-            }
-            break;
-         }
-
-         case nir_instr_type_intrinsic:
-         case nir_instr_type_ssa_undef:
-         case nir_instr_type_phi:
-         case nir_instr_type_tex:
-            nir_foreach_ssa_def(instr, rewrite_1bit_ssa_def_to_32bit,
-                                &progress);
-            break;
-
-         default:
-            nir_foreach_ssa_def(instr, assert_ssa_def_is_not_1bit, NULL);
-         }
-      }
+   rewrite_1bit_ssa_def_to_32bit(&tex->dest.ssa, &progress);
+   if (tex->dest_type == nir_type_bool1) {
+      tex->dest_type = nir_type_bool32;
+      progress = true;
    }
-
-   if (progress) {
-      nir_metadata_preserve(impl, nir_metadata_block_index |
-                                  nir_metadata_dominance);
-   } else {
-      nir_metadata_preserve(impl, nir_metadata_all);
-   }
-
    return progress;
+}
+
+static bool
+nir_lower_bool_to_int32_instr(UNUSED nir_builder *b,
+                              nir_instr *instr,
+                              UNUSED void *cb_data)
+{
+   switch (instr->type) {
+   case nir_instr_type_alu:
+      return lower_alu_instr(nir_instr_as_alu(instr));
+
+   case nir_instr_type_load_const: {
+      nir_load_const_instr *load = nir_instr_as_load_const(instr);
+      if (load->def.bit_size == 1) {
+         nir_const_value *value = load->value;
+         for (unsigned i = 0; i < load->def.num_components; i++)
+            load->value[i].u32 = value[i].b ? NIR_TRUE : NIR_FALSE;
+         load->def.bit_size = 32;
+         return true;
+      }
+      return false;
+   }
+
+   case nir_instr_type_intrinsic:
+   case nir_instr_type_ssa_undef:
+   case nir_instr_type_phi: {
+      bool progress = false;
+      nir_foreach_ssa_def(instr, rewrite_1bit_ssa_def_to_32bit, &progress);
+      return progress;
+   }
+
+   case nir_instr_type_tex:
+      return lower_tex_instr(nir_instr_as_tex(instr));
+
+   default:
+      nir_foreach_ssa_def(instr, assert_ssa_def_is_not_1bit, NULL);
+      return false;
+   }
 }
 
 bool
 nir_lower_bool_to_int32(nir_shader *shader)
 {
-   bool progress = false;
-
-   nir_foreach_function(function, shader) {
-      if (function->impl && nir_lower_bool_to_int32_impl(function->impl))
-         progress = true;
+   nir_foreach_function(func, shader) {
+      for (unsigned idx = 0; idx < func->num_params; idx++) {
+         nir_parameter *param = &func->params[idx];
+         if (param->bit_size == 1)
+            param->bit_size = 32;
+      }
    }
-
-   return progress;
+   return nir_shader_instructions_pass(shader, nir_lower_bool_to_int32_instr,
+                                       nir_metadata_block_index |
+                                       nir_metadata_dominance,
+                                       NULL);
 }

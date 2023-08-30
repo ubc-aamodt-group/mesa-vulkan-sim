@@ -34,88 +34,53 @@
 typedef struct {
    const nir_lower_drawpixels_options *options;
    nir_shader   *shader;
-   nir_builder   b;
    nir_variable *texcoord, *texcoord_const, *scale, *bias, *tex, *pixelmap;
 } lower_drawpixels_state;
 
 static nir_ssa_def *
-get_texcoord(lower_drawpixels_state *state)
+get_texcoord(nir_builder *b, lower_drawpixels_state *state)
 {
    if (state->texcoord == NULL) {
-      nir_variable *texcoord = NULL;
-
-      /* find gl_TexCoord, if it exists: */
-      nir_foreach_shader_in_variable(var, state->shader) {
-         if (var->data.location == VARYING_SLOT_TEX0) {
-            texcoord = var;
-            break;
-         }
-      }
-
-      /* otherwise create it: */
-      if (texcoord == NULL) {
-         texcoord = nir_variable_create(state->shader,
-                                        nir_var_shader_in,
-                                        glsl_vec4_type(),
-                                        "gl_TexCoord");
-         texcoord->data.location = VARYING_SLOT_TEX0;
-      }
-
-      state->texcoord = texcoord;
+      state->texcoord = nir_get_variable_with_location(state->shader, nir_var_shader_in,
+                                                       VARYING_SLOT_TEX0, glsl_vec4_type());
    }
-   return nir_load_var(&state->b, state->texcoord);
-}
-
-static nir_variable *
-create_uniform(nir_shader *shader, const char *name,
-               const gl_state_index16 state_tokens[STATE_LENGTH])
-{
-   nir_variable *var = nir_variable_create(shader,
-                                           nir_var_uniform,
-                                           glsl_vec4_type(),
-                                           name);
-   var->num_state_slots = 1;
-   var->state_slots = ralloc_array(var, nir_state_slot, 1);
-   memcpy(var->state_slots[0].tokens, state_tokens,
-          sizeof(var->state_slots[0].tokens));
-   return var;
+   return nir_load_var(b, state->texcoord);
 }
 
 static nir_ssa_def *
-get_scale(lower_drawpixels_state *state)
+get_scale(nir_builder *b, lower_drawpixels_state *state)
 {
    if (state->scale == NULL) {
-      state->scale = create_uniform(state->shader, "gl_PTscale",
-                                    state->options->scale_state_tokens);
+      state->scale = nir_state_variable_create(state->shader, glsl_vec4_type(), "gl_PTscale",
+                                               state->options->scale_state_tokens);
    }
-   return nir_load_var(&state->b, state->scale);
+   return nir_load_var(b, state->scale);
 }
 
 static nir_ssa_def *
-get_bias(lower_drawpixels_state *state)
+get_bias(nir_builder *b, lower_drawpixels_state *state)
 {
    if (state->bias == NULL) {
-      state->bias = create_uniform(state->shader, "gl_PTbias",
-                                   state->options->bias_state_tokens);
+      state->bias = nir_state_variable_create(state->shader, glsl_vec4_type(), "gl_PTbias",
+                                              state->options->bias_state_tokens);
    }
-   return nir_load_var(&state->b, state->bias);
+   return nir_load_var(b, state->bias);
 }
 
 static nir_ssa_def *
-get_texcoord_const(lower_drawpixels_state *state)
+get_texcoord_const(nir_builder *b, lower_drawpixels_state *state)
 {
    if (state->texcoord_const == NULL) {
-      state->texcoord_const = create_uniform(state->shader,
-                                   "gl_MultiTexCoord0",
-                                   state->options->texcoord_state_tokens);
+      state->texcoord_const = nir_state_variable_create(state->shader, glsl_vec4_type(),
+                                                        "gl_MultiTexCoord0",
+                                                        state->options->texcoord_state_tokens);
    }
-   return nir_load_var(&state->b, state->texcoord_const);
+   return nir_load_var(b, state->texcoord_const);
 }
 
-static void
-lower_color(lower_drawpixels_state *state, nir_intrinsic_instr *intr)
+static bool
+lower_color(nir_builder *b, lower_drawpixels_state *state, nir_intrinsic_instr *intr)
 {
-   nir_builder *b = &state->b;
    nir_ssa_def *texcoord;
    nir_tex_instr *tex;
    nir_ssa_def *def;
@@ -124,7 +89,7 @@ lower_color(lower_drawpixels_state *state, nir_intrinsic_instr *intr)
 
    b->cursor = nir_before_instr(&intr->instr);
 
-   texcoord = get_texcoord(state);
+   texcoord = get_texcoord(b, state);
 
    const struct glsl_type *sampler2D =
       glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT);
@@ -146,24 +111,23 @@ lower_color(lower_drawpixels_state *state, nir_intrinsic_instr *intr)
    tex->op = nir_texop_tex;
    tex->sampler_dim = GLSL_SAMPLER_DIM_2D;
    tex->coord_components = 2;
-   tex->dest_type = nir_type_float;
-   tex->src[0].src_type = nir_tex_src_texture_deref;
-   tex->src[0].src = nir_src_for_ssa(&tex_deref->dest.ssa);
-   tex->src[1].src_type = nir_tex_src_sampler_deref;
-   tex->src[1].src = nir_src_for_ssa(&tex_deref->dest.ssa);
-   tex->src[2].src_type = nir_tex_src_coord;
-   tex->src[2].src =
-      nir_src_for_ssa(nir_channels(b, texcoord,
-                                   (1 << tex->coord_components) - 1));
+   tex->dest_type = nir_type_float32;
+   tex->src[0] = nir_tex_src_for_ssa(nir_tex_src_texture_deref,
+                                     &tex_deref->dest.ssa);
+   tex->src[1] = nir_tex_src_for_ssa(nir_tex_src_sampler_deref,
+                                     &tex_deref->dest.ssa);
+   tex->src[2] =
+      nir_tex_src_for_ssa(nir_tex_src_coord,
+                          nir_trim_vector(b, texcoord, tex->coord_components));
 
-   nir_ssa_dest_init(&tex->instr, &tex->dest, 4, 32, NULL);
+   nir_ssa_dest_init(&tex->instr, &tex->dest, 4, 32);
    nir_builder_instr_insert(b, &tex->instr);
    def = &tex->dest.ssa;
 
    /* Apply the scale and bias. */
    if (state->options->scale_and_bias) {
       /* MAD def, def, scale, bias; */
-      def = nir_ffma(b, def, get_scale(state), get_bias(state));
+      def = nir_ffma(b, def, get_scale(b, state), get_bias(b, state));
    }
 
    if (state->options->pixel_maps) {
@@ -188,15 +152,15 @@ lower_color(lower_drawpixels_state *state, nir_intrinsic_instr *intr)
       tex->coord_components = 2;
       tex->sampler_index = state->options->pixelmap_sampler;
       tex->texture_index = state->options->pixelmap_sampler;
-      tex->dest_type = nir_type_float;
-      tex->src[0].src_type = nir_tex_src_texture_deref;
-      tex->src[0].src = nir_src_for_ssa(&pixelmap_deref->dest.ssa);
-      tex->src[1].src_type = nir_tex_src_sampler_deref;
-      tex->src[1].src = nir_src_for_ssa(&pixelmap_deref->dest.ssa);
-      tex->src[2].src_type = nir_tex_src_coord;
-      tex->src[2].src = nir_src_for_ssa(nir_channels(b, def, 0x3));
+      tex->dest_type = nir_type_float32;
+      tex->src[0] = nir_tex_src_for_ssa(nir_tex_src_texture_deref,
+                                        &pixelmap_deref->dest.ssa);
+      tex->src[1] = nir_tex_src_for_ssa(nir_tex_src_sampler_deref,
+                                        &pixelmap_deref->dest.ssa);
+      tex->src[2] = nir_tex_src_for_ssa(nir_tex_src_coord,
+                                        nir_trim_vector(b, def, 2));
 
-      nir_ssa_dest_init(&tex->instr, &tex->dest, 4, 32, NULL);
+      nir_ssa_dest_init(&tex->instr, &tex->dest, 4, 32);
       nir_builder_instr_insert(b, &tex->instr);
       def_xy = &tex->dest.ssa;
 
@@ -206,11 +170,11 @@ lower_color(lower_drawpixels_state *state, nir_intrinsic_instr *intr)
       tex->sampler_dim = GLSL_SAMPLER_DIM_2D;
       tex->coord_components = 2;
       tex->sampler_index = state->options->pixelmap_sampler;
-      tex->dest_type = nir_type_float;
-      tex->src[0].src_type = nir_tex_src_coord;
-      tex->src[0].src = nir_src_for_ssa(nir_channels(b, def, 0xc));
+      tex->dest_type = nir_type_float32;
+      tex->src[0] = nir_tex_src_for_ssa(nir_tex_src_coord,
+                                        nir_channels(b, def, 0xc));
 
-      nir_ssa_dest_init(&tex->instr, &tex->dest, 4, 32, NULL);
+      nir_ssa_dest_init(&tex->instr, &tex->dest, 4, 32);
       nir_builder_instr_insert(b, &tex->instr);
       def_zw = &tex->dest.ssa;
 
@@ -222,71 +186,60 @@ lower_color(lower_drawpixels_state *state, nir_intrinsic_instr *intr)
                      nir_channel(b, def_zw, 1));
    }
 
-   nir_ssa_def_rewrite_uses(&intr->dest.ssa, nir_src_for_ssa(def));
-}
-
-static void
-lower_texcoord(lower_drawpixels_state *state, nir_intrinsic_instr *intr)
-{
-   state->b.cursor = nir_before_instr(&intr->instr);
-
-   nir_ssa_def *texcoord_const = get_texcoord_const(state);
-   nir_ssa_def_rewrite_uses(&intr->dest.ssa, nir_src_for_ssa(texcoord_const));
-}
-
-static bool
-lower_drawpixels_block(lower_drawpixels_state *state, nir_block *block)
-{
-   nir_foreach_instr_safe(instr, block) {
-      if (instr->type == nir_instr_type_intrinsic) {
-         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-
-         switch (intr->intrinsic) {
-         case nir_intrinsic_load_deref: {
-            nir_deref_instr *deref = nir_src_as_deref(intr->src[0]);
-            nir_variable *var = nir_deref_instr_get_variable(deref);
-
-            if (var->data.location == VARYING_SLOT_COL0) {
-               /* gl_Color should not have array/struct derefs: */
-               assert(deref->deref_type == nir_deref_type_var);
-               lower_color(state, intr);
-            } else if (var->data.location == VARYING_SLOT_TEX0) {
-               /* gl_TexCoord should not have array/struct derefs: */
-               assert(deref->deref_type == nir_deref_type_var);
-               lower_texcoord(state, intr);
-            }
-            break;
-         }
-
-         case nir_intrinsic_load_color0:
-            lower_color(state, intr);
-            break;
-
-         case nir_intrinsic_load_interpolated_input:
-         case nir_intrinsic_load_input: {
-            if (nir_intrinsic_io_semantics(intr).location == VARYING_SLOT_TEX0)
-               lower_texcoord(state, intr);
-            break;
-         }
-         default:
-            break;
-         }
-      }
-   }
-
+   nir_ssa_def_rewrite_uses(&intr->dest.ssa, def);
    return true;
 }
 
-static void
-lower_drawpixels_impl(lower_drawpixels_state *state, nir_function_impl *impl)
+static bool
+lower_texcoord(nir_builder *b, lower_drawpixels_state *state, nir_intrinsic_instr *intr)
 {
-   nir_builder_init(&state->b, impl);
+   b->cursor = nir_before_instr(&intr->instr);
 
-   nir_foreach_block(block, impl) {
-      lower_drawpixels_block(state, block);
+   nir_ssa_def *texcoord_const = get_texcoord_const(b, state);
+   nir_ssa_def_rewrite_uses(&intr->dest.ssa, texcoord_const);
+   return true;
+}
+
+static bool
+lower_drawpixels_instr(nir_builder *b, nir_instr *instr, void *cb_data)
+{
+   lower_drawpixels_state *state = cb_data;
+   if (instr->type != nir_instr_type_intrinsic)
+      return false;
+
+   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+
+   switch (intr->intrinsic) {
+   case nir_intrinsic_load_deref: {
+      nir_deref_instr *deref = nir_src_as_deref(intr->src[0]);
+      nir_variable *var = nir_deref_instr_get_variable(deref);
+
+      if (var->data.location == VARYING_SLOT_COL0) {
+         /* gl_Color should not have array/struct derefs: */
+         assert(deref->deref_type == nir_deref_type_var);
+         return lower_color(b, state, intr);
+      } else if (var->data.location == VARYING_SLOT_TEX0) {
+         /* gl_TexCoord should not have array/struct derefs: */
+         assert(deref->deref_type == nir_deref_type_var);
+         return lower_texcoord(b, state, intr);
+      }
+      break;
    }
-   nir_metadata_preserve(impl, nir_metadata_block_index |
-                               nir_metadata_dominance);
+
+   case nir_intrinsic_load_color0:
+      return lower_color(b, state, intr);
+
+   case nir_intrinsic_load_interpolated_input:
+   case nir_intrinsic_load_input: {
+      if (nir_intrinsic_io_semantics(intr).location == VARYING_SLOT_TEX0)
+         return lower_texcoord(b, state, intr);
+      break;
+   }
+   default:
+      break;
+   }
+
+   return false;
 }
 
 void
@@ -300,8 +253,8 @@ nir_lower_drawpixels(nir_shader *shader,
 
    assert(shader->info.stage == MESA_SHADER_FRAGMENT);
 
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         lower_drawpixels_impl(&state, function->impl);
-   }
+   nir_shader_instructions_pass(shader, lower_drawpixels_instr,
+                                nir_metadata_block_index |
+                                nir_metadata_dominance,
+                                &state);
 }

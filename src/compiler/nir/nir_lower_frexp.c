@@ -20,10 +20,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
- *
- * Authors:
- *    Jason Ekstrand (jason@jlekstrand.net)
- *    Samuel Pitoiset (samuel.pitoiset@gmail.com>
  */
 
 #include "nir.h"
@@ -35,7 +31,6 @@ lower_frexp_sig(nir_builder *b, nir_ssa_def *x)
    nir_ssa_def *abs_x = nir_fabs(b, x);
    nir_ssa_def *zero = nir_imm_floatN_t(b, 0, x->bit_size);
    nir_ssa_def *sign_mantissa_mask, *exponent_value;
-   nir_ssa_def *is_not_zero = nir_fneu(b, abs_x, zero);
 
    switch (x->bit_size) {
    case 16:
@@ -89,18 +84,31 @@ lower_frexp_sig(nir_builder *b, nir_ssa_def *x)
        * 32 bits using nir_unpack_64_2x32_split_y.
        */
       nir_ssa_def *upper_x = nir_unpack_64_2x32_split_y(b, x);
-      nir_ssa_def *zero32 = nir_imm_int(b, 0);
 
+      /* If x is ±0, ±Inf, or NaN, return x unmodified. */
       nir_ssa_def *new_upper =
-         nir_ior(b, nir_iand(b, upper_x, sign_mantissa_mask),
-                    nir_bcsel(b, is_not_zero, exponent_value, zero32));
+         nir_bcsel(b,
+                   nir_iand(b,
+                            nir_flt(b, zero, abs_x),
+                            nir_fisfinite(b, x)),
+                   nir_ior(b,
+                           nir_iand(b, upper_x, sign_mantissa_mask),
+                           exponent_value),
+                   upper_x);
 
       nir_ssa_def *lower_x = nir_unpack_64_2x32_split_x(b, x);
 
       return nir_pack_64_2x32_split(b, lower_x, new_upper);
    } else {
-      return nir_ior(b, nir_iand(b, x, sign_mantissa_mask),
-                        nir_bcsel(b, is_not_zero, exponent_value, zero));
+      /* If x is ±0, ±Inf, or NaN, return x unmodified. */
+      return nir_bcsel(b,
+                       nir_iand(b,
+                                nir_flt(b, zero, abs_x),
+                                nir_fisfinite(b, x)),
+                       nir_ior(b,
+                               nir_iand(b, x, sign_mantissa_mask),
+                               exponent_value),
+                       x);
    }
 }
 
@@ -151,58 +159,37 @@ lower_frexp_exp(nir_builder *b, nir_ssa_def *x)
 }
 
 static bool
-lower_frexp_impl(nir_function_impl *impl)
+lower_frexp_instr(nir_builder *b, nir_instr *instr, UNUSED void *cb_data)
 {
-   bool progress = false;
+   if (instr->type != nir_instr_type_alu)
+      return false;
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_alu_instr *alu_instr = nir_instr_as_alu(instr);
+   nir_ssa_def *lower;
 
-   nir_foreach_block(block, impl) {
-      nir_foreach_instr_safe(instr, block) {
-         if (instr->type != nir_instr_type_alu)
-            continue;
+   b->cursor = nir_before_instr(instr);
 
-         nir_alu_instr *alu_instr = nir_instr_as_alu(instr);
-         nir_ssa_def *lower;
-
-         b.cursor = nir_before_instr(instr);
-
-         switch (alu_instr->op) {
-         case nir_op_frexp_sig:
-            lower = lower_frexp_sig(&b, nir_ssa_for_alu_src(&b, alu_instr, 0));
-            break;
-         case nir_op_frexp_exp:
-            lower = lower_frexp_exp(&b, nir_ssa_for_alu_src(&b, alu_instr, 0));
-            break;
-         default:
-            continue;
-         }
-
-         nir_ssa_def_rewrite_uses(&alu_instr->dest.dest.ssa,
-                                  nir_src_for_ssa(lower));
-         nir_instr_remove(instr);
-         progress = true;
-      }
+   switch (alu_instr->op) {
+   case nir_op_frexp_sig:
+      lower = lower_frexp_sig(b, nir_ssa_for_alu_src(b, alu_instr, 0));
+      break;
+   case nir_op_frexp_exp:
+      lower = lower_frexp_exp(b, nir_ssa_for_alu_src(b, alu_instr, 0));
+      break;
+   default:
+      return false;
    }
 
-   if (progress) {
-      nir_metadata_preserve(impl, nir_metadata_block_index |
-                                  nir_metadata_dominance);
-   }
-
-   return progress;
+   nir_ssa_def_rewrite_uses(&alu_instr->dest.dest.ssa, lower);
+   nir_instr_remove(instr);
+   return true;
 }
 
 bool
 nir_lower_frexp(nir_shader *shader)
 {
-   bool progress = false;
-
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         progress |= lower_frexp_impl(function->impl);
-   }
-
-   return progress;
+   return nir_shader_instructions_pass(shader, lower_frexp_instr,
+                                       nir_metadata_block_index |
+                                       nir_metadata_dominance,
+                                       NULL);
 }

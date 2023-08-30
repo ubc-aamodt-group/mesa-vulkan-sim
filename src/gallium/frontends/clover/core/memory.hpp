@@ -107,6 +107,7 @@ namespace clover {
 
       std::map<device *,
                std::unique_ptr<root_resource>> resources;
+      std::mutex resources_mtx;
    };
 
    class sub_buffer : public buffer {
@@ -128,6 +129,7 @@ namespace clover {
       size_t _offset;
       std::map<device *,
                std::unique_ptr<sub_resource>> resources;
+      std::mutex resources_mtx;
    };
 
    class image : public memory_obj {
@@ -136,18 +138,21 @@ namespace clover {
             std::vector<cl_mem_properties> properties,
             cl_mem_flags flags,
             const cl_image_format *format,
-            size_t width, size_t height, size_t depth,
+            size_t width, size_t height, size_t depth, size_t array_size,
             size_t row_pitch, size_t slice_pitch, size_t size,
-            void *host_ptr);
+            void *host_ptr, cl_mem buffer);
 
    public:
       cl_image_format format() const;
+      virtual cl_uint dimensions() const = 0;
       size_t width() const;
       size_t height() const;
       size_t depth() const;
       size_t pixel_size() const;
       size_t row_pitch() const;
       size_t slice_pitch() const;
+      size_t array_size() const;
+      cl_mem buffer() const;
       virtual clover::resource &
       resource_in(command_queue &q);
       virtual clover::resource &
@@ -165,11 +170,57 @@ namespace clover {
       size_t _depth;
       size_t _row_pitch;
       size_t _slice_pitch;
+      size_t _array_size;
+      cl_mem _buffer;
       std::map<device *,
                std::unique_ptr<root_resource>> resources;
+      std::mutex resources_mtx;
    };
 
-   class image2d : public image {
+   template<cl_mem_object_type Type, cl_uint Dim>
+   class basic_image : public image {
+   public:
+      using image::image;
+      virtual cl_mem_object_type type() const {
+         return Type;
+      }
+      virtual cl_uint dimensions() const {
+         return Dim;
+      }
+   };
+
+   class image1d : public basic_image<CL_MEM_OBJECT_IMAGE1D, 1> {
+   public:
+      image1d(clover::context &ctx,
+              std::vector<cl_mem_properties> properties,
+              cl_mem_flags flags,
+              const cl_image_format *format,
+              size_t width, size_t row_pitch,
+              void *host_ptr);
+   };
+
+   class image1d_buffer : public basic_image<CL_MEM_OBJECT_IMAGE1D_BUFFER, 1> {
+   public:
+      image1d_buffer(clover::context &ctx,
+                     std::vector<cl_mem_properties> properties,
+                     cl_mem_flags flags,
+                     const cl_image_format *format,
+                     size_t width, size_t row_pitch,
+                     void *host_ptr, cl_mem buffer);
+   };
+
+   class image1d_array : public basic_image<CL_MEM_OBJECT_IMAGE1D_ARRAY, 1> {
+   public:
+      image1d_array(clover::context &ctx,
+                    std::vector<cl_mem_properties> properties,
+                    cl_mem_flags flags,
+                    const cl_image_format *format,
+                    size_t width,
+                    size_t array_size, size_t slice_pitch,
+                    void *host_ptr);
+   };
+
+   class image2d : public basic_image<CL_MEM_OBJECT_IMAGE2D, 2> {
    public:
       image2d(clover::context &ctx,
               std::vector<cl_mem_properties> properties,
@@ -177,11 +228,20 @@ namespace clover {
               const cl_image_format *format, size_t width,
               size_t height, size_t row_pitch,
               void *host_ptr);
-
-      virtual cl_mem_object_type type() const;
    };
 
-   class image3d : public image {
+   class image2d_array : public basic_image<CL_MEM_OBJECT_IMAGE2D_ARRAY, 2> {
+   public:
+      image2d_array(clover::context &ctx,
+                    std::vector<cl_mem_properties> properties,
+                    cl_mem_flags flags,
+                    const cl_image_format *format,
+                    size_t width, size_t height, size_t array_size,
+                    size_t row_pitch, size_t slice_pitch,
+                    void *host_ptr);
+   };
+
+   class image3d : public basic_image<CL_MEM_OBJECT_IMAGE3D, 3>{
    public:
       image3d(clover::context &ctx,
               std::vector<cl_mem_properties> properties,
@@ -190,8 +250,6 @@ namespace clover {
               size_t width, size_t height, size_t depth,
               size_t row_pitch, size_t slice_pitch,
               void *host_ptr);
-
-      virtual cl_mem_object_type type() const;
    };
 }
 

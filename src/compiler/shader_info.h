@@ -25,6 +25,8 @@
 #ifndef SHADER_INFO_H
 #define SHADER_INFO_H
 
+#include "util/bitset.h"
+#include "util/sha1/sha1.h"
 #include "shader_enums.h"
 #include <stdint.h>
 
@@ -32,10 +34,18 @@
 extern "C" {
 #endif
 
+#define MAX_XFB_BUFFERS        4
 #define MAX_INLINABLE_UNIFORMS 4
 
 struct spirv_supported_capabilities {
    bool address;
+   bool amd_fragment_mask;
+   bool amd_gcn_shader;
+   bool amd_image_gather_bias_lod;
+   bool amd_image_read_write_lod;
+   bool amd_shader_ballot;
+   bool amd_shader_explicit_vertex_parameter;
+   bool amd_trinary_minmax;
    bool atomic_storage;
    bool demote_to_helper_invocation;
    bool derivative_group;
@@ -44,62 +54,75 @@ struct spirv_supported_capabilities {
    bool descriptor_indexing;
    bool device_group;
    bool draw_parameters;
+   bool float_controls;
+   bool float16_atomic_add;
+   bool float16_atomic_min_max;
+   bool float16;
    bool float32_atomic_add;
-   bool float64;
+   bool float32_atomic_min_max;
    bool float64_atomic_add;
-   bool fragment_shader_sample_interlock;
+   bool float64_atomic_min_max;
+   bool float64;
+   bool fragment_barycentric;
+   bool fragment_density;
+   bool fragment_fully_covered;
    bool fragment_shader_pixel_interlock;
+   bool fragment_shader_sample_interlock;
    bool fragment_shading_rate;
    bool generic_pointers;
    bool geometry_streams;
+   bool groups;
+   bool image_atomic_int64;
    bool image_ms_array;
    bool image_read_without_format;
    bool image_write_without_format;
-   bool image_atomic_int64;
-   bool int8;
    bool int16;
-   bool int64;
    bool int64_atomics;
+   bool int64;
+   bool int8;
    bool integer_functions2;
-   bool kernel;
+   bool kernel_image_read_write;
    bool kernel_image;
+   bool kernel;
+   bool linkage;
    bool literal_sampler;
+   bool mesh_shading_nv;
+   bool mesh_shading;
    bool min_lod;
    bool multiview;
+   bool per_view_attributes_nv;
    bool physical_storage_buffer_address;
    bool post_depth_coverage;
    bool printf;
-   bool ray_tracing;
+   bool ray_cull_mask;
    bool ray_query;
+   bool ray_tracing;
    bool ray_traversal_primitive_culling;
+   bool ray_tracing_position_fetch;
    bool runtime_descriptor_array;
-   bool float_controls;
    bool shader_clock;
    bool shader_viewport_index_layer;
+   bool shader_viewport_mask_nv;
    bool sparse_residency;
    bool stencil_export;
-   bool storage_8bit;
    bool storage_16bit;
+   bool storage_8bit;
    bool storage_image_ms;
    bool subgroup_arithmetic;
    bool subgroup_ballot;
    bool subgroup_basic;
+   bool subgroup_dispatch;
    bool subgroup_quad;
+   bool subgroup_rotate;
    bool subgroup_shuffle;
+   bool subgroup_uniform_control_flow;
    bool subgroup_vote;
    bool tessellation;
    bool transform_feedback;
    bool variable_pointers;
-   bool vk_memory_model;
    bool vk_memory_model_device_scope;
-   bool float16;
-   bool amd_fragment_mask;
-   bool amd_gcn_shader;
-   bool amd_shader_ballot;
-   bool amd_trinary_minmax;
-   bool amd_image_read_write_lod;
-   bool amd_shader_explicit_vertex_parameter;
-   bool amd_image_gather_bias_lod;
+   bool vk_memory_model;
+   bool workgroup_memory_explicit_layout;
 
    bool intel_subgroup_shuffle;
    bool intel_subgroup_buffer_block_io;
@@ -111,8 +134,11 @@ typedef struct shader_info {
    /* Descriptive name provided by the client; may be NULL */
    const char *label;
 
-   /* Shader is internal, and should be ignored by things like NIR_PRINT */
+   /* Shader is internal, and should be ignored by things like NIR_DEBUG=print */
    bool internal;
+
+   /* SHA1 of the original source, used by shader detection in drivers. */
+   uint8_t source_sha1[SHA1_DIGEST_LENGTH];
 
    /** The shader stage, such as MESA_SHADER_VERTEX. */
    gl_shader_stage stage:8;
@@ -144,7 +170,25 @@ typedef struct shader_info {
    /* Which outputs are actually read */
    uint64_t outputs_read;
    /* Which system values are actually read */
-   uint64_t system_values_read;
+   BITSET_DECLARE(system_values_read, SYSTEM_VALUE_MAX);
+
+   /* Which I/O is per-primitive, for read/written information combine with
+    * the fields above.
+    */
+   uint64_t per_primitive_inputs;
+   uint64_t per_primitive_outputs;
+
+   /* Which I/O is per-view */
+   uint64_t per_view_outputs;
+
+   /* Which 16-bit inputs and outputs are used corresponding to
+    * VARYING_SLOT_VARn_16BIT.
+    */
+   uint16_t inputs_read_16bit;
+   uint16_t outputs_written_16bit;
+   uint16_t outputs_read_16bit;
+   uint16_t inputs_read_indirectly_16bit;
+   uint16_t outputs_accessed_indirectly_16bit;
 
    /* Which patch inputs are actually read */
    uint32_t patch_inputs_read;
@@ -163,20 +207,54 @@ typedef struct shader_info {
    uint64_t patch_outputs_accessed_indirectly;
 
    /** Bitfield of which textures are used */
-   uint32_t textures_used;
+   BITSET_DECLARE(textures_used, 128);
 
    /** Bitfield of which textures are used by texelFetch() */
-   uint32_t textures_used_by_txf;
+   BITSET_DECLARE(textures_used_by_txf, 128);
+
+   /** Bitfield of which samplers are used */
+   BITSET_DECLARE(samplers_used, 32);
 
    /** Bitfield of which images are used */
-   uint32_t images_used;
+   BITSET_DECLARE(images_used, 64);
    /** Bitfield of which images are buffers. */
-   uint32_t image_buffers;
+   BITSET_DECLARE(image_buffers, 64);
    /** Bitfield of which images are MSAA. */
-   uint32_t msaa_images;
+   BITSET_DECLARE(msaa_images, 64);
 
    /* SPV_KHR_float_controls: execution mode for floating point ops */
    uint16_t float_controls_execution_mode;
+
+   /**
+    * Size of shared variables accessed by compute/task/mesh shaders.
+    */
+   unsigned shared_size;
+
+   /**
+    * Size of task payload variables accessed by task/mesh shaders.
+    */
+   unsigned task_payload_size;
+
+   /**
+    * Number of ray tracing queries in the shader (counts all elements of all
+    * variables).
+    */
+   unsigned ray_queries;
+
+   /**
+    * Local workgroup size used by compute/task/mesh shaders.
+    */
+   uint16_t workgroup_size[3];
+
+   enum gl_subgroup_size subgroup_size;
+
+   /**
+    * Uses subgroup intrinsics which can communicate across a quad.
+    */
+   bool uses_wide_subgroup_intrinsics;
+
+   /* Transform feedback buffer strides in dwords, max. 1K - 4. */
+   uint8_t xfb_stride[MAX_XFB_BUFFERS];
 
    uint16_t inlinable_uniform_dw_offsets[MAX_INLINABLE_UNIFORMS];
    uint8_t num_inlinable_uniforms:4;
@@ -190,12 +268,18 @@ typedef struct shader_info {
    /* Whether or not this shader ever uses textureGather() */
    bool uses_texture_gather:1;
 
+   /* Whether texture size, levels, or samples is queried. */
+   bool uses_resource_info_query:1;
+
    /**
     * True if this shader uses the fddx/fddy opcodes.
     *
     * Note that this does not include the "fine" and "coarse" variants.
     */
    bool uses_fddx_fddy:1;
+
+   /** Has divergence analysis ever been run? */
+   bool divergence_analysis_run:1;
 
    /* Bitmask of bit-sizes used with ALU instructions. */
    uint8_t bit_sizes_float;
@@ -218,11 +302,63 @@ typedef struct shader_info {
     */
    bool io_lowered:1;
 
+   /** Has nir_lower_var_copies called. To avoid calling any
+    * lowering/optimization that would introduce any copy_deref later.
+    */
+   bool var_copies_lowered:1;
+
    /* Whether the shader writes memory, including transform feedback. */
    bool writes_memory:1;
 
    /* Whether gl_Layer is viewport-relative */
    bool layer_viewport_relative:1;
+
+   /* Whether explicit barriers are used */
+   bool uses_control_barrier : 1;
+   bool uses_memory_barrier : 1;
+
+   /* Whether ARB_bindless_texture ops or variables are used */
+   bool uses_bindless : 1;
+
+   /**
+    * Shared memory types have explicit layout set.  Used for
+    * SPV_KHR_workgroup_storage_explicit_layout.
+    */
+   bool shared_memory_explicit_layout:1;
+
+   /**
+    * Used for VK_KHR_zero_initialize_workgroup_memory.
+    */
+   bool zero_initialize_shared_memory:1;
+
+   /**
+    * Used for ARB_compute_variable_group_size.
+    */
+   bool workgroup_size_variable:1;
+
+   /**
+     * Set if this shader uses legacy (DX9 or ARB assembly) math rules.
+     *
+     * From the ARB_fragment_program specification:
+     *
+     *    "The following rules apply to multiplication:
+     *
+     *      1. <x> * <y> == <y> * <x>, for all <x> and <y>.
+     *      2. +/-0.0 * <x> = +/-0.0, at least for all <x> that correspond to
+     *         *representable numbers (IEEE "not a number" and "infinity"
+     *         *encodings may be exceptions).
+     *      3. +1.0 * <x> = <x>, for all <x>.""
+     *
+     * However, in effect this was due to DX9 semantics implying that 0*x=0 even
+     * for inf/nan if the hardware generated them instead of float_min/max.  So,
+     * you should not have an exception for inf/nan to rule 2 above.
+     *
+     * One implementation of this behavior would be to flush all generated NaNs
+     * to zero, at which point 0*Inf=Nan=0.  Most DX9/ARB-asm hardware did not
+     * generate NaNs, and the only way the GPU saw one was to possibly feed it
+     * in as a uniform.
+     */
+   bool use_legacy_math_rules;
 
    union {
       struct {
@@ -238,13 +374,16 @@ typedef struct shader_info {
 
          /* True if the shader writes position in window space coordinates pre-transform */
          bool window_space_position:1;
+
+         /** Is an edge flag input needed? */
+         bool needs_edge_flag:1;
       } vs;
 
       struct {
-         /** The output primitive type (GL enum value) */
+         /** The output primitive type */
          uint16_t output_primitive;
 
-         /** The input primitive type (GL enum value) */
+         /** The input primitive type */
          uint16_t input_primitive;
 
          /** The maximum number of vertices the geometry shader might write. */
@@ -267,6 +406,7 @@ typedef struct shader_info {
          bool uses_discard:1;
          bool uses_demote:1;
          bool uses_fbfetch_output:1;
+         bool fbfetch_coherent:1;
          bool color_is_dual_source:1;
 
          /**
@@ -351,13 +491,23 @@ typedef struct shader_info {
          unsigned color1_interp:3; /* glsl_interp_mode */
          bool color1_sample:1;
          bool color1_centroid:1;
+
+         /* Bitmask of gl_advanced_blend_mode values that may be used with this
+          * shader.
+          */
+         unsigned advanced_blend_modes;
+
+         /**
+          * Defined by AMD_shader_early_and_late_fragment_tests.
+          */
+         bool early_and_late_fragment_tests:1;
+         enum gl_frag_stencil_layout stencil_front_layout:3;
+         enum gl_frag_stencil_layout stencil_back_layout:3;
       } fs;
 
       struct {
-         uint16_t local_size[3];
-         uint16_t local_size_hint[3];
+         uint16_t workgroup_size_hint[3];
 
-         bool local_size_variable:1;
          uint8_t user_data_components_amd:3;
 
          /*
@@ -366,10 +516,10 @@ typedef struct shader_info {
           */
          enum gl_derivative_group derivative_group:2;
 
-         /**
-          * Size of shared variables accessed by the compute shader.
+         /*
+          * If the shader might run with shared mem on top of `shared_size`.
           */
-         unsigned shared_size;
+         bool has_variable_shared_mem:1;
 
          /**
           * pointer size is:
@@ -378,20 +528,15 @@ typedef struct shader_info {
           *   AddressingModelPhysical64: 64
           */
          unsigned ptr_size;
-
-         /**
-          * Uses subgroup intrinsics which can communicate across a quad.
-          */
-         bool uses_wide_subgroup_intrinsics;
       } cs;
 
       /* Applies to both TCS and TES. */
       struct {
-         uint16_t primitive_mode; /* GL_TRIANGLES, GL_QUADS or GL_ISOLINES */
+         enum tess_primitive_mode _primitive_mode;
 
          /** The number of vertices in the TCS output patch. */
          uint8_t tcs_vertices_out;
-         enum gl_tess_spacing spacing:2;
+         unsigned spacing:2; /*gl_tess_spacing*/
 
          /** Is the vertex order counterclockwise? */
          bool ccw:1;
@@ -407,6 +552,27 @@ typedef struct shader_info {
           */
          uint64_t tcs_cross_invocation_outputs_read;
       } tess;
+
+      /* Applies to MESH and TASK. */
+      struct {
+         /* Bit mask of MS outputs that are used
+          * with an index that is NOT the local invocation index.
+          */
+         uint64_t ms_cross_invocation_output_access;
+
+         /* Dimensions of task->mesh dispatch (EmitMeshTasksEXT)
+          * when they are known compile-time constants.
+          * 0 means they are not known.
+          */
+         uint32_t ts_mesh_dispatch_dimensions[3];
+
+         uint16_t max_vertices_out;
+         uint16_t max_primitives_out;
+         uint16_t primitive_type;  /* GL_POINTS, GL_LINES or GL_TRIANGLES. */
+
+         /* TODO: remove this when we stop supporting NV_mesh_shader. */
+         bool nv;
+      } mesh;
    };
 } shader_info;
 

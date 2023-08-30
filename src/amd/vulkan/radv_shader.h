@@ -28,572 +28,792 @@
 #ifndef RADV_SHADER_H
 #define RADV_SHADER_H
 
+#include "util/u_math.h"
+#include "vulkan/runtime/vk_pipeline_cache.h"
+#include "vulkan/vulkan.h"
 #include "ac_binary.h"
 #include "ac_shader_util.h"
-
 #include "amd_family.h"
 #include "radv_constants.h"
 
-#include "nir/nir.h"
-#include "vulkan/vulkan.h"
-#include "vulkan/util/vk_object.h"
-
-#include "aco_interface.h"
+#include "aco_shader_info.h"
 
 #define RADV_VERT_ATTRIB_MAX MAX2(VERT_ATTRIB_MAX, VERT_ATTRIB_GENERIC0 + MAX_VERTEX_ATTRIBS)
 
+struct radv_physical_device;
 struct radv_device;
+struct radv_pipeline;
+struct radv_ray_tracing_pipeline;
+struct radv_pipeline_key;
+struct radv_shader_args;
+struct radv_vs_input_state;
+struct radv_shader_args;
 
-struct radv_shader_module {
-	struct vk_object_base base;
-	struct nir_shader *nir;
-	unsigned char sha1[20];
-	uint32_t size;
-	char data[0];
+struct radv_ps_epilog_key {
+   uint32_t spi_shader_col_format;
+
+   /* Bitmasks, each bit represents one of the 8 MRTs. */
+   uint8_t color_is_int8;
+   uint8_t color_is_int10;
+   uint8_t enable_mrt_output_nan_fixup;
+
+   bool mrt0_is_dual_src;
 };
 
-struct radv_vs_out_key {
-	uint32_t as_es:1;
-	uint32_t as_ls:1;
-	uint32_t as_ngg:1;
-	uint32_t as_ngg_passthrough:1;
-	uint32_t export_prim_id:1;
-	uint32_t export_layer_id:1;
-	uint32_t export_clip_dists:1;
-	uint32_t export_viewport_index:1;
-};
+struct radv_pipeline_key {
+   uint32_t lib_flags : 4; /* VkGraphicsPipelineLibraryFlagBitsEXT */
 
-struct radv_vs_variant_key {
-	struct radv_vs_out_key out;
+   uint32_t has_multiview_view_index : 1;
+   uint32_t optimisations_disabled : 1;
+   uint32_t invariant_geom : 1;
+   uint32_t use_ngg : 1;
+   uint32_t adjust_frag_coord_z : 1;
+   uint32_t disable_aniso_single_level : 1;
+   uint32_t disable_sinking_load_input_fs : 1;
+   uint32_t image_2d_view_of_3d : 1;
+   uint32_t primitives_generated_query : 1;
+   uint32_t dynamic_patch_control_points : 1;
+   uint32_t dynamic_rasterization_samples : 1;
+   uint32_t dynamic_color_write_mask : 1;
+   uint32_t dynamic_provoking_vtx_mode : 1;
+   uint32_t dynamic_line_rast_mode : 1;
+   uint32_t tex_non_uniform : 1;
+   uint32_t enable_remove_point_size : 1;
+   uint32_t unknown_rast_prim : 1;
 
-	uint32_t instance_rate_inputs;
-	uint32_t instance_rate_divisors[MAX_VERTEX_ATTRIBS];
-	uint8_t vertex_attribute_formats[MAX_VERTEX_ATTRIBS];
-	uint32_t vertex_attribute_bindings[MAX_VERTEX_ATTRIBS];
-	uint32_t vertex_attribute_offsets[MAX_VERTEX_ATTRIBS];
-	uint32_t vertex_attribute_strides[MAX_VERTEX_ATTRIBS];
+   struct {
+      uint32_t instance_rate_inputs;
+      uint32_t instance_rate_divisors[MAX_VERTEX_ATTRIBS];
+      uint8_t vertex_attribute_formats[MAX_VERTEX_ATTRIBS];
+      uint32_t vertex_attribute_bindings[MAX_VERTEX_ATTRIBS];
+      uint32_t vertex_attribute_offsets[MAX_VERTEX_ATTRIBS];
+      uint32_t vertex_attribute_strides[MAX_VERTEX_ATTRIBS];
+      uint8_t vertex_binding_align[MAX_VBS];
+      uint32_t provoking_vtx_last : 1;
+      uint32_t has_prolog : 1;
+      uint8_t topology;
+   } vs;
 
-	/* For 2_10_10_10 formats the alpha is handled as unsigned by pre-vega HW.
-	 * so we may need to fix it up. */
-	enum ac_fetch_format alpha_adjust[MAX_VERTEX_ATTRIBS];
+   struct {
+      unsigned tess_input_vertices;
+   } tcs;
 
-	/* For some formats the channels have to be shuffled. */
-	uint32_t post_shuffle;
+   struct {
+      struct radv_ps_epilog_key epilog;
 
-	/* Output primitive type. */
-	uint8_t outprim;
-};
+      uint8_t num_samples;
+      bool sample_shading_enable;
 
-struct radv_tes_variant_key {
-	struct radv_vs_out_key out;
+      bool lower_discard_to_demote;
+      bool force_vrs_enabled;
 
-	uint8_t num_patches;
-};
+      /* Used to export alpha through MRTZ for alpha-to-coverage (GFX11+). */
+      bool alpha_to_coverage_via_mrtz;
 
-struct radv_tcs_variant_key {
-	struct radv_vs_variant_key vs_key;
-	unsigned primitive_mode;
-	unsigned input_vertices;
-	uint32_t tes_reads_tess_factors:1;
-};
+      bool dynamic_ps_epilog;
+      bool has_epilog;
 
-struct radv_fs_variant_key {
-	uint32_t col_format;
-	uint8_t log2_ps_iter_samples;
-	uint8_t num_samples;
-	uint32_t is_int8;
-	uint32_t is_int10;
-	bool is_dual_src;
-};
+      bool line_smooth_enabled;
+   } ps;
 
-struct radv_cs_variant_key {
-	uint8_t subgroup_size;
-};
-
-struct radv_shader_variant_key {
-	union {
-		struct radv_vs_variant_key vs;
-		struct radv_fs_variant_key fs;
-		struct radv_tes_variant_key tes;
-		struct radv_tcs_variant_key tcs;
-		struct radv_cs_variant_key cs;
-
-		/* A common prefix of the vs and tes keys. */
-		struct radv_vs_out_key vs_common_out;
-	};
-	bool has_multiview_view_index;
-};
-
-enum radv_compiler_debug_level {
-	RADV_COMPILER_DEBUG_LEVEL_PERFWARN,
-	RADV_COMPILER_DEBUG_LEVEL_ERROR,
+   struct {
+      /* Non-zero if a required subgroup size is specified via
+       * VK_EXT_subgroup_size_control.
+       */
+      uint8_t compute_subgroup_size;
+      bool require_full_subgroups;
+   } cs;
 };
 
 struct radv_nir_compiler_options {
-	struct radv_pipeline_layout *layout;
-	struct radv_shader_variant_key key;
-	bool explicit_scratch_args;
-	bool clamp_shadow_reference;
-	bool robust_buffer_access;
-	bool robust_buffer_access2;
-	bool adjust_frag_coord_z;
-	bool dump_shader;
-	bool dump_preoptir;
-	bool record_ir;
-	bool record_stats;
-	bool check_ir;
-	bool has_ls_vgpr_init_bug;
-	bool use_ngg_streamout;
-	bool enable_mrt_output_nan_fixup;
-	bool disable_optimizations; /* only used by ACO */
-	enum radeon_family family;
-	enum chip_class chip_class;
-	uint32_t tess_offchip_block_dw_size;
-	uint32_t address32_hi;
+   struct radv_pipeline_key key;
+   bool robust_buffer_access;
+   bool dump_shader;
+   bool dump_preoptir;
+   bool record_ir;
+   bool record_stats;
+   bool check_ir;
+   uint8_t enable_mrt_output_nan_fixup;
+   bool wgp_mode;
+   const struct radeon_info *info;
 
-	struct {
-		void (*func)(void *private_data,
-			     enum radv_compiler_debug_level level,
-			     const char *message);
-		void *private_data;
-	} debug;
+   struct {
+      void (*func)(void *private_data, enum aco_compiler_debug_level level, const char *message);
+      void *private_data;
+   } debug;
 };
 
 enum radv_ud_index {
-	AC_UD_SCRATCH_RING_OFFSETS = 0,
-	AC_UD_PUSH_CONSTANTS = 1,
-	AC_UD_INLINE_PUSH_CONSTANTS = 2,
-	AC_UD_INDIRECT_DESCRIPTOR_SETS = 3,
-	AC_UD_VIEW_INDEX = 4,
-	AC_UD_STREAMOUT_BUFFERS = 5,
-	AC_UD_NGG_GS_STATE = 6,
-	AC_UD_SHADER_START = 7,
-	AC_UD_VS_VERTEX_BUFFERS = AC_UD_SHADER_START,
-	AC_UD_VS_BASE_VERTEX_START_INSTANCE,
-	AC_UD_VS_MAX_UD,
-	AC_UD_PS_MAX_UD,
-	AC_UD_CS_GRID_SIZE = AC_UD_SHADER_START,
-	AC_UD_CS_MAX_UD,
-	AC_UD_GS_MAX_UD,
-	AC_UD_TCS_MAX_UD,
-	AC_UD_TES_MAX_UD,
-	AC_UD_MAX_UD = AC_UD_TCS_MAX_UD,
+   AC_UD_SCRATCH_RING_OFFSETS = 0,
+   AC_UD_PUSH_CONSTANTS = 1,
+   AC_UD_INLINE_PUSH_CONSTANTS = 2,
+   AC_UD_INDIRECT_DESCRIPTOR_SETS = 3,
+   AC_UD_VIEW_INDEX = 4,
+   AC_UD_STREAMOUT_BUFFERS = 5,
+   AC_UD_NGG_QUERY_STATE = 6,
+   AC_UD_NGG_PROVOKING_VTX = 7,
+   AC_UD_NGG_CULLING_SETTINGS = 8,
+   AC_UD_NGG_VIEWPORT = 9,
+   AC_UD_FORCE_VRS_RATES = 10,
+   AC_UD_TASK_RING_ENTRY = 11,
+   AC_UD_NUM_VERTS_PER_PRIM = 12,
+   AC_UD_SHADER_START = 13,
+   AC_UD_VS_VERTEX_BUFFERS = AC_UD_SHADER_START,
+   AC_UD_VS_BASE_VERTEX_START_INSTANCE,
+   AC_UD_VS_PROLOG_INPUTS,
+   AC_UD_VS_MAX_UD,
+   AC_UD_PS_EPILOG_PC,
+   AC_UD_PS_STATE,
+   AC_UD_PS_MAX_UD,
+   AC_UD_CS_GRID_SIZE = AC_UD_SHADER_START,
+   AC_UD_CS_SBT_DESCRIPTORS,
+   AC_UD_CS_RAY_LAUNCH_SIZE_ADDR,
+   AC_UD_CS_RAY_DYNAMIC_CALLABLE_STACK_BASE,
+   AC_UD_CS_TRAVERSAL_SHADER_ADDR,
+   AC_UD_CS_TASK_RING_OFFSETS,
+   AC_UD_CS_TASK_DRAW_ID,
+   AC_UD_CS_TASK_IB,
+   AC_UD_CS_MAX_UD,
+   AC_UD_GS_MAX_UD,
+   AC_UD_TCS_OFFCHIP_LAYOUT = AC_UD_VS_MAX_UD,
+   AC_UD_TCS_MAX_UD,
+   AC_UD_TES_NUM_PATCHES = AC_UD_SHADER_START,
+   AC_UD_TES_MAX_UD,
+   AC_UD_MAX_UD = AC_UD_CS_MAX_UD,
 };
 
-struct radv_stream_output {
-	uint8_t location;
-	uint8_t buffer;
-	uint16_t offset;
-	uint8_t component_mask;
-	uint8_t stream;
-};
+#define SET_SGPR_FIELD(field, value) (((unsigned)(value)&field##__MASK) << field##__SHIFT)
+
+#define TCS_OFFCHIP_LAYOUT_PATCH_CONTROL_POINTS__SHIFT 0
+#define TCS_OFFCHIP_LAYOUT_PATCH_CONTROL_POINTS__MASK  0x3f
+#define TCS_OFFCHIP_LAYOUT_NUM_PATCHES__SHIFT          6
+#define TCS_OFFCHIP_LAYOUT_NUM_PATCHES__MASK           0xff
+
+#define PS_STATE_NUM_SAMPLES__SHIFT    0
+#define PS_STATE_NUM_SAMPLES__MASK     0xf
+#define PS_STATE_LINE_RAST_MODE__SHIFT 4
+#define PS_STATE_LINE_RAST_MODE__MASK  0x3
+#define PS_STATE_PS_ITER_MASK__SHIFT   6
+#define PS_STATE_PS_ITER_MASK__MASK    0xffff
+#define PS_STATE_RAST_PRIM__SHIFT      22
+#define PS_STATE_RAST_PRIM__MASK       0x3
 
 struct radv_streamout_info {
-	uint16_t num_outputs;
-	struct radv_stream_output outputs[MAX_SO_OUTPUTS];
-	uint16_t strides[MAX_SO_BUFFERS];
-	uint32_t enabled_stream_buffers_mask;
+   uint16_t num_outputs;
+   uint16_t strides[MAX_SO_BUFFERS];
+   uint32_t enabled_stream_buffers_mask;
 };
 
 struct radv_userdata_info {
-	int8_t sgpr_idx;
-	uint8_t num_sgprs;
+   int8_t sgpr_idx;
+   uint8_t num_sgprs;
 };
 
 struct radv_userdata_locations {
-	struct radv_userdata_info descriptor_sets[MAX_SETS];
-	struct radv_userdata_info shader_data[AC_UD_MAX_UD];
-	uint32_t descriptor_sets_enabled;
+   struct radv_userdata_info descriptor_sets[MAX_SETS];
+   struct radv_userdata_info shader_data[AC_UD_MAX_UD];
+   uint32_t descriptor_sets_enabled;
 };
 
 struct radv_vs_output_info {
-	uint8_t	vs_output_param_offset[VARYING_SLOT_MAX];
-	uint8_t clip_dist_mask;
-	uint8_t cull_dist_mask;
-	uint8_t param_exports;
-	bool writes_pointsize;
-	bool writes_layer;
-	bool writes_viewport_index;
-	bool writes_primitive_shading_rate;
-	bool export_prim_id;
-	unsigned pos_exports;
+   uint8_t vs_output_param_offset[VARYING_SLOT_MAX];
+   uint8_t clip_dist_mask;
+   uint8_t cull_dist_mask;
+   uint8_t param_exports;
+   uint8_t prim_param_exports;
+   bool writes_pointsize;
+   bool writes_layer;
+   bool writes_layer_per_primitive;
+   bool writes_viewport_index;
+   bool writes_viewport_index_per_primitive;
+   bool writes_primitive_shading_rate;
+   bool writes_primitive_shading_rate_per_primitive;
+   bool export_prim_id;
+   bool export_clip_dists;
+   unsigned pos_exports;
 };
 
-struct radv_es_output_info {
-       uint32_t esgs_itemsize;
-};
-
-struct gfx9_gs_info {
-	uint32_t vgt_gs_onchip_cntl;
-	uint32_t vgt_gs_max_prims_per_subgroup;
-	uint32_t vgt_esgs_ring_itemsize;
-	uint32_t lds_size;
+struct radv_legacy_gs_info {
+   uint32_t vgt_gs_onchip_cntl;
+   uint32_t vgt_gs_max_prims_per_subgroup;
+   uint32_t vgt_esgs_ring_itemsize;
+   uint32_t lds_size;
+   uint32_t esgs_ring_size;
+   uint32_t gsvs_ring_size;
 };
 
 struct gfx10_ngg_info {
-	uint16_t ngg_emit_size; /* in dwords */
-	uint32_t hw_max_esverts;
-	uint32_t max_gsprims;
-	uint32_t max_out_verts;
-	uint32_t prim_amp_factor;
-	uint32_t vgt_esgs_ring_itemsize;
-	uint32_t esgs_ring_size;
-	bool max_vert_out_per_gs_instance;
+   uint16_t ngg_emit_size; /* in dwords */
+   uint32_t hw_max_esverts;
+   uint32_t max_gsprims;
+   uint32_t max_out_verts;
+   uint32_t prim_amp_factor;
+   uint32_t vgt_esgs_ring_itemsize;
+   uint32_t esgs_ring_size;
+   uint32_t scratch_lds_base;
+   bool max_vert_out_per_gs_instance;
+};
+
+enum radv_shader_type {
+   RADV_SHADER_TYPE_DEFAULT = 0,
+   RADV_SHADER_TYPE_GS_COPY,
+   RADV_SHADER_TYPE_TRAP_HANDLER,
 };
 
 struct radv_shader_info {
-	bool loads_push_constants;
-	bool loads_dynamic_offsets;
-	uint8_t min_push_constant_used;
-	uint8_t max_push_constant_used;
-	bool has_only_32bit_push_constants;
-	bool has_indirect_push_constants;
-	uint8_t num_inline_push_consts;
-	uint8_t base_inline_push_consts;
-	uint32_t desc_set_used_mask;
-	bool needs_multiview_view_index;
-	bool uses_invocation_id;
-	bool uses_prim_id;
-	uint8_t wave_size;
-	uint8_t ballot_bit_size;
-	struct radv_userdata_locations user_sgprs_locs;
-	unsigned num_user_sgprs;
-	unsigned num_input_sgprs;
-	unsigned num_input_vgprs;
-	unsigned private_mem_vgprs;
-	bool need_indirect_descriptor_sets;
-	bool is_ngg;
-	bool is_ngg_passthrough;
-	struct {
-		uint8_t input_usage_mask[RADV_VERT_ATTRIB_MAX];
-		uint8_t output_usage_mask[VARYING_SLOT_VAR31 + 1];
-		bool has_vertex_buffers; /* needs vertex buffers and base/start */
-		bool needs_draw_id;
-		bool needs_instance_id;
-		struct radv_vs_output_info outinfo;
-		struct radv_es_output_info es_info;
-		bool as_es;
-		bool as_ls;
-		bool export_prim_id;
-		uint8_t num_linked_outputs;
-	} vs;
-	struct {
-		uint8_t output_usage_mask[VARYING_SLOT_VAR31 + 1];
-		uint8_t num_stream_output_components[4];
-		uint8_t output_streams[VARYING_SLOT_VAR31 + 1];
-		uint8_t max_stream;
-		unsigned gsvs_vertex_size;
-		unsigned max_gsvs_emit_size;
-		unsigned vertices_in;
-		unsigned vertices_out;
-		unsigned output_prim;
-		unsigned invocations;
-		unsigned es_type; /* GFX9: VS or TES */
-		uint8_t num_linked_inputs;
-	} gs;
-	struct {
-		uint8_t output_usage_mask[VARYING_SLOT_VAR31 + 1];
-		struct radv_vs_output_info outinfo;
-		struct radv_es_output_info es_info;
-		bool as_es;
-		unsigned primitive_mode;
-		enum gl_tess_spacing spacing;
-		bool ccw;
-		bool point_mode;
-		bool export_prim_id;
-		uint8_t num_linked_inputs;
-		uint8_t num_linked_patch_inputs;
-		uint8_t num_linked_outputs;
-	} tes;
-	struct {
-		bool uses_sample_shading;
-		bool needs_sample_positions;
-		bool writes_memory;
-		bool writes_z;
-		bool writes_stencil;
-		bool writes_sample_mask;
-		bool has_pcoord;
-		bool prim_id_input;
-		bool layer_input;
-		bool viewport_index_input;
-		uint8_t num_input_clips_culls;
-		uint32_t input_mask;
-		uint32_t flat_shaded_mask;
-		uint32_t explicit_shaded_mask;
-		uint32_t float16_shaded_mask;
-		uint32_t num_interp;
-		uint32_t cb_shader_mask;
-		bool can_discard;
-		bool early_fragment_test;
-		bool post_depth_coverage;
-		bool reads_sample_mask_in;
-		uint8_t depth_layout;
-	} ps;
-	struct {
-		bool uses_grid_size;
-		bool uses_block_id[3];
-		bool uses_thread_id[3];
-		bool uses_local_invocation_idx;
-		unsigned block_size[3];
-	} cs;
-	struct {
-		uint64_t tes_inputs_read;
-		uint64_t tes_patch_inputs_read;
-		unsigned tcs_vertices_out;
-		uint32_t num_patches;
-		uint32_t num_lds_blocks;
-		uint8_t num_linked_inputs;
-		uint8_t num_linked_outputs;
-		uint8_t num_linked_patch_outputs;
-	} tcs;
+   uint64_t inline_push_constant_mask;
+   bool can_inline_all_push_constants;
+   bool loads_push_constants;
+   bool loads_dynamic_offsets;
+   uint32_t desc_set_used_mask;
+   bool uses_view_index;
+   bool uses_invocation_id;
+   bool uses_prim_id;
+   uint8_t wave_size;
+   uint8_t ballot_bit_size;
+   struct radv_userdata_locations user_sgprs_locs;
+   bool is_ngg;
+   bool is_ngg_passthrough;
+   bool has_ngg_culling;
+   bool has_ngg_early_prim_export;
+   bool has_ngg_prim_query;
+   bool has_ngg_xfb_query;
+   uint32_t num_tess_patches;
+   uint32_t esgs_itemsize; /* Only for VS or TES as ES */
+   struct radv_vs_output_info outinfo;
+   unsigned workgroup_size;
+   bool force_vrs_per_vertex;
+   gl_shader_stage stage;
+   gl_shader_stage next_stage;
+   enum radv_shader_type type;
+   uint32_t user_data_0;
 
-	struct radv_streamout_info so;
+   struct {
+      uint8_t input_usage_mask[RADV_VERT_ATTRIB_MAX];
+      uint8_t output_usage_mask[VARYING_SLOT_VAR31 + 1];
+      bool needs_draw_id;
+      bool needs_instance_id;
+      bool as_es;
+      bool as_ls;
+      bool tcs_in_out_eq;
+      uint64_t tcs_temp_only_input_mask;
+      uint8_t num_linked_outputs;
+      bool needs_base_instance;
+      bool use_per_attribute_vb_descs;
+      uint32_t vb_desc_usage_mask;
+      uint32_t input_slot_usage_mask;
+      bool has_prolog;
+      bool dynamic_inputs;
+      bool dynamic_num_verts_per_prim;
+   } vs;
+   struct {
+      uint8_t output_usage_mask[VARYING_SLOT_VAR31 + 1];
+      uint8_t num_stream_output_components[4];
+      uint8_t output_streams[VARYING_SLOT_VAR31 + 1];
+      uint8_t max_stream;
+      unsigned gsvs_vertex_size;
+      unsigned max_gsvs_emit_size;
+      unsigned vertices_in;
+      unsigned vertices_out;
+      unsigned input_prim;
+      unsigned output_prim;
+      unsigned invocations;
+      unsigned es_type; /* GFX9: VS or TES */
+      uint8_t num_linked_inputs;
+      bool has_ngg_pipeline_stat_query;
+   } gs;
+   struct {
+      uint8_t output_usage_mask[VARYING_SLOT_VAR31 + 1];
+      bool as_es;
+      enum tess_primitive_mode _primitive_mode;
+      enum gl_tess_spacing spacing;
+      bool ccw;
+      bool point_mode;
+      uint8_t num_linked_inputs;
+      uint8_t num_linked_patch_inputs;
+      uint8_t num_linked_outputs;
+   } tes;
+   struct {
+      bool uses_sample_shading;
+      bool needs_sample_positions;
+      bool needs_poly_line_smooth;
+      bool writes_memory;
+      bool writes_z;
+      bool writes_stencil;
+      bool writes_sample_mask;
+      bool writes_mrt0_alpha;
+      bool has_pcoord;
+      bool prim_id_input;
+      bool layer_input;
+      bool viewport_index_input;
+      uint8_t num_input_clips_culls;
+      uint32_t input_mask;
+      uint32_t input_per_primitive_mask;
+      uint32_t flat_shaded_mask;
+      uint32_t explicit_shaded_mask;
+      uint32_t per_vertex_shaded_mask;
+      uint32_t float16_shaded_mask;
+      uint32_t num_interp;
+      uint32_t num_prim_interp;
+      bool can_discard;
+      bool early_fragment_test;
+      bool post_depth_coverage;
+      bool reads_sample_mask_in;
+      bool reads_front_face;
+      bool reads_sample_id;
+      bool reads_frag_shading_rate;
+      bool reads_barycentric_model;
+      bool reads_persp_sample;
+      bool reads_persp_center;
+      bool reads_persp_centroid;
+      bool reads_linear_sample;
+      bool reads_linear_center;
+      bool reads_linear_centroid;
+      bool reads_fully_covered;
+      uint8_t reads_frag_coord_mask;
+      uint8_t reads_sample_pos_mask;
+      uint8_t depth_layout;
+      bool allow_flat_shading;
+      bool has_epilog;
+      bool mrt0_is_dual_src;
+      unsigned spi_ps_input;
+      unsigned colors_written;
+      unsigned spi_shader_col_format;
+      uint8_t color0_written;
+      bool load_provoking_vtx;
+      bool load_rasterization_prim;
+      uint32_t db_shader_control; /* DB_SHADER_CONTROL without intrinsic rate overrides */
+   } ps;
+   struct {
+      bool uses_grid_size;
+      bool uses_block_id[3];
+      bool uses_thread_id[3];
+      bool uses_local_invocation_idx;
+      unsigned block_size[3];
 
-	struct gfx9_gs_info gs_ring_info;
-	struct gfx10_ngg_info ngg_info;
+      uint8_t subgroup_size;
 
-	unsigned float_controls_mode;
+      bool is_rt_shader;
+      bool uses_ray_launch_size;
+      bool uses_dynamic_rt_callable_stack;
+      bool uses_rt;
+      bool uses_full_subgroups;
+      bool linear_taskmesh_dispatch;
+
+      bool regalloc_hang_bug;
+   } cs;
+   struct {
+      uint64_t tes_inputs_read;
+      uint64_t tes_patch_inputs_read;
+      unsigned tcs_vertices_out;
+      uint32_t num_lds_blocks;
+      uint8_t num_linked_inputs;
+      uint8_t num_linked_outputs;
+      uint8_t num_linked_patch_outputs;
+      bool tes_reads_tess_factors : 1;
+   } tcs;
+   struct {
+      enum mesa_prim output_prim;
+      bool needs_ms_scratch_ring;
+      bool has_task; /* If mesh shader is used together with a task shader. */
+   } ms;
+
+   struct radv_streamout_info so;
+
+   struct radv_legacy_gs_info gs_ring_info;
+   struct gfx10_ngg_info ngg_info;
 };
 
-enum radv_shader_binary_type {
-	RADV_BINARY_TYPE_LEGACY,
-	RADV_BINARY_TYPE_RTLD
+struct radv_vs_input_state {
+   uint32_t attribute_mask;
+
+   uint32_t instance_rate_inputs;
+   uint32_t nontrivial_divisors;
+   uint32_t zero_divisors;
+   uint32_t post_shuffle;
+   /* Having two separate fields instead of a single uint64_t makes it easier to remove attributes
+    * using bitwise arithmetic.
+    */
+   uint32_t alpha_adjust_lo;
+   uint32_t alpha_adjust_hi;
+   uint32_t nontrivial_formats;
+
+   uint8_t bindings[MAX_VERTEX_ATTRIBS];
+   uint32_t divisors[MAX_VERTEX_ATTRIBS];
+   uint32_t offsets[MAX_VERTEX_ATTRIBS];
+   uint8_t formats[MAX_VERTEX_ATTRIBS];
+   uint8_t format_align_req_minus_1[MAX_VERTEX_ATTRIBS];
+   uint8_t format_sizes[MAX_VERTEX_ATTRIBS];
+
+   bool bindings_match_attrib;
 };
+
+struct radv_vs_prolog_key {
+   const struct radv_vs_input_state *state;
+   unsigned num_attributes;
+   uint32_t misaligned_mask;
+   bool as_ls;
+   bool is_ngg;
+   bool wave32;
+   gl_shader_stage next_stage;
+};
+
+enum radv_shader_binary_type { RADV_BINARY_TYPE_LEGACY, RADV_BINARY_TYPE_RTLD };
 
 struct radv_shader_binary {
-	enum radv_shader_binary_type type;
-	gl_shader_stage stage;
-	bool is_gs_copy_shader;
+   uint32_t type; /* enum radv_shader_binary_type */
 
-	struct radv_shader_info info;
+   struct ac_shader_config config;
+   struct radv_shader_info info;
 
-	/* Self-referential size so we avoid consistency issues. */
-	uint32_t total_size;
+   /* Self-referential size so we avoid consistency issues. */
+   uint32_t total_size;
 };
 
 struct radv_shader_binary_legacy {
-	struct radv_shader_binary base;
-	struct ac_shader_config config;
-	unsigned code_size;
-	unsigned exec_size;
-	unsigned ir_size;
-	unsigned disasm_size;
-	unsigned stats_size;
+   struct radv_shader_binary base;
+   uint32_t code_size;
+   uint32_t exec_size;
+   uint32_t ir_size;
+   uint32_t disasm_size;
+   uint32_t stats_size;
+   uint32_t padding;
 
-	/* data has size of stats_size + code_size + ir_size + disasm_size + 2,
-	 * where the +2 is for 0 of the ir strings. */
-	uint8_t data[0];
+   /* data has size of stats_size + code_size + ir_size + disasm_size + 2,
+    * where the +2 is for 0 of the ir strings. */
+   uint8_t data[0];
 };
+static_assert(sizeof(struct radv_shader_binary_legacy) == offsetof(struct radv_shader_binary_legacy, data),
+              "Unexpected padding");
 
 struct radv_shader_binary_rtld {
-	struct radv_shader_binary base;
-	unsigned elf_size;
-	unsigned llvm_ir_size;
-	uint8_t data[0];
+   struct radv_shader_binary base;
+   unsigned elf_size;
+   unsigned llvm_ir_size;
+   uint8_t data[0];
 };
 
-struct radv_shader_variant {
-	uint32_t ref_count;
+struct radv_shader_part_binary {
+   struct {
+      uint32_t spi_shader_col_format;
+   } info;
 
-	struct radeon_winsys_bo *bo;
-	uint64_t bo_offset;
-	struct ac_shader_config config;
-	uint32_t code_size;
-	uint32_t exec_size;
-	struct radv_shader_info info;
+   uint8_t num_sgprs;
+   uint8_t num_vgprs;
+   unsigned code_size;
+   unsigned disasm_size;
 
-	/* debug only */
-	char *spirv;
-	uint32_t spirv_size;
-	char *nir_string;
-	char *disasm_string;
-	char *ir_string;
-	struct aco_compiler_statistics *statistics;
+   /* Self-referential size so we avoid consistency issues. */
+   uint32_t total_size;
 
-	struct list_head slab_list;
+   uint8_t data[0];
 };
 
-struct radv_shader_slab {
-	struct list_head slabs;
-	struct list_head shaders;
-	struct radeon_winsys_bo *bo;
-	uint64_t size;
-	char *ptr;
+struct radv_shader_arena {
+   struct list_head list;
+   struct list_head entries;
+   struct radeon_winsys_bo *bo;
+   char *ptr;
 };
 
-void
-radv_optimize_nir(struct nir_shader *shader, bool optimize_conservatively,
-		  bool allow_copies);
-bool
-radv_nir_lower_ycbcr_textures(nir_shader *shader,
-                             const struct radv_pipeline_layout *layout);
+union radv_shader_arena_block {
+   struct list_head pool;
+   struct {
+      /* List of blocks in the arena, sorted by address. */
+      struct list_head list;
+      /* For holes, a list_head for the free-list. For allocations, freelist.prev=NULL and
+       * freelist.next is a pointer associated with the allocation.
+       */
+      struct list_head freelist;
+      struct radv_shader_arena *arena;
+      uint32_t offset;
+      uint32_t size;
+   };
+};
 
-nir_shader *
-radv_shader_compile_to_nir(struct radv_device *device,
-			   struct radv_shader_module *module,
-			   const char *entrypoint_name,
-			   gl_shader_stage stage,
-			   const VkSpecializationInfo *spec_info,
-			   const VkPipelineCreateFlags flags,
-			   const struct radv_pipeline_layout *layout,
-			   unsigned subgroup_size, unsigned ballot_bit_size);
+struct radv_shader {
+   struct vk_pipeline_cache_object base;
 
-void
-radv_destroy_shader_slabs(struct radv_device *device);
+   struct radeon_winsys_bo *bo;
+   union radv_shader_arena_block *alloc;
+   uint64_t va;
 
-VkResult
-radv_create_shaders(struct radv_pipeline *pipeline,
-		    struct radv_device *device,
-		    struct radv_pipeline_cache *cache,
-		    const struct radv_pipeline_key *key,
-		    const VkPipelineShaderStageCreateInfo **pStages,
-		    const VkPipelineCreateFlags flags,
-		    VkPipelineCreationFeedbackEXT *pipeline_feedback,
-		    VkPipelineCreationFeedbackEXT **stage_feedbacks);
+   uint64_t upload_seq;
 
-struct radv_shader_variant *
-radv_shader_variant_create(struct radv_device *device,
-			   const struct radv_shader_binary *binary,
-			   bool keep_shader_info);
-struct radv_shader_variant *
-radv_shader_variant_compile(struct radv_device *device,
-			    struct radv_shader_module *module,
-			    struct nir_shader *const *shaders,
-			    int shader_count,
-			    struct radv_pipeline_layout *layout,
-			    const struct radv_shader_variant_key *key,
-			    struct radv_shader_info *info,
-			    bool keep_shader_info, bool keep_statistic_info,
-			    bool disable_optimizations,
-			    struct radv_shader_binary **binary_out);
+   struct ac_shader_config config;
+   uint32_t code_size;
+   uint32_t exec_size;
+   struct radv_shader_info info;
 
-struct radv_shader_variant *
-radv_create_gs_copy_shader(struct radv_device *device, struct nir_shader *nir,
-			   struct radv_shader_info *info,
-			   struct radv_shader_binary **binary_out,
-			   bool multiview,  bool keep_shader_info,
-			   bool keep_statistic_info,
-			   bool disable_optimizations);
+   uint8_t sha1[SHA1_DIGEST_LENGTH];
+   void *code;
 
-struct radv_shader_variant *
-radv_create_trap_handler_shader(struct radv_device *device);
+   /* debug only */
+   char *spirv;
+   uint32_t spirv_size;
+   char *nir_string;
+   char *disasm_string;
+   char *ir_string;
+   uint32_t *statistics;
+};
 
-void
-radv_shader_variant_destroy(struct radv_device *device,
-			    struct radv_shader_variant *variant);
+struct radv_shader_part {
+   uint32_t ref_count;
 
+   uint64_t va;
 
-unsigned
-radv_get_max_waves(struct radv_device *device,
-                   struct radv_shader_variant *variant,
-                   gl_shader_stage stage);
+   struct radeon_winsys_bo *bo;
+   union radv_shader_arena_block *alloc;
+   uint32_t code_size;
+   uint32_t rsrc1;
+   bool nontrivial_divisors;
+   uint32_t spi_shader_col_format;
+   uint64_t upload_seq;
 
-unsigned
-radv_get_max_workgroup_size(enum chip_class chip_class,
-                            gl_shader_stage stage,
-                            const unsigned *sizes);
+   /* debug only */
+   char *disasm_string;
+};
 
-const char *
-radv_get_shader_name(struct radv_shader_info *info,
-		     gl_shader_stage stage);
+struct radv_pipeline_layout;
+struct radv_pipeline_stage;
 
-bool
-radv_can_dump_shader(struct radv_device *device,
-		     struct radv_shader_module *module,
-		     bool is_gs_copy_shader);
+void radv_optimize_nir(struct nir_shader *shader, bool optimize_conservatively);
+void radv_optimize_nir_algebraic(nir_shader *shader, bool opt_offsets);
 
-bool
-radv_can_dump_shader_stats(struct radv_device *device,
-			   struct radv_shader_module *module);
+void radv_postprocess_nir(struct radv_device *device, const struct radv_pipeline_layout *pipeline_layout,
+                          const struct radv_pipeline_key *pipeline_key, unsigned last_vgt_api_stage,
+                          struct radv_pipeline_stage *stage);
 
-VkResult
-radv_dump_shader_stats(struct radv_device *device,
-		       struct radv_pipeline *pipeline,
-		       gl_shader_stage stage, FILE *output);
+nir_shader *radv_parse_rt_stage(struct radv_device *device, const VkPipelineShaderStageCreateInfo *sinfo,
+                                const struct radv_pipeline_key *key);
 
-static inline unsigned
-calculate_tess_lds_size(enum chip_class chip_class,
-			unsigned tcs_num_input_vertices,
-			unsigned tcs_num_output_vertices,
-			unsigned tcs_num_inputs,
-			unsigned tcs_num_patches,
-			unsigned tcs_num_outputs,
-			unsigned tcs_num_patch_outputs)
+void radv_nir_lower_rt_abi(nir_shader *shader, const VkRayTracingPipelineCreateInfoKHR *pCreateInfo,
+                           const struct radv_shader_args *args, const struct radv_shader_info *info,
+                           uint32_t *stack_size, bool resume_shader);
+
+struct radv_pipeline_stage;
+
+nir_shader *radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_pipeline_stage *stage,
+                                     const struct radv_pipeline_key *key, bool is_internal);
+
+void radv_init_shader_arenas(struct radv_device *device);
+void radv_destroy_shader_arenas(struct radv_device *device);
+VkResult radv_init_shader_upload_queue(struct radv_device *device);
+void radv_destroy_shader_upload_queue(struct radv_device *device);
+
+struct radv_shader_args;
+
+struct radv_shader *radv_shader_create(struct radv_device *device, const struct radv_shader_binary *binary);
+
+struct radv_shader *radv_shader_create_cached(struct radv_device *device, struct vk_pipeline_cache *cache,
+                                              const struct radv_shader_binary *binary);
+
+struct radv_shader *radv_shader_nir_to_asm(struct radv_device *device, struct vk_pipeline_cache *cache,
+                                           struct radv_pipeline_stage *stage, struct nir_shader *const *shaders,
+                                           int shader_count, const struct radv_pipeline_key *key, bool keep_shader_info,
+                                           bool keep_statistic_info, struct radv_shader_binary **binary_out);
+
+VkResult radv_shader_wait_for_upload(struct radv_device *device, uint64_t seq);
+
+struct radv_shader_dma_submission *radv_shader_dma_pop_submission(struct radv_device *device);
+
+void radv_shader_dma_push_submission(struct radv_device *device, struct radv_shader_dma_submission *submission,
+                                     uint64_t seq);
+
+struct radv_shader_dma_submission *
+radv_shader_dma_get_submission(struct radv_device *device, struct radeon_winsys_bo *bo, uint64_t va, uint64_t size);
+
+bool radv_shader_dma_submit(struct radv_device *device, struct radv_shader_dma_submission *submission,
+                            uint64_t *upload_seq_out);
+
+union radv_shader_arena_block *radv_alloc_shader_memory(struct radv_device *device, uint32_t size, void *ptr);
+void radv_free_shader_memory(struct radv_device *device, union radv_shader_arena_block *alloc);
+
+struct radv_shader *radv_create_trap_handler_shader(struct radv_device *device);
+
+struct radv_shader *radv_create_rt_prolog(struct radv_device *device);
+
+struct radv_shader_part *radv_shader_part_create(struct radv_device *device, struct radv_shader_part_binary *binary,
+                                                 unsigned wave_size);
+
+struct radv_shader_part *radv_create_vs_prolog(struct radv_device *device, const struct radv_vs_prolog_key *key);
+
+struct radv_shader_part *radv_create_ps_epilog(struct radv_device *device, const struct radv_ps_epilog_key *key,
+                                               struct radv_shader_part_binary **binary_out);
+
+void radv_shader_part_destroy(struct radv_device *device, struct radv_shader_part *shader_part);
+
+uint64_t radv_shader_get_va(const struct radv_shader *shader);
+struct radv_shader *radv_find_shader(struct radv_device *device, uint64_t pc);
+
+unsigned radv_get_max_waves(const struct radv_device *device, struct radv_shader *shader, gl_shader_stage stage);
+
+const char *radv_get_shader_name(const struct radv_shader_info *info, gl_shader_stage stage);
+
+unsigned radv_compute_spi_ps_input(const struct radv_pipeline_key *pipeline_key, const struct radv_shader_info *info);
+
+bool radv_can_dump_shader(struct radv_device *device, nir_shader *nir, bool meta_shader);
+
+bool radv_can_dump_shader_stats(struct radv_device *device, nir_shader *nir);
+
+VkResult radv_dump_shader_stats(struct radv_device *device, struct radv_pipeline *pipeline, struct radv_shader *shader,
+                                gl_shader_stage stage, FILE *output);
+
+extern const struct vk_pipeline_cache_object_ops radv_shader_ops;
+
+static inline struct radv_shader *
+radv_shader_ref(struct radv_shader *shader)
 {
-	unsigned input_vertex_size = tcs_num_inputs * 16;
-	unsigned output_vertex_size = tcs_num_outputs * 16;
+   vk_pipeline_cache_object_ref(&shader->base);
+   return shader;
+}
 
-	unsigned input_patch_size = tcs_num_input_vertices * input_vertex_size;
+static inline void
+radv_shader_unref(struct radv_device *device, struct radv_shader *shader)
+{
+   vk_pipeline_cache_object_unref((struct vk_device *)device, &shader->base);
+}
 
-	unsigned pervertex_output_patch_size = tcs_num_output_vertices * output_vertex_size;
-	unsigned output_patch_size = pervertex_output_patch_size + tcs_num_patch_outputs * 16;
+static inline struct radv_shader_part *
+radv_shader_part_ref(struct radv_shader_part *shader_part)
+{
+   assert(shader_part && shader_part->ref_count >= 1);
+   p_atomic_inc(&shader_part->ref_count);
+   return shader_part;
+}
 
-	unsigned output_patch0_offset = input_patch_size * tcs_num_patches;
-
-	unsigned lds_size = output_patch0_offset + output_patch_size * tcs_num_patches;
-
-	if (chip_class >= GFX7) {
-		assert(lds_size <= 65536);
-		lds_size = align(lds_size, 512) / 512;
-	} else {
-		assert(lds_size <= 32768);
-		lds_size = align(lds_size, 256) / 256;
-	}
-
-	return lds_size;
+static inline void
+radv_shader_part_unref(struct radv_device *device, struct radv_shader_part *shader_part)
+{
+   assert(shader_part && shader_part->ref_count >= 1);
+   if (p_atomic_dec_zero(&shader_part->ref_count))
+      radv_shader_part_destroy(device, shader_part);
 }
 
 static inline unsigned
-get_tcs_num_patches(unsigned tcs_num_input_vertices,
-			unsigned tcs_num_output_vertices,
-			unsigned tcs_num_inputs,
-			unsigned tcs_num_outputs,
-			unsigned tcs_num_patch_outputs,
-			unsigned tess_offchip_block_dw_size,
-			enum chip_class chip_class,
-			enum radeon_family family)
+get_tcs_input_vertex_stride(unsigned tcs_num_inputs)
 {
-	uint32_t input_vertex_size = tcs_num_inputs * 16;
-	uint32_t input_patch_size = tcs_num_input_vertices * input_vertex_size;
-	uint32_t output_vertex_size = tcs_num_outputs * 16;
-	uint32_t pervertex_output_patch_size = tcs_num_output_vertices * output_vertex_size;
-	uint32_t output_patch_size = pervertex_output_patch_size + tcs_num_patch_outputs * 16;
+   unsigned stride = tcs_num_inputs * 16;
 
-	/* Ensure that we only need one wave per SIMD so we don't need to check
-	 * resource usage. Also ensures that the number of tcs in and out
-	 * vertices per threadgroup are at most 256.
-	 */
-	unsigned num_patches = 64 / MAX2(tcs_num_input_vertices, tcs_num_output_vertices) * 4;
-	/* Make sure that the data fits in LDS. This assumes the shaders only
-	 * use LDS for the inputs and outputs.
-	 */
-	unsigned hardware_lds_size = 32768;
+   /* Add 1 dword to reduce LDS bank conflicts. */
+   if (stride)
+      stride += 4;
 
-	/* Looks like STONEY hangs if we use more than 32 KiB LDS in a single
-	 * threadgroup, even though there is more than 32 KiB LDS.
-	 *
-	 * Test: dEQP-VK.tessellation.shader_input_output.barrier
-	 */
-	if (chip_class >= GFX7 && family != CHIP_STONEY)
-		hardware_lds_size = 65536;
-
-	num_patches = MIN2(num_patches, hardware_lds_size / (input_patch_size + output_patch_size));
-	/* Make sure the output data fits in the offchip buffer */
-	num_patches = MIN2(num_patches, (tess_offchip_block_dw_size * 4) / output_patch_size);
-	/* Not necessary for correctness, but improves performance. The
-	 * specific value is taken from the proprietary driver.
-	 */
-	num_patches = MIN2(num_patches, 40);
-
-	/* GFX6 bug workaround - limit LS-HS threadgroups to only one wave. */
-	if (chip_class == GFX6) {
-		unsigned one_wave = 64 / MAX2(tcs_num_input_vertices, tcs_num_output_vertices);
-		num_patches = MIN2(num_patches, one_wave);
-	}
-	return num_patches;
+   return stride;
 }
 
-void
-radv_lower_io(struct radv_device *device, nir_shader *nir);
+static inline unsigned
+calculate_tess_lds_size(enum amd_gfx_level gfx_level, unsigned tcs_num_input_vertices, unsigned tcs_num_output_vertices,
+                        unsigned tcs_num_inputs, unsigned tcs_num_patches, unsigned tcs_num_outputs,
+                        unsigned tcs_num_patch_outputs)
+{
+   unsigned input_vertex_size = get_tcs_input_vertex_stride(tcs_num_inputs);
+   unsigned output_vertex_size = tcs_num_outputs * 16;
+
+   unsigned input_patch_size = tcs_num_input_vertices * input_vertex_size;
+
+   unsigned pervertex_output_patch_size = tcs_num_output_vertices * output_vertex_size;
+   unsigned output_patch_size = pervertex_output_patch_size + tcs_num_patch_outputs * 16;
+
+   unsigned output_patch0_offset = input_patch_size * tcs_num_patches;
+
+   unsigned lds_size = output_patch0_offset + output_patch_size * tcs_num_patches;
+
+   if (gfx_level >= GFX7) {
+      assert(lds_size <= 65536);
+      lds_size = align(lds_size, 512) / 512;
+   } else {
+      assert(lds_size <= 32768);
+      lds_size = align(lds_size, 256) / 256;
+   }
+
+   return lds_size;
+}
+
+static inline unsigned
+get_tcs_num_patches(unsigned tcs_num_input_vertices, unsigned tcs_num_output_vertices, unsigned tcs_num_inputs,
+                    unsigned tcs_num_outputs, unsigned tcs_num_patch_outputs, unsigned tess_offchip_block_dw_size,
+                    enum amd_gfx_level gfx_level, enum radeon_family family)
+{
+   uint32_t input_vertex_size = get_tcs_input_vertex_stride(tcs_num_inputs);
+   uint32_t input_patch_size = tcs_num_input_vertices * input_vertex_size;
+   uint32_t output_vertex_size = tcs_num_outputs * 16;
+   uint32_t pervertex_output_patch_size = tcs_num_output_vertices * output_vertex_size;
+   uint32_t output_patch_size = pervertex_output_patch_size + tcs_num_patch_outputs * 16;
+
+   /* Ensure that we only need one wave per SIMD so we don't need to check
+    * resource usage. Also ensures that the number of tcs in and out
+    * vertices per threadgroup are at most 256.
+    */
+   unsigned num_patches = 64 / MAX2(tcs_num_input_vertices, tcs_num_output_vertices) * 4;
+   /* Make sure that the data fits in LDS. This assumes the shaders only
+    * use LDS for the inputs and outputs.
+    */
+   unsigned hardware_lds_size = 32768;
+
+   /* Looks like STONEY hangs if we use more than 32 KiB LDS in a single
+    * threadgroup, even though there is more than 32 KiB LDS.
+    *
+    * Test: dEQP-VK.tessellation.shader_input_output.barrier
+    */
+   if (gfx_level >= GFX7 && family != CHIP_STONEY)
+      hardware_lds_size = 65536;
+
+   if (input_patch_size + output_patch_size)
+      num_patches = MIN2(num_patches, hardware_lds_size / (input_patch_size + output_patch_size));
+   /* Make sure the output data fits in the offchip buffer */
+   if (output_patch_size)
+      num_patches = MIN2(num_patches, (tess_offchip_block_dw_size * 4) / output_patch_size);
+   /* Not necessary for correctness, but improves performance. The
+    * specific value is taken from the proprietary driver.
+    */
+   num_patches = MIN2(num_patches, 40);
+
+   /* GFX6 bug workaround - limit LS-HS threadgroups to only one wave. */
+   if (gfx_level == GFX6) {
+      unsigned one_wave = 64 / MAX2(tcs_num_input_vertices, tcs_num_output_vertices);
+      num_patches = MIN2(num_patches, one_wave);
+   }
+   return num_patches;
+}
+
+void radv_lower_ngg(struct radv_device *device, struct radv_pipeline_stage *ngg_stage,
+                    const struct radv_pipeline_key *pl_key);
+
+bool radv_consider_culling(const struct radv_physical_device *pdevice, struct nir_shader *nir, uint64_t ps_inputs_read,
+                           unsigned num_vertices_per_primitive, const struct radv_shader_info *info);
+
+void radv_get_nir_options(struct radv_physical_device *device);
+
+nir_shader *radv_build_traversal_shader(struct radv_device *device, struct radv_ray_tracing_pipeline *pipeline,
+                                        const VkRayTracingPipelineCreateInfoKHR *pCreateInfo,
+                                        const struct radv_pipeline_key *key);
+
+enum radv_rt_priority {
+   radv_rt_priority_raygen = 0,
+   radv_rt_priority_traversal = 1,
+   radv_rt_priority_hit_miss = 2,
+   radv_rt_priority_callable = 3,
+   radv_rt_priority_mask = 0x3,
+};
+
+static inline enum radv_rt_priority
+radv_get_rt_priority(gl_shader_stage stage)
+{
+   switch (stage) {
+   case MESA_SHADER_RAYGEN:
+      return radv_rt_priority_raygen;
+   case MESA_SHADER_INTERSECTION:
+   case MESA_SHADER_ANY_HIT:
+      return radv_rt_priority_traversal;
+   case MESA_SHADER_CLOSEST_HIT:
+   case MESA_SHADER_MISS:
+      return radv_rt_priority_hit_miss;
+   case MESA_SHADER_CALLABLE:
+      return radv_rt_priority_callable;
+   default:
+      unreachable("Unimplemented RT shader stage.");
+   }
+}
 
 #endif

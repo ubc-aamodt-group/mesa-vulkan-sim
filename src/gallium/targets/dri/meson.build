@@ -41,14 +41,14 @@ libgallium_dri = shared_library(
   'gallium_dri',
   files('target.c'),
   include_directories : [
-    inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux, inc_util, inc_dri_common, inc_gallium_drivers,
+    inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux, inc_util, inc_gallium_drivers,
     inc_gallium_winsys, include_directories('../../frontends/dri'),
   ],
   gnu_symbol_visibility : 'hidden',
   link_args : [ld_args_build_id, ld_args_gc_sections, gallium_dri_ld_args],
   link_depends : gallium_dri_link_depends,
   link_with : [
-    libdri, libmesa_gallium, libdricommon, libmegadriver_stub, libgalliumvl,
+    libdri, libmesa, libgalliumvl,
     libgallium, libglapi, libpipe_loader_static, libws_null, libwsw, libswdri,
     libswkmsdri,
   ],
@@ -57,7 +57,8 @@ libgallium_dri = shared_library(
     driver_swrast, driver_r300, driver_r600, driver_radeonsi, driver_nouveau,
     driver_kmsro, driver_v3d, driver_vc4, driver_freedreno, driver_etnaviv,
     driver_tegra, driver_i915, driver_svga, driver_virgl,
-    driver_swr, driver_panfrost, driver_iris, driver_lima, driver_zink, driver_d3d12
+    driver_panfrost, driver_iris, driver_lima, driver_zink, driver_d3d12,
+    driver_asahi, driver_crocus
   ],
   # Will be deleted during installation, see install_megadrivers.py
   install : true,
@@ -73,13 +74,18 @@ foreach d : [[with_gallium_kmsro, [
                'ili9341_dri.so',
                'imx-drm_dri.so',
                'imx-dcss_dri.so',
+               'imx-lcdif_dri.so',
                'ingenic-drm_dri.so',
+               'kirin_dri.so',
+               'komeda_dri.so',
+               'mali-dp_dri.so',
                'mcde_dri.so',
                'mediatek_dri.so',
                'meson_dri.so',
                'mi0283qt_dri.so',
                'mxsfb-drm_dri.so',
                'pl111_dri.so',
+               'rcar-du_dri.so',
                'repaper_dri.so',
                'rockchip_dri.so',
                'st7586_dri.so',
@@ -90,29 +96,49 @@ foreach d : [[with_gallium_kmsro, [
              [with_gallium_radeonsi, 'radeonsi_dri.so'],
              [with_gallium_nouveau, 'nouveau_dri.so'],
              [with_gallium_freedreno, ['msm_dri.so', 'kgsl_dri.so']],
-             [with_gallium_softpipe or with_gallium_swr, 'swrast_dri.so'],
+             [with_gallium_softpipe, 'swrast_dri.so'],
              [with_gallium_softpipe and with_gallium_drisw_kms, 'kms_swrast_dri.so'],
              [with_gallium_v3d, 'v3d_dri.so'],
              [with_gallium_vc4, 'vc4_dri.so'],
              [with_gallium_panfrost, 'panfrost_dri.so'],
              [with_gallium_etnaviv, 'etnaviv_dri.so'],
              [with_gallium_tegra, 'tegra_dri.so'],
+             [with_gallium_crocus, 'crocus_dri.so'],
              [with_gallium_iris, 'iris_dri.so'],
              [with_gallium_i915, 'i915_dri.so'],
              [with_gallium_r300, 'r300_dri.so'],
              [with_gallium_r600, 'r600_dri.so'],
              [with_gallium_svga, 'vmwgfx_dri.so'],
-             [with_gallium_virgl, 'virtio_gpu_dri.so'],
+             [with_gallium_virgl or
+               (with_gallium_freedreno and freedreno_kmds.contains('virtio')),
+               'virtio_gpu_dri.so'],
              [with_gallium_lima, 'lima_dri.so'],
              [with_gallium_zink, 'zink_dri.so'],
-             [with_gallium_d3d12, 'd3d12_dri.so']]
+             [with_gallium_d3d12, 'd3d12_dri.so'],
+             [with_gallium_asahi, 'asahi_dri.so']]
   if d[0]
     gallium_dri_drivers += d[1]
   endif
 endforeach
 
+# This only works on Unix-like oses, which is probably fine for dri
+prog_ln = find_program('ln', required : false)
+if prog_ln.found()
+  devenv.set('LIBGL_DRIVERS_PATH', meson.current_build_dir())
+
+  foreach d : gallium_dri_drivers
+    custom_target(
+      'devenv_@0@'.format(d),
+      input : libgallium_dri,
+      output : d,
+      command : [prog_ln, '-f', '@INPUT@', '@OUTPUT@'],
+      build_by_default : true,
+    )
+  endforeach
+endif
+
 meson.add_install_script(
-  install_megadrivers_py.path(),
+  install_megadrivers_py.full_path(),
   libgallium_dri.full_path(),
   dri_drivers_path,
   gallium_dri_drivers,

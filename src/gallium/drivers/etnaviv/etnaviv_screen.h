@@ -31,13 +31,14 @@
 #include "etnaviv_internal.h"
 #include "etnaviv_perfmon.h"
 
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 #include "pipe/p_screen.h"
 #include "renderonly/renderonly.h"
 #include "util/set.h"
 #include "util/slab.h"
 #include "util/u_dynarray.h"
 #include "util/u_helpers.h"
+#include "util/u_queue.h"
 #include "compiler/nir/nir.h"
 
 struct etna_bo;
@@ -52,6 +53,12 @@ enum viv_features_word {
    viv_chipMinorFeatures4 = 5,
    viv_chipMinorFeatures5 = 6,
    viv_chipMinorFeatures6 = 7,
+   viv_chipMinorFeatures7 = 8,
+   viv_chipMinorFeatures8 = 9,
+   viv_chipMinorFeatures9 = 10,
+   viv_chipMinorFeatures10 = 11,
+   viv_chipMinorFeatures11 = 12,
+   viv_chipMinorFeatures12 = 13,
    VIV_FEATURES_WORD_COUNT /* Must be last */
 };
 
@@ -64,9 +71,6 @@ enum viv_features_word {
 
 struct etna_screen {
    struct pipe_screen base;
-
-   int refcnt;
-   void *winsys_priv;
 
    struct etna_device *dev;
    struct etna_gpu *gpu;
@@ -86,7 +90,13 @@ struct etna_screen {
    uint32_t drm_version;
 
    struct etna_compiler *compiler;
-   nir_shader_compiler_options options;
+   struct util_queue shader_compiler_queue;
+
+   /* dummy render target for GPUs that can't fully disable the color pipe */
+   struct etna_reloc dummy_rt_reloc;
+
+   /* dummy texture descriptor */
+   struct etna_reloc dummy_desc_reloc;
 };
 
 static inline struct etna_screen *
@@ -102,5 +112,21 @@ etna_screen_bo_from_handle(struct pipe_screen *pscreen,
 struct pipe_screen *
 etna_screen_create(struct etna_device *dev, struct etna_gpu *gpu,
                    struct renderonly *ro);
+
+static inline size_t
+etna_screen_get_tile_size(struct etna_screen *screen, uint8_t ts_mode,
+                          bool is_msaa)
+{
+   if (!VIV_FEATURE(screen, chipMinorFeatures6, CACHE128B256BPERLINE)) {
+      if (VIV_FEATURE(screen, chipMinorFeatures4, SMALL_MSAA) && is_msaa)
+         return 256;
+      return 64;
+   }
+
+   if (ts_mode == TS_MODE_256B)
+      return 256;
+   else
+      return 128;
+}
 
 #endif

@@ -35,13 +35,14 @@
 
 #include "egl_dri2.h"
 #include "loader.h"
+#include "kopper_interface.h"
 
 static __DRIimage*
 surfaceless_alloc_image(struct dri2_egl_display *dri2_dpy,
                      struct dri2_egl_surface *dri2_surf)
 {
    return dri2_dpy->image->createImage(
-            dri2_dpy->dri_screen,
+            dri2_dpy->dri_screen_render_gpu,
             dri2_surf->base.Width,
             dri2_surf->base.Height,
             dri2_surf->visual,
@@ -199,6 +200,12 @@ surfaceless_get_capability(void *loaderPrivate, enum dri_loader_cap cap)
    }
 }
 
+static const __DRIkopperLoaderExtension kopper_loader_extension = {
+    .base = { __DRI_KOPPER_LOADER, 1 },
+
+    .SetSurfaceCreateInfo   = NULL,
+};
+
 static const __DRIimageLoaderExtension image_loader_extension = {
    .base             = { __DRI_IMAGE_LOADER, 2 },
    .getBuffers       = surfaceless_image_get_buffers,
@@ -211,6 +218,7 @@ static const __DRIextension *image_loader_extensions[] = {
    &image_lookup_extension.base,
    &use_invalidate.base,
    &background_callable_extension.base,
+   &kopper_loader_extension.base,
    NULL,
 };
 
@@ -219,6 +227,7 @@ static const __DRIextension *swrast_loader_extensions[] = {
    &image_loader_extension.base,
    &image_lookup_extension.base,
    &use_invalidate.base,
+   &kopper_loader_extension.base,
    NULL,
 };
 
@@ -241,18 +250,18 @@ surfaceless_probe_device(_EGLDisplay *disp, bool swrast)
       if (!(device->available_nodes & (1 << node_type)))
          continue;
 
-      dri2_dpy->fd = loader_open_device(device->nodes[node_type]);
-      if (dri2_dpy->fd < 0)
+      dri2_dpy->fd_render_gpu = loader_open_device(device->nodes[node_type]);
+      if (dri2_dpy->fd_render_gpu < 0)
          continue;
 
-      disp->Device = _eglAddDevice(dri2_dpy->fd, swrast);
+      disp->Device = _eglAddDevice(dri2_dpy->fd_render_gpu, swrast);
       if (!disp->Device) {
-         close(dri2_dpy->fd);
-         dri2_dpy->fd = -1;
+         close(dri2_dpy->fd_render_gpu);
+         dri2_dpy->fd_render_gpu = -1;
          continue;
       }
 
-      char *driver_name = loader_get_driver_for_fd(dri2_dpy->fd);
+      char *driver_name = loader_get_driver_for_fd(dri2_dpy->fd_render_gpu);
       if (swrast) {
          /* Use kms swrast only with vgem / virtio_gpu.
           * virtio-gpu fallbacks to software rendering when 3D features
@@ -274,8 +283,8 @@ surfaceless_probe_device(_EGLDisplay *disp, bool swrast)
 
       free(dri2_dpy->driver_name);
       dri2_dpy->driver_name = NULL;
-      close(dri2_dpy->fd);
-      dri2_dpy->fd = -1;
+      close(dri2_dpy->fd_render_gpu);
+      dri2_dpy->fd_render_gpu = -1;
    }
    drmFreeDevices(devices, num_devices);
 
@@ -295,11 +304,11 @@ surfaceless_probe_device_sw(_EGLDisplay *disp)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
 
-   dri2_dpy->fd = -1;
-   disp->Device = _eglAddDevice(dri2_dpy->fd, true);
+   dri2_dpy->fd_render_gpu = -1;
+   disp->Device = _eglAddDevice(dri2_dpy->fd_render_gpu, true);
    assert(disp->Device);
 
-   dri2_dpy->driver_name = strdup("swrast");
+   dri2_dpy->driver_name = strdup(disp->Options.Zink ? "zink" : "swrast");
    if (!dri2_dpy->driver_name)
       return false;
 
@@ -324,18 +333,25 @@ dri2_initialize_surfaceless(_EGLDisplay *disp)
    if (!dri2_dpy)
       return _eglError(EGL_BAD_ALLOC, "eglInitialize");
 
-   dri2_dpy->fd = -1;
+   dri2_dpy->fd_render_gpu = -1;
+   dri2_dpy->fd_display_gpu = -1;
    disp->DriverData = (void *) dri2_dpy;
 
+   /* When ForceSoftware is false, we try the HW driver.  When ForceSoftware
+    * is true, we try kms_swrast and swrast in order.
+    */
    driver_loaded = surfaceless_probe_device(disp, disp->Options.ForceSoftware);
+   if (!driver_loaded && disp->Options.ForceSoftware) {
+      _eglLog(_EGL_DEBUG, "Falling back to surfaceless swrast without DRM.");
+      driver_loaded = surfaceless_probe_device_sw(disp);
+   }
 
    if (!driver_loaded) {
-      _eglLog(_EGL_DEBUG, "Falling back to surfaceless swrast without DRM.");
-      if (!surfaceless_probe_device_sw(disp)) {
-         err = "DRI2: failed to load driver";
-         goto cleanup;
-      }
+      err = "DRI2: failed to load driver";
+      goto cleanup;
    }
+
+   dri2_dpy->fd_display_gpu = dri2_dpy->fd_render_gpu;
 
    if (!dri2_create_screen(disp)) {
       err = "DRI2: failed to create screen";
@@ -349,7 +365,7 @@ dri2_initialize_surfaceless(_EGLDisplay *disp)
 
    dri2_setup_screen(disp);
 #ifdef HAVE_WAYLAND_PLATFORM
-   dri2_dpy->device_name = loader_get_device_name_for_fd(dri2_dpy->fd);
+   dri2_dpy->device_name = loader_get_device_name_for_fd(dri2_dpy->fd_render_gpu);
 #endif
    dri2_set_WL_bind_wayland_display(disp);
 

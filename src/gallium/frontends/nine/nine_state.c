@@ -49,7 +49,7 @@
 /* CSMT headers */
 #include "nine_queue.h"
 #include "nine_csmt_helper.h"
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 
 #define DBG_CHANNEL DBG_DEVICE
 
@@ -163,8 +163,7 @@ nine_csmt_create( struct NineDevice9 *This )
 
     ctx->device = This;
 
-    ctx->worker = u_thread_create(nine_csmt_worker, ctx);
-    if (!ctx->worker) {
+    if (thrd_success != u_thread_create(&ctx->worker, nine_csmt_worker, ctx)) {
         nine_queue_delete(ctx->pool);
         FREE(ctx);
         return NULL;
@@ -210,6 +209,16 @@ nine_csmt_process( struct NineDevice9 *device )
 
     nine_csmt_wait_processed(ctx);
 }
+
+void
+nine_csmt_flush( struct NineDevice9* device )
+{
+    if (!device->csmt_active)
+        return;
+
+    nine_queue_flush(device->csmt_ctx->pool);
+}
+
 
 /* Destroys a CSMT context.
  * Waits for the worker thread to terminate.
@@ -317,6 +326,17 @@ nine_context_get_pipe_release( struct NineDevice9 *device )
     nine_csmt_resume(device);
 }
 
+bool
+nine_context_is_worker( struct NineDevice9 *device )
+{
+    struct csmt_context *ctx = device->csmt_ctx;
+
+    if (!device->csmt_active)
+        return false;
+
+    return u_thread_is_self(ctx->worker);
+}
+
 /* Nine state functions */
 
 /* Check if some states need to be set dirty */
@@ -324,10 +344,16 @@ nine_context_get_pipe_release( struct NineDevice9 *device )
 static inline DWORD
 check_multisample(struct NineDevice9 *device)
 {
-    DWORD *rs = device->context.rs;
-    DWORD new_value = (rs[D3DRS_ZENABLE] || rs[D3DRS_STENCILENABLE]) &&
-                      device->context.rt[0]->desc.MultiSampleType >= 1 &&
-                      rs[D3DRS_MULTISAMPLEANTIALIAS];
+    struct nine_context *context = &device->context;
+    DWORD *rs = context->rs;
+    struct NineSurface9 *rt0 = context->rt[0];
+    bool multisampled_target;
+    DWORD new_value;
+
+    multisampled_target = rt0 && rt0->desc.MultiSampleType >= 1;
+    if (rt0 && rt0->desc.Format == D3DFMT_NULL && context->ds)
+        multisampled_target = context->ds->desc.MultiSampleType >= 1;
+    new_value = (multisampled_target && rs[D3DRS_MULTISAMPLEANTIALIAS]) ? 1 : 0;
     if (rs[NINED3DRS_MULTISAMPLE] != new_value) {
         rs[NINED3DRS_MULTISAMPLE] = new_value;
         return NINE_STATE_RASTERIZER;
@@ -363,6 +389,20 @@ prepare_vs_constants_userbuf_swvp(struct NineDevice9 *device)
 {
     struct nine_context *context = &device->context;
 
+    if (device->driver_caps.emulate_ucp) {
+        /* TODO: Avoid memcpy all time by storing directly into the array */
+        memcpy(&context->vs_const_f[4 * NINE_MAX_CONST_SWVP_SPE_OFFSET], &context->clip.ucp, sizeof(context->clip));
+        context->changed.vs_const_f = 1; /* TODO optimize */
+    }
+
+    if (device->driver_caps.always_output_pointsize) {
+        context->vs_const_f[4 * (NINE_MAX_CONST_SWVP_SPE_OFFSET + 8)] =
+            CLAMP(asfloat(context->rs[D3DRS_POINTSIZE]),
+                asfloat(context->rs[D3DRS_POINTSIZE_MIN]),
+                asfloat(context->rs[D3DRS_POINTSIZE_MAX]));
+        context->changed.vs_const_f = 1; /* TODO optimize */
+    }
+
     if (context->changed.vs_const_f || context->changed.group & NINE_STATE_SWVP) {
         struct pipe_constant_buffer cb;
 
@@ -391,7 +431,7 @@ prepare_vs_constants_userbuf_swvp(struct NineDevice9 *device)
         context->pipe_data.cb0_swvp.buffer_size = cb.buffer_size;
         context->pipe_data.cb0_swvp.user_buffer = cb.user_buffer;
 
-        cb.user_buffer = (char *)cb.user_buffer + 4096 * sizeof(float[4]);
+        cb.user_buffer = (int8_t *)cb.user_buffer + 4096 * sizeof(float[4]);
         context->pipe_data.cb1_swvp.buffer_offset = cb.buffer_offset;
         context->pipe_data.cb1_swvp.buffer_size = cb.buffer_size;
         context->pipe_data.cb1_swvp.user_buffer = cb.user_buffer;
@@ -443,6 +483,17 @@ prepare_vs_constants_userbuf(struct NineDevice9 *device)
     if (context->swvp) {
         prepare_vs_constants_userbuf_swvp(device);
         return;
+    }
+
+    if (device->driver_caps.emulate_ucp) {
+        /* TODO: Avoid memcpy all time by storing directly into the array */
+        memcpy(&context->vs_const_f[4 * NINE_MAX_CONST_VS_SPE_OFFSET], &context->clip.ucp, sizeof(context->clip));
+    }
+    if (device->driver_caps.always_output_pointsize) {
+        context->vs_const_f[4 * (NINE_MAX_CONST_VS_SPE_OFFSET + 8)] =
+            CLAMP(asfloat(context->rs[D3DRS_POINTSIZE]),
+                asfloat(context->rs[D3DRS_POINTSIZE_MIN]),
+                asfloat(context->rs[D3DRS_POINTSIZE_MAX]));
     }
 
     if (context->changed.vs_const_i || context->changed.group & NINE_STATE_SWVP) {
@@ -534,32 +585,24 @@ prepare_ps_constants_userbuf(struct NineDevice9 *device)
     cb.user_buffer = context->ps_const_f;
 
     if (context->changed.ps_const_i) {
-        int *idst = (int *)&context->ps_const_f[4 * device->max_ps_const_f];
+        int *idst = (int *)&context->ps_const_f[4 * NINE_MAX_CONST_F_PS3];
         memcpy(idst, context->ps_const_i, sizeof(context->ps_const_i));
         context->changed.ps_const_i = 0;
     }
     if (context->changed.ps_const_b) {
-        int *idst = (int *)&context->ps_const_f[4 * device->max_ps_const_f];
+        int *idst = (int *)&context->ps_const_f[4 * NINE_MAX_CONST_F_PS3];
         uint32_t *bdst = (uint32_t *)&idst[4 * NINE_MAX_CONST_I];
         memcpy(bdst, context->ps_const_b, sizeof(context->ps_const_b));
         context->changed.ps_const_b = 0;
     }
 
     /* Upload special constants needed to implement PS1.x instructions like TEXBEM,TEXBEML and BEM */
-    if (context->ps->bumpenvmat_needed) {
-        memcpy(context->ps_lconstf_temp, cb.user_buffer, 8 * sizeof(float[4]));
-        memcpy(&context->ps_lconstf_temp[4 * 8], &device->context.bumpmap_vars, sizeof(device->context.bumpmap_vars));
-
-        cb.user_buffer = context->ps_lconstf_temp;
-    }
+    if (context->ps->bumpenvmat_needed)
+        memcpy(&context->ps_const_f[4 * NINE_MAX_CONST_PS_SPE_OFFSET], &device->context.bumpmap_vars, sizeof(device->context.bumpmap_vars));
 
     if (context->ps->byte_code.version < 0x30 &&
         context->rs[D3DRS_FOGENABLE]) {
-        float *dst = &context->ps_lconstf_temp[4 * 32];
-        if (cb.user_buffer != context->ps_lconstf_temp) {
-            memcpy(context->ps_lconstf_temp, cb.user_buffer, 32 * sizeof(float[4]));
-            cb.user_buffer = context->ps_lconstf_temp;
-        }
+        float *dst = &context->ps_const_f[4 * (NINE_MAX_CONST_PS_SPE_OFFSET + 12)];
 
         d3dcolor_to_rgba(dst, context->rs[D3DRS_FOGCOLOR]);
         if (context->rs[D3DRS_FOGTABLEMODE] == D3DFOG_LINEAR) {
@@ -569,6 +612,8 @@ prepare_ps_constants_userbuf(struct NineDevice9 *device)
             dst[4] = asfloat(context->rs[D3DRS_FOGDENSITY]);
         }
     }
+
+    context->ps_const_f[4 * (NINE_MAX_CONST_PS_SPE_OFFSET + 14)] = context->rs[D3DRS_ALPHAREF] / 255.f;
 
     if (!cb.buffer_size)
         return;
@@ -637,6 +682,12 @@ prepare_vs(struct NineDevice9 *device, uint8_t shader_changed)
     if (context->rs[NINED3DRS_VSPOINTSIZE] != vs->point_size) {
         context->rs[NINED3DRS_VSPOINTSIZE] = vs->point_size;
         changed_group |= NINE_STATE_RASTERIZER;
+    }
+    if (context->rs[NINED3DRS_POSITIONT] != vs->position_t) {
+        context->rs[NINED3DRS_POSITIONT] = vs->position_t;
+        if (!device->driver_caps.window_space_position_support &&
+            device->driver_caps.disabling_depth_clipping_support)
+            changed_group |= NINE_STATE_RASTERIZER;
     }
 
     if ((context->bound_samplers_mask_vs & vs->sampler_mask) != vs->sampler_mask)
@@ -769,6 +820,10 @@ update_viewport(struct NineDevice9 *device)
     pvport.translate[0] = (float)vport->Width * 0.5f + (float)vport->X;
     pvport.translate[1] = (float)vport->Height * 0.5f + (float)vport->Y;
     pvport.translate[2] = vport->MinZ;
+    pvport.swizzle_x = PIPE_VIEWPORT_SWIZZLE_POSITIVE_X;
+    pvport.swizzle_y = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Y;
+    pvport.swizzle_z = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Z;
+    pvport.swizzle_w = PIPE_VIEWPORT_SWIZZLE_POSITIVE_W;
 
     /* We found R600 and SI cards have some imprecision
      * on the barycentric coordinates used for interpolation.
@@ -809,15 +864,14 @@ update_vertex_elements(struct NineDevice9 *device)
     const struct NineVertexShader9 *vs;
     unsigned n, b, i;
     int index;
-    char vdecl_index_map[16]; /* vs->num_inputs <= 16 */
-    char used_streams[device->caps.MaxStreams];
+    int8_t vdecl_index_map[16]; /* vs->num_inputs <= 16 */
+    uint16_t used_streams = 0;
     int dummy_vbo_stream = -1;
     BOOL need_dummy_vbo = FALSE;
     struct cso_velems_state ve;
 
     context->stream_usage_mask = 0;
     memset(vdecl_index_map, -1, 16);
-    memset(used_streams, 0, device->caps.MaxStreams);
     vs = context->programmable_vs ? context->vs : device->ff.vs;
 
     if (vdecl) {
@@ -828,7 +882,7 @@ update_vertex_elements(struct NineDevice9 *device)
             for (i = 0; i < vdecl->nelems; i++) {
                 if (vdecl->usage_map[i] == vs->input_map[n].ndecl) {
                     vdecl_index_map[n] = i;
-                    used_streams[vdecl->elems[i].vertex_buffer_index] = 1;
+                    used_streams |= BITFIELD_BIT(vdecl->elems[i].vertex_buffer_index);
                     break;
                 }
             }
@@ -842,11 +896,9 @@ update_vertex_elements(struct NineDevice9 *device)
     }
 
     if (need_dummy_vbo) {
-        for (i = 0; i < device->caps.MaxStreams; i++ ) {
-            if (!used_streams[i]) {
-                dummy_vbo_stream = i;
+        u_foreach_bit(bit, BITFIELD_MASK(device->caps.MaxStreams) & ~used_streams) {
+                dummy_vbo_stream = bit;
                 break;
-            }
         }
     }
     /* there are less vertex shader inputs than stream slots,
@@ -871,6 +923,7 @@ update_vertex_elements(struct NineDevice9 *device)
             ve.velems[n].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
             ve.velems[n].src_offset = 0;
             ve.velems[n].instance_divisor = 0;
+            ve.velems[n].dual_slot = false;
         }
     }
 
@@ -906,7 +959,7 @@ update_vertex_buffers(struct NineDevice9 *device)
             dummy_vtxbuf.is_user_buffer = false;
             dummy_vtxbuf.buffer_offset = 0;
             pipe->set_vertex_buffers(pipe, context->dummy_vbo_bound_at,
-                                     1, &dummy_vtxbuf);
+                                     1, 0, false, &dummy_vtxbuf);
             context->vbo_bound_done = TRUE;
         }
         mask &= ~(1 << context->dummy_vbo_bound_at);
@@ -915,9 +968,9 @@ update_vertex_buffers(struct NineDevice9 *device)
     for (i = 0; mask; mask >>= 1, ++i) {
         if (mask & 1) {
             if (context->vtxbuf[i].buffer.resource)
-                pipe->set_vertex_buffers(pipe, i, 1, &context->vtxbuf[i]);
+                pipe->set_vertex_buffers(pipe, i, 1, 0, false, &context->vtxbuf[i]);
             else
-                pipe->set_vertex_buffers(pipe, i, 1, NULL);
+                pipe->set_vertex_buffers(pipe, i, 0, 1, false, NULL);
         }
     }
 
@@ -963,105 +1016,98 @@ update_textures_and_samplers(struct NineDevice9 *device)
     struct nine_context *context = &device->context;
     struct pipe_context *pipe = context->pipe;
     struct pipe_sampler_view *view[NINE_MAX_SAMPLERS];
-    unsigned num_textures;
-    unsigned i;
+    unsigned num_textures = 0;
     boolean commit_samplers;
     uint16_t sampler_mask = context->ps ? context->ps->sampler_mask :
                             device->ff.ps->sampler_mask;
 
-    /* TODO: Can we reduce iterations here ? */
-
     commit_samplers = FALSE;
-    context->bound_samplers_mask_ps = 0;
-    for (num_textures = 0, i = 0; i < NINE_MAX_SAMPLERS_PS; ++i) {
+    const uint16_t ps_mask = sampler_mask | context->enabled_samplers_mask_ps;
+    context->bound_samplers_mask_ps = ps_mask;
+    num_textures = util_last_bit(ps_mask);
+    /* iterate over the enabled samplers */
+    u_foreach_bit(i, context->enabled_samplers_mask_ps) {
         const unsigned s = NINE_SAMPLER_PS(i);
-        int sRGB;
+        int sRGB = context->samp[s][D3DSAMP_SRGBTEXTURE] ? 1 : 0;
 
-        if (!context->texture[s].enabled && !(sampler_mask & (1 << i))) {
-            view[i] = NULL;
-            continue;
-        }
+        view[i] = context->texture[s].view[sRGB];
 
-        if (context->texture[s].enabled) {
-            sRGB = context->samp[s][D3DSAMP_SRGBTEXTURE] ? 1 : 0;
-
-            view[i] = context->texture[s].view[sRGB];
-            num_textures = i + 1;
-
-            if (update_sampler_derived(context, s) || (context->changed.sampler[s] & 0x05fe)) {
-                context->changed.sampler[s] = 0;
-                commit_samplers = TRUE;
-                nine_convert_sampler_state(context->cso, s, context->samp[s]);
-            }
-        } else {
-            /* Bind dummy sampler. We do not bind dummy sampler when
-             * it is not needed because it could add overhead. The
-             * dummy sampler should have r=g=b=0 and a=1. We do not
-             * unbind dummy sampler directly when they are not needed
-             * anymore, but they're going to be removed as long as texture
-             * or sampler states are changed. */
-            view[i] = device->dummy_sampler_view;
-            num_textures = i + 1;
-
-            cso_single_sampler(context->cso, PIPE_SHADER_FRAGMENT,
-                               s - NINE_SAMPLER_PS(0), &device->dummy_sampler_state);
-
+        if (update_sampler_derived(context, s) || (context->changed.sampler[s] & 0x05fe)) {
+            context->changed.sampler[s] = 0;
             commit_samplers = TRUE;
-            context->changed.sampler[s] = ~0;
+            nine_convert_sampler_state(context->cso, s, context->samp[s]);
         }
-
-        context->bound_samplers_mask_ps |= (1 << s);
     }
+    /* iterate over the dummy samplers */
+    u_foreach_bit(i, sampler_mask & ~context->enabled_samplers_mask_ps) {
+        const unsigned s = NINE_SAMPLER_PS(i);
+        /* Bind dummy sampler. We do not bind dummy sampler when
+         * it is not needed because it could add overhead. The
+         * dummy sampler should have r=g=b=0 and a=1. We do not
+         * unbind dummy sampler directly when they are not needed
+         * anymore, but they're going to be removed as long as texture
+         * or sampler states are changed. */
+        view[i] = device->dummy_sampler_view;
 
-    pipe->set_sampler_views(pipe, PIPE_SHADER_FRAGMENT, 0, num_textures, view);
+        cso_single_sampler(context->cso, PIPE_SHADER_FRAGMENT,
+                           s - NINE_SAMPLER_PS(0), &device->dummy_sampler_state);
+
+        commit_samplers = TRUE;
+        context->changed.sampler[s] = ~0;
+    }
+    /* fill in unused samplers */
+    u_foreach_bit(i, BITFIELD_MASK(num_textures) & ~ps_mask)
+       view[i] = NULL;
+
+    pipe->set_sampler_views(pipe, PIPE_SHADER_FRAGMENT, 0, num_textures,
+                            num_textures < context->enabled_sampler_count_ps ? context->enabled_sampler_count_ps - num_textures : 0,
+                            false, view);
+    context->enabled_sampler_count_ps = num_textures;
 
     if (commit_samplers)
         cso_single_sampler_done(context->cso, PIPE_SHADER_FRAGMENT);
 
     commit_samplers = FALSE;
     sampler_mask = context->programmable_vs ? context->vs->sampler_mask : 0;
-    context->bound_samplers_mask_vs = 0;
-    for (num_textures = 0, i = 0; i < NINE_MAX_SAMPLERS_VS; ++i) {
+    const uint16_t vs_mask = sampler_mask | context->enabled_samplers_mask_vs;
+    context->bound_samplers_mask_vs = vs_mask;
+    num_textures = util_last_bit(vs_mask);
+    u_foreach_bit(i, context->enabled_samplers_mask_vs) {
         const unsigned s = NINE_SAMPLER_VS(i);
-        int sRGB;
+        int sRGB = context->samp[s][D3DSAMP_SRGBTEXTURE] ? 1 : 0;
 
-        if (!context->texture[s].enabled && !(sampler_mask & (1 << i))) {
-            view[i] = NULL;
-            continue;
-        }
+        view[i] = context->texture[s].view[sRGB];
 
-        if (context->texture[s].enabled) {
-            sRGB = context->samp[s][D3DSAMP_SRGBTEXTURE] ? 1 : 0;
-
-            view[i] = context->texture[s].view[sRGB];
-            num_textures = i + 1;
-
-            if (update_sampler_derived(context, s) || (context->changed.sampler[s] & 0x05fe)) {
-                context->changed.sampler[s] = 0;
-                commit_samplers = TRUE;
-                nine_convert_sampler_state(context->cso, s, context->samp[s]);
-            }
-        } else {
-            /* Bind dummy sampler. We do not bind dummy sampler when
-             * it is not needed because it could add overhead. The
-             * dummy sampler should have r=g=b=0 and a=1. We do not
-             * unbind dummy sampler directly when they are not needed
-             * anymore, but they're going to be removed as long as texture
-             * or sampler states are changed. */
-            view[i] = device->dummy_sampler_view;
-            num_textures = i + 1;
-
-            cso_single_sampler(context->cso, PIPE_SHADER_VERTEX,
-                               s - NINE_SAMPLER_VS(0), &device->dummy_sampler_state);
-
+        if (update_sampler_derived(context, s) || (context->changed.sampler[s] & 0x05fe)) {
+            context->changed.sampler[s] = 0;
             commit_samplers = TRUE;
-            context->changed.sampler[s] = ~0;
+            nine_convert_sampler_state(context->cso, s, context->samp[s]);
         }
-
-        context->bound_samplers_mask_vs |= (1 << i);
     }
+    u_foreach_bit(i, sampler_mask & ~context->enabled_samplers_mask_vs) {
+        const unsigned s = NINE_SAMPLER_VS(i);
+        /* Bind dummy sampler. We do not bind dummy sampler when
+         * it is not needed because it could add overhead. The
+         * dummy sampler should have r=g=b=0 and a=1. We do not
+         * unbind dummy sampler directly when they are not needed
+         * anymore, but they're going to be removed as long as texture
+         * or sampler states are changed. */
+        view[i] = device->dummy_sampler_view;
 
-    pipe->set_sampler_views(pipe, PIPE_SHADER_VERTEX, 0, num_textures, view);
+        cso_single_sampler(context->cso, PIPE_SHADER_VERTEX,
+                           s - NINE_SAMPLER_VS(0), &device->dummy_sampler_state);
+
+        commit_samplers = TRUE;
+        context->changed.sampler[s] = ~0;
+    }
+    /* fill in unused samplers */
+    u_foreach_bit(i, BITFIELD_MASK(num_textures) & ~vs_mask)
+       view[i] = NULL;
+
+    pipe->set_sampler_views(pipe, PIPE_SHADER_VERTEX, 0, num_textures,
+                            num_textures < context->enabled_sampler_count_vs ? context->enabled_sampler_count_vs - num_textures : 0,
+                            false, view);
+    context->enabled_sampler_count_vs = num_textures;
 
     if (commit_samplers)
         cso_single_sampler_done(context->cso, PIPE_SHADER_VERTEX);
@@ -1109,15 +1155,15 @@ commit_vs_constants(struct NineDevice9 *device)
     struct pipe_context *pipe = context->pipe;
 
     if (unlikely(!context->programmable_vs))
-        pipe->set_constant_buffer(pipe, PIPE_SHADER_VERTEX, 0, &context->pipe_data.cb_vs_ff);
+        pipe->set_constant_buffer(pipe, PIPE_SHADER_VERTEX, 0, false, &context->pipe_data.cb_vs_ff);
     else {
         if (context->swvp) {
-            pipe->set_constant_buffer(pipe, PIPE_SHADER_VERTEX, 0, &context->pipe_data.cb0_swvp);
-            pipe->set_constant_buffer(pipe, PIPE_SHADER_VERTEX, 1, &context->pipe_data.cb1_swvp);
-            pipe->set_constant_buffer(pipe, PIPE_SHADER_VERTEX, 2, &context->pipe_data.cb2_swvp);
-            pipe->set_constant_buffer(pipe, PIPE_SHADER_VERTEX, 3, &context->pipe_data.cb3_swvp);
+            pipe->set_constant_buffer(pipe, PIPE_SHADER_VERTEX, 0, false, &context->pipe_data.cb0_swvp);
+            pipe->set_constant_buffer(pipe, PIPE_SHADER_VERTEX, 1, false, &context->pipe_data.cb1_swvp);
+            pipe->set_constant_buffer(pipe, PIPE_SHADER_VERTEX, 2, false, &context->pipe_data.cb2_swvp);
+            pipe->set_constant_buffer(pipe, PIPE_SHADER_VERTEX, 3, false, &context->pipe_data.cb3_swvp);
         } else {
-            pipe->set_constant_buffer(pipe, PIPE_SHADER_VERTEX, 0, &context->pipe_data.cb_vs);
+            pipe->set_constant_buffer(pipe, PIPE_SHADER_VERTEX, 0, false, &context->pipe_data.cb_vs);
         }
     }
 }
@@ -1129,15 +1175,16 @@ commit_ps_constants(struct NineDevice9 *device)
     struct pipe_context *pipe = context->pipe;
 
     if (unlikely(!context->ps))
-        pipe->set_constant_buffer(pipe, PIPE_SHADER_FRAGMENT, 0, &context->pipe_data.cb_ps_ff);
+        pipe->set_constant_buffer(pipe, PIPE_SHADER_FRAGMENT, 0, false, &context->pipe_data.cb_ps_ff);
     else
-        pipe->set_constant_buffer(pipe, PIPE_SHADER_FRAGMENT, 0, &context->pipe_data.cb_ps);
+        pipe->set_constant_buffer(pipe, PIPE_SHADER_FRAGMENT, 0, false, &context->pipe_data.cb_ps);
 }
 
 static inline void
 commit_vs(struct NineDevice9 *device)
 {
     struct nine_context *context = &device->context;
+    assert(context->cso_shader.vs);
 
     context->pipe->bind_vs_state(context->pipe, context->cso_shader.vs);
 }
@@ -1352,6 +1399,8 @@ NineDevice9_ResolveZ( struct NineDevice9 *device )
 
 #define ALPHA_TO_COVERAGE_ENABLE   MAKEFOURCC('A', '2', 'M', '1')
 #define ALPHA_TO_COVERAGE_DISABLE  MAKEFOURCC('A', '2', 'M', '0')
+#define FETCH4_ENABLE              MAKEFOURCC('G', 'E', 'T', '4')
+#define FETCH4_DISABLE             MAKEFOURCC('G', 'E', 'T', '1')
 
 /* Nine_context functions.
  * Serialized through CSMT macros.
@@ -1360,26 +1409,13 @@ NineDevice9_ResolveZ( struct NineDevice9 *device )
 static void
 nine_context_set_texture_apply(struct NineDevice9 *device,
                                DWORD stage,
-                               BOOL enabled,
-                               BOOL shadow,
+                               DWORD fetch4_shadow_enabled,
                                DWORD lod,
                                D3DRESOURCETYPE type,
                                uint8_t pstype,
                                struct pipe_resource *res,
                                struct pipe_sampler_view *view0,
                                struct pipe_sampler_view *view1);
-static void
-nine_context_set_stream_source_apply(struct NineDevice9 *device,
-                                    UINT StreamNumber,
-                                    struct pipe_resource *res,
-                                    UINT OffsetInBytes,
-                                    UINT Stride);
-
-static void
-nine_context_set_indices_apply(struct NineDevice9 *device,
-                               struct pipe_resource *res,
-                               UINT IndexSize,
-                               UINT OffsetInBytes);
 
 static void
 nine_context_set_pixel_shader_constant_i_transformed(struct NineDevice9 *device,
@@ -1401,9 +1437,16 @@ CSMT_ITEM_NO_WAIT(nine_context_set_render_state,
             return;
         }
 
+        /* NINED3DRS_ALPHACOVERAGE:
+         * bit 0: NVIDIA alpha to coverage
+         * bit 1: NVIDIA ATOC state active
+         * bit 2: AMD alpha to coverage
+         * These need to be separate else the set of states to
+         * disable NVIDIA alpha to coverage can disable the AMD one */
         if (Value == ALPHA_TO_COVERAGE_ENABLE ||
             Value == ALPHA_TO_COVERAGE_DISABLE) {
-            context->rs[NINED3DRS_ALPHACOVERAGE] = (Value == ALPHA_TO_COVERAGE_ENABLE);
+            context->rs[NINED3DRS_ALPHACOVERAGE] &= 3;
+            context->rs[NINED3DRS_ALPHACOVERAGE] |= (Value == ALPHA_TO_COVERAGE_ENABLE) ? 4 : 0;
             context->changed.group |= NINE_STATE_BLEND;
             return;
         }
@@ -1411,28 +1454,44 @@ CSMT_ITEM_NO_WAIT(nine_context_set_render_state,
 
     /* NV hack */
     if (unlikely(State == D3DRS_ADAPTIVETESS_Y)) {
-        if (Value == D3DFMT_ATOC || (Value == D3DFMT_UNKNOWN && context->rs[NINED3DRS_ALPHACOVERAGE])) {
-            context->rs[NINED3DRS_ALPHACOVERAGE] = (Value == D3DFMT_ATOC) ? 3 : 0;
-            context->rs[NINED3DRS_ALPHACOVERAGE] &= context->rs[D3DRS_ALPHATESTENABLE] ? 3 : 2;
+        if (Value == D3DFMT_ATOC || (Value == D3DFMT_UNKNOWN && context->rs[NINED3DRS_ALPHACOVERAGE] & 3)) {
+            context->rs[NINED3DRS_ALPHACOVERAGE] &= 4;
+            context->rs[NINED3DRS_ALPHACOVERAGE] |=
+                ((Value == D3DFMT_ATOC) ? 3 : 0) & (context->rs[D3DRS_ALPHATESTENABLE] ? 3 : 2);
             context->changed.group |= NINE_STATE_BLEND;
             return;
         }
     }
     if (unlikely(State == D3DRS_ALPHATESTENABLE && (context->rs[NINED3DRS_ALPHACOVERAGE] & 2))) {
-        DWORD alphacoverage_prev = context->rs[NINED3DRS_ALPHACOVERAGE];
-        context->rs[NINED3DRS_ALPHACOVERAGE] = (Value ? 3 : 2);
-        if (context->rs[NINED3DRS_ALPHACOVERAGE] != alphacoverage_prev)
-            context->changed.group |= NINE_STATE_BLEND;
+        context->rs[NINED3DRS_ALPHACOVERAGE] &= 6;
+        context->rs[NINED3DRS_ALPHACOVERAGE] |= (Value ? 1 : 0);
     }
 
     context->rs[State] = nine_fix_render_state_value(State, Value);
     context->changed.group |= nine_render_state_group[State];
+
+    if (device->driver_caps.alpha_test_emulation) {
+        if (State == D3DRS_ALPHATESTENABLE || State == D3DRS_ALPHAFUNC) {
+            context->rs[NINED3DRS_EMULATED_ALPHATEST] = context->rs[D3DRS_ALPHATESTENABLE] ?
+                d3dcmpfunc_to_pipe_func(context->rs[D3DRS_ALPHAFUNC]) : 7;
+            context->changed.group |= NINE_STATE_PS_PARAMS_MISC | NINE_STATE_PS_CONST | NINE_STATE_FF_SHADER;
+        }
+        if (State == D3DRS_ALPHAREF)
+            context->changed.group |= NINE_STATE_PS_CONST | NINE_STATE_FF_PS_CONSTS;
+    }
+
+    if (device->driver_caps.always_output_pointsize) {
+        if (State == D3DRS_POINTSIZE || State == D3DRS_POINTSIZE_MIN || State == D3DRS_POINTSIZE_MAX)
+            context->changed.group |= NINE_STATE_VS_CONST;
+    }
+
+    if (device->driver_caps.emulate_ucp && State == D3DRS_CLIPPLANEENABLE)
+        context->changed.group |= NINE_STATE_VS_PARAMS_MISC | NINE_STATE_VS_CONST;
 }
 
 CSMT_ITEM_NO_WAIT(nine_context_set_texture_apply,
                   ARG_VAL(DWORD, stage),
-                  ARG_VAL(BOOL, enabled),
-                  ARG_VAL(BOOL, shadow),
+                  ARG_VAL(DWORD, fetch4_shadow_enabled),
                   ARG_VAL(DWORD, lod),
                   ARG_VAL(D3DRESOURCETYPE, type),
                   ARG_VAL(uint8_t, pstype),
@@ -1441,10 +1500,26 @@ CSMT_ITEM_NO_WAIT(nine_context_set_texture_apply,
                   ARG_BIND_VIEW(struct pipe_sampler_view, view1))
 {
     struct nine_context *context = &device->context;
+    uint enabled = fetch4_shadow_enabled & 1;
+    uint shadow = (fetch4_shadow_enabled >> 1) & 1;
+    uint fetch4_compatible = (fetch4_shadow_enabled >> 2) & 1;
 
     context->texture[stage].enabled = enabled;
+    if (enabled) {
+       if (stage < NINE_MAX_SAMPLERS_PS)
+          context->enabled_samplers_mask_ps |= BITFIELD_BIT(stage - NINE_SAMPLER_PS(0));
+       else if (stage >= NINE_SAMPLER_VS(0))
+          context->enabled_samplers_mask_vs |= BITFIELD_BIT(stage - NINE_SAMPLER_VS(0));
+    } else {
+       if (stage < NINE_MAX_SAMPLERS_PS)
+          context->enabled_samplers_mask_ps &= ~BITFIELD_BIT(stage - NINE_SAMPLER_PS(0));
+       else if (stage >= NINE_SAMPLER_VS(0))
+          context->enabled_samplers_mask_vs &= ~BITFIELD_BIT(stage - NINE_SAMPLER_VS(0));
+    }
     context->samplers_shadow &= ~(1 << stage);
     context->samplers_shadow |= shadow << stage;
+    context->samplers_fetch4 &= ~(1 << stage);
+    context->samplers_fetch4 |= fetch4_compatible << stage;
     context->texture[stage].shadow = shadow;
     context->texture[stage].lod = lod;
     context->texture[stage].type = type;
@@ -1461,8 +1536,7 @@ nine_context_set_texture(struct NineDevice9 *device,
                          DWORD Stage,
                          struct NineBaseTexture9 *tex)
 {
-    BOOL enabled = FALSE;
-    BOOL shadow = FALSE;
+    DWORD fetch4_shadow_enabled = 0;
     DWORD lod = 0;
     D3DRESOURCETYPE type = D3DRTYPE_TEXTURE;
     uint8_t pstype = 0;
@@ -1473,8 +1547,9 @@ nine_context_set_texture(struct NineDevice9 *device,
      * In that case, the texture is rebound later
      * (in NineBaseTexture9_Validate/NineBaseTexture9_UploadSelf). */
     if (tex && tex->base.resource) {
-        enabled = TRUE;
-        shadow = tex->shadow;
+        fetch4_shadow_enabled = 1;
+        fetch4_shadow_enabled |= tex->shadow << 1;
+        fetch4_shadow_enabled |= tex->fetch4_compatible << 2;
         lod = tex->managed.lod;
         type = tex->base.type;
         pstype = tex->pstype;
@@ -1483,8 +1558,9 @@ nine_context_set_texture(struct NineDevice9 *device,
         view1 = NineBaseTexture9_GetSamplerView(tex, 1);
     }
 
-    nine_context_set_texture_apply(device, Stage, enabled,
-                                   shadow, lod, type, pstype,
+    nine_context_set_texture_apply(device, Stage,
+                                   fetch4_shadow_enabled,
+                                   lod, type, pstype,
                                    res, view0, view1);
 }
 
@@ -1494,6 +1570,18 @@ CSMT_ITEM_NO_WAIT(nine_context_set_sampler_state,
                   ARG_VAL(DWORD, Value))
 {
     struct nine_context *context = &device->context;
+
+    if (unlikely(Type == D3DSAMP_MIPMAPLODBIAS)) {
+        if (Value == FETCH4_ENABLE ||
+            Value == FETCH4_DISABLE) {
+            context->rs[NINED3DRS_FETCH4] &= ~(1 << Sampler);
+            context->rs[NINED3DRS_FETCH4] |= (Value == FETCH4_ENABLE) << Sampler;
+            context->changed.group |= NINE_STATE_PS_PARAMS_MISC;
+            if (Value == FETCH4_ENABLE)
+                WARN_ONCE("FETCH4 support is incomplete. Please report if buggy shadows.");
+            return;
+        }
+    }
 
     if (unlikely(!nine_check_sampler_state_value(Type, Value)))
         return;
@@ -1511,6 +1599,13 @@ CSMT_ITEM_NO_WAIT(nine_context_set_stream_source_apply,
 {
     struct nine_context *context = &device->context;
     const unsigned i = StreamNumber;
+
+    /* For normal draws, these tests are useless,
+     * but not for *Up draws */
+    if (context->vtxbuf[i].buffer.resource == res &&
+        context->vtxbuf[i].buffer_offset == OffsetInBytes &&
+        context->vtxbuf[i].stride == Stride)
+        return;
 
     context->vtxbuf[i].stride = Stride;
     context->vtxbuf[i].buffer_offset = OffsetInBytes;
@@ -1798,19 +1893,7 @@ CSMT_ITEM_NO_WAIT(nine_context_set_render_target,
     const unsigned i = RenderTargetIndex;
 
     if (i == 0) {
-        context->viewport.X = 0;
-        context->viewport.Y = 0;
-        context->viewport.Width = rt->desc.Width;
-        context->viewport.Height = rt->desc.Height;
-        context->viewport.MinZ = 0.0f;
-        context->viewport.MaxZ = 1.0f;
-
-        context->scissor.minx = 0;
-        context->scissor.miny = 0;
-        context->scissor.maxx = rt->desc.Width;
-        context->scissor.maxy = rt->desc.Height;
-
-        context->changed.group |= NINE_STATE_VIEWPORT | NINE_STATE_SCISSOR | NINE_STATE_MULTISAMPLE;
+        context->changed.group |= NINE_STATE_MULTISAMPLE;
 
         if (context->rt[0] &&
             (context->rt[0]->desc.MultiSampleType <= D3DMULTISAMPLE_NONMASKABLE) !=
@@ -1839,6 +1922,9 @@ CSMT_ITEM_NO_WAIT(nine_context_set_viewport,
 {
     struct nine_context *context = &device->context;
 
+    if (!memcmp(viewport, &context->viewport, sizeof(context->viewport)))
+        return;
+
     context->viewport = *viewport;
     context->changed.group |= NINE_STATE_VIEWPORT;
 }
@@ -1847,6 +1933,9 @@ CSMT_ITEM_NO_WAIT(nine_context_set_scissor,
                   ARG_COPY_REF(struct pipe_scissor_state, scissor))
 {
     struct nine_context *context = &device->context;
+
+    if (!memcmp(scissor, &context->scissor, sizeof(context->scissor)))
+        return;
 
     context->scissor = *scissor;
     context->changed.group |= NINE_STATE_SCISSOR;
@@ -1860,6 +1949,17 @@ CSMT_ITEM_NO_WAIT(nine_context_set_transform,
     D3DMATRIX *M = nine_state_access_transform(&context->ff, State, TRUE);
 
     *M = *pMatrix;
+    if (State == D3DTS_PROJECTION) {
+        BOOL prev_zfog = context->zfog;
+        /* Pixel fog (with WFOG advertised): source is either Z or W.
+         * W is the source if the projection matrix is not orthogonal.
+         * Tests on Win 10 seem to indicate _34
+         * and _33 are checked against 0, 1. */
+        context->zfog = (M->_34 == 0.0f &&
+                         M->_44 == 1.0f);
+        if (context->zfog != prev_zfog)
+            context->changed.group |= NINE_STATE_PS_PARAMS_MISC;
+    }
     context->ff.changed.transform[State / 32] |= 1 << (State % 32);
     context->changed.group |= NINE_STATE_FF;
 }
@@ -1960,7 +2060,10 @@ CSMT_ITEM_NO_WAIT(nine_context_set_clip_plane,
     struct nine_context *context = &device->context;
 
     memcpy(&context->clip.ucp[Index][0], pPlane, sizeof(context->clip.ucp[0]));
-    context->changed.ucp = TRUE;
+    if (!device->driver_caps.emulate_ucp)
+        context->changed.ucp = TRUE;
+    else
+        context->changed.group |= NINE_STATE_FF_VS_OTHER | NINE_STATE_VS_CONST;
 }
 
 CSMT_ITEM_NO_WAIT(nine_context_set_swvp,
@@ -2308,7 +2411,7 @@ CSMT_ITEM_NO_WAIT(nine_context_clear_fb,
 
 static inline void
 init_draw_info(struct pipe_draw_info *info,
-               struct pipe_draw_start_count *draw,
+               struct pipe_draw_start_count_bias *draw,
                struct NineDevice9 *dev, D3DPRIMITIVETYPE type, UINT count)
 {
     info->mode = d3dprimitivetype_to_pipe_prim(type);
@@ -2319,7 +2422,12 @@ init_draw_info(struct pipe_draw_info *info,
         info->instance_count = MAX2(dev->context.stream_freq[0] & 0x7FFFFF, 1);
     info->primitive_restart = FALSE;
     info->has_user_indices = FALSE;
+    info->take_index_buffer_ownership = FALSE;
+    info->index_bias_varies = FALSE;
+    info->increment_draw_id = FALSE;
+    info->was_line_loop = FALSE;
     info->restart_index = 0;
+    info->view_mask = 0;
 }
 
 CSMT_ITEM_NO_WAIT(nine_context_draw_primitive,
@@ -2329,19 +2437,22 @@ CSMT_ITEM_NO_WAIT(nine_context_draw_primitive,
 {
     struct nine_context *context = &device->context;
     struct pipe_draw_info info;
-    struct pipe_draw_start_count draw;
+    struct pipe_draw_start_count_bias draw;
+
+    if (context->vs && context->vs->swvp_only && !context->swvp)
+        return;
 
     nine_update_state(device);
 
     init_draw_info(&info, &draw, device, PrimitiveType, PrimitiveCount);
     info.index_size = 0;
     draw.start = StartVertex;
-    info.index_bias = 0;
+    draw.index_bias = 0;
     info.min_index = draw.start;
-    info.max_index = draw.count - 1;
+    info.max_index = draw.start + draw.count - 1;
     info.index.resource = NULL;
 
-    context->pipe->draw_vbo(context->pipe, &info, NULL, &draw, 1);
+    context->pipe->draw_vbo(context->pipe, &info, 0, NULL, &draw, 1);
 }
 
 CSMT_ITEM_NO_WAIT(nine_context_draw_indexed_primitive,
@@ -2354,45 +2465,24 @@ CSMT_ITEM_NO_WAIT(nine_context_draw_indexed_primitive,
 {
     struct nine_context *context = &device->context;
     struct pipe_draw_info info;
-    struct pipe_draw_start_count draw;
+    struct pipe_draw_start_count_bias draw;
+
+    if (context->vs && context->vs->swvp_only && !context->swvp)
+        return;
 
     nine_update_state(device);
 
     init_draw_info(&info, &draw, device, PrimitiveType, PrimitiveCount);
     info.index_size = context->index_size;
     draw.start = context->index_offset / context->index_size + StartIndex;
-    info.index_bias = BaseVertexIndex;
+    draw.index_bias = BaseVertexIndex;
     info.index_bounds_valid = true;
     /* These don't include index bias: */
     info.min_index = MinVertexIndex;
     info.max_index = MinVertexIndex + NumVertices - 1;
     info.index.resource = context->idxbuf;
 
-    context->pipe->draw_vbo(context->pipe, &info, NULL, &draw, 1);
-}
-
-CSMT_ITEM_NO_WAIT(nine_context_draw_primitive_from_vtxbuf,
-                  ARG_VAL(D3DPRIMITIVETYPE, PrimitiveType),
-                  ARG_VAL(UINT, PrimitiveCount),
-                  ARG_BIND_VBUF(struct pipe_vertex_buffer, vtxbuf))
-{
-    struct nine_context *context = &device->context;
-    struct pipe_draw_info info;
-    struct pipe_draw_start_count draw;
-
-    nine_update_state(device);
-
-    init_draw_info(&info, &draw, device, PrimitiveType, PrimitiveCount);
-    info.index_size = 0;
-    draw.start = 0;
-    info.index_bias = 0;
-    info.min_index = 0;
-    info.max_index = draw.count - 1;
-    info.index.resource = NULL;
-
-    context->pipe->set_vertex_buffers(context->pipe, 0, 1, vtxbuf);
-
-    context->pipe->draw_vbo(context->pipe, &info, NULL, &draw, 1);
+    context->pipe->draw_vbo(context->pipe, &info, 0, NULL, &draw, 1);
 }
 
 CSMT_ITEM_NO_WAIT(nine_context_draw_indexed_primitive_from_vtxbuf_idxbuf,
@@ -2408,14 +2498,17 @@ CSMT_ITEM_NO_WAIT(nine_context_draw_indexed_primitive_from_vtxbuf_idxbuf,
 {
     struct nine_context *context = &device->context;
     struct pipe_draw_info info;
-    struct pipe_draw_start_count draw;
+    struct pipe_draw_start_count_bias draw;
+
+    if (context->vs && context->vs->swvp_only && !context->swvp)
+        return;
 
     nine_update_state(device);
 
     init_draw_info(&info, &draw, device, PrimitiveType, PrimitiveCount);
     info.index_size = index_size;
     draw.start = index_offset / info.index_size;
-    info.index_bias = 0;
+    draw.index_bias = 0;
     info.index_bounds_valid = true;
     info.min_index = MinVertexIndex;
     info.max_index = MinVertexIndex + NumVertices - 1;
@@ -2425,9 +2518,10 @@ CSMT_ITEM_NO_WAIT(nine_context_draw_indexed_primitive_from_vtxbuf_idxbuf,
     else
         info.index.user = user_ibuf;
 
-    context->pipe->set_vertex_buffers(context->pipe, 0, 1, vbuf);
+    context->pipe->set_vertex_buffers(context->pipe, 0, 1, 0, false, vbuf);
+    context->changed.vtxbuf |= 1;
 
-    context->pipe->draw_vbo(context->pipe, &info, NULL, &draw, 1);
+    context->pipe->draw_vbo(context->pipe, &info, 0, NULL, &draw, 1);
 }
 
 CSMT_ITEM_NO_WAIT(nine_context_resource_copy_region,
@@ -2505,6 +2599,7 @@ CSMT_ITEM_NO_WAIT_WITH_COUNTER(nine_context_range_upload,
                                ARG_BIND_RES(struct pipe_resource, res),
                                ARG_VAL(unsigned, offset),
                                ARG_VAL(unsigned, size),
+                               ARG_VAL(unsigned, usage),
                                ARG_VAL(const void *, data))
 {
     struct nine_context *context = &device->context;
@@ -2512,7 +2607,7 @@ CSMT_ITEM_NO_WAIT_WITH_COUNTER(nine_context_range_upload,
     /* Binding src_ref avoids release before upload */
     (void)src_ref;
 
-    context->pipe->buffer_subdata(context->pipe, res, 0, offset, size, data);
+    context->pipe->buffer_subdata(context->pipe, res, usage, offset, size, data);
 }
 
 CSMT_ITEM_NO_WAIT_WITH_COUNTER(nine_context_box_upload,
@@ -2534,7 +2629,19 @@ CSMT_ITEM_NO_WAIT_WITH_COUNTER(nine_context_box_upload,
     /* Binding src_ref avoids release before upload */
     (void)src_ref;
 
-    map = pipe->transfer_map(pipe,
+    if (is_ATI1_ATI2(src_format)) {
+        const unsigned bw = util_format_get_blockwidth(src_format);
+        const unsigned bh = util_format_get_blockheight(src_format);
+        /* For these formats, the allocate surface can be too small to contain
+         * a block. Yet we can be asked to upload such surfaces.
+         * It is ok for these surfaces to have buggy content,
+         * but we should avoid crashing.
+         * Calling util_format_translate_3d would read out of bounds. */
+        if (dst_box->width < bw || dst_box->height < bh)
+            return;
+    }
+
+    map = pipe->texture_map(pipe,
                              res,
                              level,
                              PIPE_MAP_WRITE | PIPE_MAP_DISCARD_RANGE,
@@ -2555,7 +2662,7 @@ CSMT_ITEM_NO_WAIT_WITH_COUNTER(nine_context_box_upload,
                                     dst_box->width, dst_box->height,
                                     dst_box->depth);
 
-    pipe_transfer_unmap(pipe, transfer);
+    pipe_texture_unmap(pipe, transfer);
 }
 
 struct pipe_query *
@@ -2617,6 +2724,13 @@ nine_context_get_query_result(struct NineDevice9 *device, struct pipe_query *que
 
     DBG("Query result %s\n", ret ? "found" : "not yet available");
     return ret;
+}
+
+CSMT_ITEM_NO_WAIT(nine_context_pipe_flush)
+{
+    struct nine_context *context = &device->context;
+
+    context->pipe->flush(context->pipe, NULL, PIPE_FLUSH_ASYNC);
 }
 
 /* State defaults */
@@ -2735,7 +2849,9 @@ static const DWORD nine_render_state_defaults[NINED3DRS_LAST + 1] =
     [NINED3DRS_VSPOINTSIZE] = FALSE,
     [NINED3DRS_RTMASK] = 0xf,
     [NINED3DRS_ALPHACOVERAGE] = FALSE,
-    [NINED3DRS_MULTISAMPLE] = FALSE
+    [NINED3DRS_MULTISAMPLE] = FALSE,
+    [NINED3DRS_FETCH4] = 0,
+    [NINED3DRS_EMULATED_ALPHATEST] = 7 /* ALWAYS pass */
 };
 static const DWORD nine_tex_stage_state_defaults[NINED3DTSS_LAST + 1] =
 {
@@ -2784,10 +2900,12 @@ void nine_state_restore_non_cso(struct NineDevice9 *device)
 {
     struct nine_context *context = &device->context;
 
-    context->changed.group = NINE_STATE_ALL;
+    context->changed.group = NINE_STATE_ALL; /* TODO: we can remove states that have prepared commits */
     context->changed.vtxbuf = (1ULL << device->caps.MaxStreams) - 1;
     context->changed.ucp = TRUE;
-    context->commit |= NINE_STATE_COMMIT_CONST_VS | NINE_STATE_COMMIT_CONST_PS;
+    context->commit |= 0xffffffff; /* re-commit everything */
+    context->enabled_sampler_count_vs = 0;
+    context->enabled_sampler_count_ps = 0;
 }
 
 void
@@ -2837,6 +2955,7 @@ nine_state_set_defaults(struct NineDevice9 *device, const D3DCAPS9 *caps,
     memset(context->ps_const_i, 0, sizeof(context->ps_const_i));
     memset(state->ps_const_b, 0, sizeof(state->ps_const_b));
     memset(context->ps_const_b, 0, sizeof(context->ps_const_b));
+    context->zfog = false; /* Guess from wine tests: both true or false are ok */
 
     /* Cap dependent initial state:
      */
@@ -2912,11 +3031,15 @@ nine_context_clear(struct NineDevice9 *device)
 
     cso_set_samplers(cso, PIPE_SHADER_VERTEX, 0, NULL);
     cso_set_samplers(cso, PIPE_SHADER_FRAGMENT, 0, NULL);
+    context->enabled_sampler_count_vs = 0;
+    context->enabled_sampler_count_ps = 0;
 
-    pipe->set_sampler_views(pipe, PIPE_SHADER_VERTEX, 0, NINE_MAX_SAMPLERS_VS, NULL);
-    pipe->set_sampler_views(pipe, PIPE_SHADER_FRAGMENT, 0, NINE_MAX_SAMPLERS_PS, NULL);
+    pipe->set_sampler_views(pipe, PIPE_SHADER_VERTEX, 0, 0,
+                            NINE_MAX_SAMPLERS_VS, false, NULL);
+    pipe->set_sampler_views(pipe, PIPE_SHADER_FRAGMENT, 0, 0,
+                            NINE_MAX_SAMPLERS_PS, false, NULL);
 
-    pipe->set_vertex_buffers(pipe, 0, device->caps.MaxStreams, NULL);
+    pipe->set_vertex_buffers(pipe, 0, 0, device->caps.MaxStreams, false, NULL);
 
     for (i = 0; i < ARRAY_SIZE(context->rt); ++i)
        nine_bind(&context->rt[i], NULL);
@@ -2984,8 +3107,8 @@ update_vertex_elements_sw(struct NineDevice9 *device)
     const struct NineVertexShader9 *vs;
     unsigned n, b, i;
     int index;
-    char vdecl_index_map[16]; /* vs->num_inputs <= 16 */
-    char used_streams[device->caps.MaxStreams];
+    int8_t vdecl_index_map[16]; /* vs->num_inputs <= 16 */
+    int8_t used_streams[device->caps.MaxStreams];
     int dummy_vbo_stream = -1;
     BOOL need_dummy_vbo = FALSE;
     struct cso_velems_state ve;
@@ -3044,6 +3167,7 @@ update_vertex_elements_sw(struct NineDevice9 *device)
             ve.velems[n].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
             ve.velems[n].src_offset = 0;
             ve.velems[n].instance_divisor = 0;
+            ve.velems[n].dual_slot = false;
         }
     }
 
@@ -3083,7 +3207,7 @@ update_vertex_buffers_sw(struct NineDevice9 *device, int start_vertice, int num_
                 u_box_1d(vtxbuf.buffer_offset + offset + start_vertice * vtxbuf.stride,
                          num_vertices * vtxbuf.stride, &box);
 
-                userbuf = pipe->transfer_map(pipe, buf, 0, PIPE_MAP_READ, &box,
+                userbuf = pipe->buffer_map(pipe, buf, 0, PIPE_MAP_READ, &box,
                                              &(sw_internal->transfers_so[i]));
                 vtxbuf.is_user_buffer = true;
                 vtxbuf.buffer.user = userbuf;
@@ -3100,10 +3224,10 @@ update_vertex_buffers_sw(struct NineDevice9 *device, int start_vertice, int num_
                                   &(vtxbuf.buffer.resource));
                     u_upload_unmap(device->pipe_sw->stream_uploader);
                 }
-                pipe_sw->set_vertex_buffers(pipe_sw, i, 1, &vtxbuf);
+                pipe_sw->set_vertex_buffers(pipe_sw, i, 1, 0, false, &vtxbuf);
                 pipe_vertex_buffer_unreference(&vtxbuf);
             } else
-                pipe_sw->set_vertex_buffers(pipe_sw, i, 1, NULL);
+                pipe_sw->set_vertex_buffers(pipe_sw, i, 0, 1, false, NULL);
         }
     }
     nine_context_get_pipe_release(device);
@@ -3145,13 +3269,13 @@ update_vs_constants_sw(struct NineDevice9 *device)
 
         buf = cb.user_buffer;
 
-        pipe_sw->set_constant_buffer(pipe_sw, PIPE_SHADER_VERTEX, 0, &cb);
+        pipe_sw->set_constant_buffer(pipe_sw, PIPE_SHADER_VERTEX, 0, false, &cb);
         if (cb.buffer)
             pipe_resource_reference(&cb.buffer, NULL);
 
-        cb.user_buffer = (char *)buf + 4096 * sizeof(float[4]);
+        cb.user_buffer = (int8_t *)buf + 4096 * sizeof(float[4]);
 
-        pipe_sw->set_constant_buffer(pipe_sw, PIPE_SHADER_VERTEX, 1, &cb);
+        pipe_sw->set_constant_buffer(pipe_sw, PIPE_SHADER_VERTEX, 1, false, &cb);
         if (cb.buffer)
             pipe_resource_reference(&cb.buffer, NULL);
     }
@@ -3164,7 +3288,7 @@ update_vs_constants_sw(struct NineDevice9 *device)
         cb.buffer_size = 2048 * sizeof(float[4]);
         cb.user_buffer = state->vs_const_i;
 
-        pipe_sw->set_constant_buffer(pipe_sw, PIPE_SHADER_VERTEX, 2, &cb);
+        pipe_sw->set_constant_buffer(pipe_sw, PIPE_SHADER_VERTEX, 2, false, &cb);
         if (cb.buffer)
             pipe_resource_reference(&cb.buffer, NULL);
     }
@@ -3177,7 +3301,7 @@ update_vs_constants_sw(struct NineDevice9 *device)
         cb.buffer_size = 512 * sizeof(float[4]);
         cb.user_buffer = state->vs_const_b;
 
-        pipe_sw->set_constant_buffer(pipe_sw, PIPE_SHADER_VERTEX, 3, &cb);
+        pipe_sw->set_constant_buffer(pipe_sw, PIPE_SHADER_VERTEX, 3, false, &cb);
         if (cb.buffer)
             pipe_resource_reference(&cb.buffer, NULL);
     }
@@ -3208,7 +3332,7 @@ update_vs_constants_sw(struct NineDevice9 *device)
             cb.user_buffer = NULL;
         }
 
-        pipe_sw->set_constant_buffer(pipe_sw, PIPE_SHADER_VERTEX, 4, &cb);
+        pipe_sw->set_constant_buffer(pipe_sw, PIPE_SHADER_VERTEX, 4, false, &cb);
         if (cb.buffer)
             pipe_resource_reference(&cb.buffer, NULL);
     }
@@ -3243,9 +3367,9 @@ nine_state_after_draw_sw(struct NineDevice9 *device)
     int i;
 
     for (i = 0; i < 4; i++) {
-        pipe_sw->set_vertex_buffers(pipe_sw, i, 1, NULL);
+        pipe_sw->set_vertex_buffers(pipe_sw, i, 0, 1, false, NULL);
         if (sw_internal->transfers_so[i])
-            pipe->transfer_unmap(pipe, sw_internal->transfers_so[i]);
+            pipe->buffer_unmap(pipe, sw_internal->transfers_so[i]);
         sw_internal->transfers_so[i] = NULL;
     }
     nine_context_get_pipe_release(device);
@@ -3390,7 +3514,7 @@ const uint32_t nine_render_state_group[NINED3DRS_LAST + 1] =
 {
     [D3DRS_ZENABLE] = NINE_STATE_DSA | NINE_STATE_MULTISAMPLE,
     [D3DRS_FILLMODE] = NINE_STATE_RASTERIZER,
-    [D3DRS_SHADEMODE] = NINE_STATE_RASTERIZER,
+    [D3DRS_SHADEMODE] = NINE_STATE_RASTERIZER | NINE_STATE_PS_PARAMS_MISC,
     [D3DRS_ZWRITEENABLE] = NINE_STATE_DSA,
     [D3DRS_ALPHATESTENABLE] = NINE_STATE_DSA,
     [D3DRS_LASTPIXEL] = NINE_STATE_RASTERIZER,

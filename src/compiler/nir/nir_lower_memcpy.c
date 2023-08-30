@@ -50,7 +50,7 @@ memcpy_load_deref_elem(nir_builder *b, nir_deref_instr *parent,
 {
    nir_deref_instr *deref;
 
-   index = nir_i2i(b, index, nir_dest_bit_size(parent->dest));
+   index = nir_i2iN(b, index, nir_dest_bit_size(parent->dest));
    assert(parent->deref_type == nir_deref_type_cast);
    deref = nir_build_deref_ptr_as_array(b, parent, index);
 
@@ -71,7 +71,7 @@ memcpy_store_deref_elem(nir_builder *b, nir_deref_instr *parent,
 {
    nir_deref_instr *deref;
 
-   index = nir_i2i(b, index, nir_dest_bit_size(parent->dest));
+   index = nir_i2iN(b, index, nir_dest_bit_size(parent->dest));
    assert(parent->deref_type == nir_deref_type_cast);
    deref = nir_build_deref_ptr_as_array(b, parent, index);
    nir_store_deref(b, deref, value, ~0);
@@ -111,11 +111,14 @@ lower_memcpy_impl(nir_function_impl *impl)
             uint64_t size = nir_src_as_uint(cpy->src[2]);
             uint64_t offset = 0;
             while (offset < size) {
-               uint64_t remaining = offset - size;
-               /* For our chunk size, we choose the largest power-of-two that
-                * divides size with a maximum of 16B (a vec4).
+               uint64_t remaining = size - offset;
+               /* Find the largest chunk size power-of-two (MSB in remaining)
+                * and limit our chunk to 16B (a vec4). It's important to do as
+                * many 16B chunks as possible first so that the index
+                * computation is correct for
+                * memcpy_(load|store)_deref_elem_imm.
                 */
-               unsigned copy_size = 1u << MIN2(ffsll(remaining) - 1, 4);
+               unsigned copy_size = 1u << MIN2(util_last_bit64(remaining) - 1, 4);
                const struct glsl_type *copy_type =
                   copy_type_for_byte_size(copy_size);
 

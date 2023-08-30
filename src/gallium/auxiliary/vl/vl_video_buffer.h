@@ -122,6 +122,9 @@ vl_video_buffer_template(struct pipe_resource *templ,
                          unsigned usage, unsigned plane,
                          enum pipe_video_chroma_format chroma_format);
 
+void
+vl_video_buffer_destroy(struct pipe_video_buffer *buffer);
+
 /**
  * creates a video buffer, can be used as a standard implementation for pipe->create_video_buffer
  */
@@ -150,6 +153,8 @@ vl_video_buffer_create_ex2(struct pipe_context *pipe,
 /* Create pipe_video_buffer by using resource_create with planar formats. */
 struct pipe_video_buffer *
 vl_video_buffer_create_as_resource(struct pipe_context *pipe,
-                                   const struct pipe_video_buffer *tmpl);
+                                   const struct pipe_video_buffer *tmpl,
+                                   const uint64_t *modifiers,
+                                   int modifiers_count);
 
 #endif /* vl_video_buffer_h */

@@ -22,6 +22,9 @@
 
 #include <stdint.h>
 
+#include "compiler/nir/nir.h"
+#include "compiler/nir/nir_builder.h"
+
 #include "pipe/p_defines.h"
 
 #include "util/u_inlines.h"
@@ -29,10 +32,9 @@
 #include "util/format/u_format.h"
 #include "util/u_math.h"
 #include "util/u_surface.h"
+#include "util/u_thread.h"
 
-#include "tgsi/tgsi_ureg.h"
-
-#include "os/os_thread.h"
+#include "nv50_ir_driver.h"
 
 #include "nv50/nv50_context.h"
 #include "nv50/nv50_resource.h"
@@ -257,7 +259,7 @@ nv50_resource_copy_region(struct pipe_context *pipe,
    BCTX_REFN(nv50->bufctx, 2D, nv04_resource(src), RD);
    BCTX_REFN(nv50->bufctx, 2D, nv04_resource(dst), WR);
    nouveau_pushbuf_bufctx(nv50->base.pushbuf, nv50->bufctx);
-   nouveau_pushbuf_validate(nv50->base.pushbuf);
+   PUSH_VAL(nv50->base.pushbuf);
 
    for (; dst_layer < dstz + src_box->depth; ++dst_layer, ++src_layer) {
       ret = nv50_2d_texture_do_copy(nv50->base.pushbuf,
@@ -295,10 +297,10 @@ nv50_clear_render_target(struct pipe_context *pipe,
    PUSH_DATAf(push, color->f[2]);
    PUSH_DATAf(push, color->f[3]);
 
-   if (nouveau_pushbuf_space(push, 64 + sf->depth, 1, 0))
+   if (!PUSH_SPACE_EX(push, 64 + sf->depth, 1, 0))
       return;
 
-   PUSH_REFN(push, bo, mt->base.domain | NOUVEAU_BO_WR);
+   PUSH_REF1(push, bo, mt->base.domain | NOUVEAU_BO_WR);
 
    BEGIN_NV04(push, NV50_3D(SCREEN_SCISSOR_HORIZ), 2);
    PUSH_DATA (push, ( width << 16) | dstx);
@@ -394,10 +396,10 @@ nv50_clear_depth_stencil(struct pipe_context *pipe,
       mode |= NV50_3D_CLEAR_BUFFERS_S;
    }
 
-   if (nouveau_pushbuf_space(push, 64 + sf->depth, 1, 0))
+   if (!PUSH_SPACE_EX(push, 64 + sf->depth, 1, 0))
       return;
 
-   PUSH_REFN(push, bo, mt->base.domain | NOUVEAU_BO_WR);
+   PUSH_REF1(push, bo, mt->base.domain | NOUVEAU_BO_WR);
 
    BEGIN_NV04(push, NV50_3D(SCREEN_SCISSOR_HORIZ), 2);
    PUSH_DATA (push, ( width << 16) | dstx);
@@ -534,9 +536,24 @@ nv50_clear(struct pipe_context *pipe, unsigned buffers, const struct pipe_scisso
    unsigned i, j, k;
    uint32_t mode = 0;
 
+   simple_mtx_lock(&nv50->screen->state_lock);
+
    /* don't need NEW_BLEND, COLOR_MASK doesn't affect CLEAR_BUFFERS */
    if (!nv50_state_validate_3d(nv50, NV50_NEW_3D_FRAMEBUFFER))
-      return;
+      goto out;
+
+   if (scissor_state) {
+      uint32_t minx = scissor_state->minx;
+      uint32_t maxx = MIN2(fb->width, scissor_state->maxx);
+      uint32_t miny = scissor_state->miny;
+      uint32_t maxy = MIN2(fb->height, scissor_state->maxy);
+      if (maxx <= minx || maxy <= miny)
+         goto out;
+
+      BEGIN_NV04(push, NV50_3D(SCREEN_SCISSOR_HORIZ), 2);
+      PUSH_DATA (push, minx | (maxx - minx) << 16);
+      PUSH_DATA (push, miny | (maxy - miny) << 16);
+   }
 
    /* We have to clear ALL of the layers, not up to the min number of layers
     * of any attachment. */
@@ -602,6 +619,17 @@ nv50_clear(struct pipe_context *pipe, unsigned buffers, const struct pipe_scisso
    /* restore the array mode */
    BEGIN_NV04(push, NV50_3D(RT_ARRAY_MODE), 1);
    PUSH_DATA (push, nv50->rt_array_mode);
+
+   /* restore screen scissor */
+   if (scissor_state) {
+      BEGIN_NV04(push, NV50_3D(SCREEN_SCISSOR_HORIZ), 2);
+      PUSH_DATA (push, fb->width << 16);
+      PUSH_DATA (push, fb->height << 16);
+   }
+
+out:
+   PUSH_KICK(push);
+   simple_mtx_unlock(&nv50->screen->state_lock);
 }
 
 static void
@@ -633,7 +661,7 @@ nv50_clear_buffer_push(struct pipe_context *pipe,
 
    nouveau_bufctx_refn(nv50->bufctx, 0, buf->bo, buf->domain | NOUVEAU_BO_WR);
    nouveau_pushbuf_bufctx(push, nv50->bufctx);
-   nouveau_pushbuf_validate(push);
+   PUSH_VAL(push);
 
    offset &= ~0xff;
 
@@ -672,7 +700,7 @@ nv50_clear_buffer_push(struct pipe_context *pipe,
       count -= nr;
    }
 
-   nv50_resource_validate(buf, NOUVEAU_BO_WR);
+   nv50_resource_validate(nv50, buf, NOUVEAU_BO_WR);
 
    nouveau_bufctx_reset(nv50->bufctx, 0);
 }
@@ -751,10 +779,10 @@ nv50_clear_buffer(struct pipe_context *pipe,
    PUSH_DATA (push, color.ui[2]);
    PUSH_DATA (push, color.ui[3]);
 
-   if (nouveau_pushbuf_space(push, 64, 1, 0))
+   if (!PUSH_SPACE_EX(push, 64, 1, 0))
       return;
 
-   PUSH_REFN(push, buf->bo, buf->domain | NOUVEAU_BO_WR);
+   PUSH_REF1(push, buf->bo, buf->domain | NOUVEAU_BO_WR);
 
    BEGIN_NV04(push, NV50_3D(SCREEN_SCISSOR_HORIZ), 2);
    PUSH_DATA (push, width << 16);
@@ -795,7 +823,7 @@ nv50_clear_buffer(struct pipe_context *pipe,
    BEGIN_NV04(push, NV50_3D(COND_MODE), 1);
    PUSH_DATA (push, nv50->cond_condmode);
 
-   nv50_resource_validate(buf, NOUVEAU_BO_WR);
+   nv50_resource_validate(nv50, buf, NOUVEAU_BO_WR);
 
    if (width * height != elements) {
       offset += width * height * data_size;
@@ -836,8 +864,8 @@ struct nv50_blitctx
       struct nv50_program *vp;
       struct nv50_program *gp;
       struct nv50_program *fp;
-      unsigned num_textures[3];
-      unsigned num_samplers[3];
+      unsigned num_textures[NV50_MAX_3D_SHADER_STAGES];
+      unsigned num_samplers[NV50_MAX_3D_SHADER_STAGES];
       struct pipe_sampler_view *texture[2];
       struct nv50_tsc_entry *sampler[2];
       unsigned min_samples;
@@ -881,12 +909,9 @@ nv50_blitter_make_fp(struct pipe_context *pipe,
                      unsigned mode,
                      enum pipe_texture_target ptarg)
 {
-   struct ureg_program *ureg;
-   struct ureg_src tc;
-   struct ureg_dst out;
-   struct ureg_dst data;
-
-   const unsigned target = nv50_blit_get_tgsi_texture_target(ptarg);
+   enum glsl_sampler_dim sampler_dim
+      = nv50_blit_get_glsl_sampler_dim(ptarg);
+   bool is_array = nv50_blit_is_array(ptarg);
 
    bool tex_rgbaz = false;
    bool tex_s = false;
@@ -911,98 +936,139 @@ nv50_blitter_make_fp(struct pipe_context *pipe,
        mode != NV50_BLIT_MODE_XS)
       cvt_un8 = true;
 
-   ureg = ureg_create(PIPE_SHADER_FRAGMENT);
-   if (!ureg)
-      return NULL;
+   const int chipset = nouveau_screen(pipe->screen)->device->chipset;
+   const nir_shader_compiler_options *options =
+      nv50_ir_nir_shader_compiler_options(chipset, PIPE_SHADER_FRAGMENT);
 
-   out = ureg_DECL_output(ureg, TGSI_SEMANTIC_COLOR, 0);
-   tc = ureg_DECL_fs_input(
-      ureg, TGSI_SEMANTIC_GENERIC, 0, TGSI_INTERPOLATE_LINEAR);
+   struct nir_builder b =
+      nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT, options,
+                                     "blitter_fp");
 
+   /* load coordinates */
+   const struct glsl_type* float3 = glsl_vector_type(GLSL_TYPE_FLOAT, 3);
+   nir_variable *coord_var =
+      nir_variable_create(b.shader, nir_var_shader_in, float3, "coord");
+   coord_var->data.location = VARYING_SLOT_VAR0;
+   coord_var->data.interpolation = INTERP_MODE_NOPERSPECTIVE;
+
+   nir_ssa_def *coord = nir_load_var(&b, coord_var);
    if (ptarg == PIPE_TEXTURE_1D_ARRAY) {
       /* Adjust coordinates. Depth is in z, but TEX expects it to be in y. */
-      tc = ureg_swizzle(tc, TGSI_SWIZZLE_X, TGSI_SWIZZLE_Z,
-                        TGSI_SWIZZLE_Z, TGSI_SWIZZLE_Z);
+      coord = nir_channels(&b, coord, TGSI_WRITEMASK_XZ);
+   } else {
+      int size = glsl_get_sampler_dim_coordinate_components(sampler_dim);
+      if (is_array) size += 1;
+      coord = nir_trim_vector(&b, coord, size);
    }
 
-   data = ureg_DECL_temporary(ureg);
+   /* sample textures */
+   const struct glsl_type *sampler_type =
+      glsl_sampler_type(sampler_dim, false, is_array, GLSL_TYPE_FLOAT);
 
+   nir_ssa_def *s = NULL;
    if (tex_s) {
-      ureg_TEX(ureg, ureg_writemask(data, TGSI_WRITEMASK_X),
-               target, tc, ureg_DECL_sampler(ureg, 1));
-      ureg_MOV(ureg, ureg_writemask(data, TGSI_WRITEMASK_Y),
-               ureg_scalar(ureg_src(data), TGSI_SWIZZLE_X));
+      nir_variable *sampler =
+         nir_variable_create(b.shader, nir_var_uniform,
+                             sampler_type, "sampler_s");
+      sampler->data.binding = 1;
+
+      nir_deref_instr *tex_deref = nir_build_deref_var(&b, sampler);
+
+      s = nir_tex_deref(&b, tex_deref, tex_deref, coord);
+      s = nir_channel(&b, s, 0);
    }
+
+   nir_ssa_def *rgba = NULL, *z = NULL;
    if (tex_rgbaz) {
-      const unsigned mask = (mode == NV50_BLIT_MODE_PASS) ?
-         TGSI_WRITEMASK_XYZW : TGSI_WRITEMASK_X;
-      ureg_TEX(ureg, ureg_writemask(data, mask),
-               target, tc, ureg_DECL_sampler(ureg, 0));
+      nir_variable *sampler =
+         nir_variable_create(b.shader, nir_var_uniform,
+                             sampler_type, "sampler_rgbaz");
+      sampler->data.binding = 0;
+
+      nir_deref_instr *tex_deref = nir_build_deref_var(&b, sampler);
+
+      rgba = nir_tex_deref(&b, tex_deref, tex_deref, coord);
+      z = nir_channel(&b, rgba, 0);
    }
 
    /* handle signed to unsigned integer conversions */
-   if (int_clamp)
-      ureg_UMIN(ureg, data, ureg_src(data), ureg_imm1u(ureg, 0x7fffffff));
+   if (int_clamp) {
+      rgba = nir_umin(&b, rgba, nir_imm_int(&b, 0x7fffffff));
+   }
 
+   /* handle conversions */
+   nir_ssa_def *out_ssa;
+   nir_component_mask_t out_mask = 0;
    if (cvt_un8) {
-      struct ureg_src mask;
-      struct ureg_src scale;
-      struct ureg_dst outz;
-      struct ureg_dst outs;
-      struct ureg_dst zdst3 = ureg_writemask(data, TGSI_WRITEMASK_XYZ);
-      struct ureg_dst zdst = ureg_writemask(data, TGSI_WRITEMASK_X);
-      struct ureg_dst sdst = ureg_writemask(data, TGSI_WRITEMASK_Y);
-      struct ureg_src zsrc3 = ureg_src(data);
-      struct ureg_src zsrc = ureg_scalar(zsrc3, TGSI_SWIZZLE_X);
-      struct ureg_src ssrc = ureg_scalar(zsrc3, TGSI_SWIZZLE_Y);
-      struct ureg_src zshuf;
+      if (tex_s) {
+         s = nir_i2f32(&b, s);
+         s = nir_fmul_imm(&b, s, 1.0f / 0xff);
+      } else {
+         s = nir_ssa_undef(&b, 1, 32);
+      }
 
-      mask = ureg_imm3u(ureg, 0x0000ff, 0x00ff00, 0xff0000);
-      scale = ureg_imm4f(ureg,
-                         1.0f / 0x0000ff, 1.0f / 0x00ff00, 1.0f / 0xff0000,
-                         (1 << 24) - 1);
+      if (tex_rgbaz) {
+         z = nir_fmul_imm(&b, z, (1 << 24) - 1);
+         z = nir_f2i32(&b, z);
+         z = nir_iand(&b, z, nir_imm_ivec3(&b, 0x0000ff,
+                                               0x00ff00,
+                                               0xff0000));
+         z = nir_i2f32(&b, z);
+         z = nir_fmul(&b, z, nir_imm_vec3(&b, 1.0f / 0x0000ff,
+                                              1.0f / 0x00ff00,
+                                              1.0f / 0xff0000));
+      } else {
+         z = nir_ssa_undef(&b, 3, 32);
+      }
 
       if (mode == NV50_BLIT_MODE_Z24S8 ||
           mode == NV50_BLIT_MODE_X24S8 ||
           mode == NV50_BLIT_MODE_Z24X8) {
-         outz = ureg_writemask(out, TGSI_WRITEMASK_XYZ);
-         outs = ureg_writemask(out, TGSI_WRITEMASK_W);
-         zshuf = ureg_src(data);
+         out_ssa = nir_vec4(&b,
+                            nir_channel(&b, z, 0),
+                            nir_channel(&b, z, 1),
+                            nir_channel(&b, z, 2),
+                            s);
+
+         if (tex_rgbaz) out_mask |= TGSI_WRITEMASK_XYZ;
+         if (tex_s)     out_mask |= TGSI_WRITEMASK_W;
       } else {
-         outz = ureg_writemask(out, TGSI_WRITEMASK_YZW);
-         outs = ureg_writemask(out, TGSI_WRITEMASK_X);
-         zshuf = ureg_swizzle(zsrc3, TGSI_SWIZZLE_W,
-                              TGSI_SWIZZLE_X, TGSI_SWIZZLE_Y, TGSI_SWIZZLE_Z);
-      }
+         out_ssa = nir_vec4(&b,
+                            s,
+                            nir_channel(&b, z, 0),
+                            nir_channel(&b, z, 1),
+                            nir_channel(&b, z, 2));
 
-      if (tex_s) {
-         ureg_I2F(ureg, sdst, ssrc);
-         ureg_MUL(ureg, outs, ssrc, ureg_scalar(scale, TGSI_SWIZZLE_X));
-      }
-
-      if (tex_rgbaz) {
-         ureg_MUL(ureg, zdst, zsrc, ureg_scalar(scale, TGSI_SWIZZLE_W));
-         ureg_F2I(ureg, zdst, zsrc);
-         ureg_AND(ureg, zdst3, zsrc, mask);
-         ureg_I2F(ureg, zdst3, zsrc3);
-         ureg_MUL(ureg, zdst3, zsrc3, scale);
-         ureg_MOV(ureg, outz, zshuf);
+         if (tex_rgbaz) out_mask |= TGSI_WRITEMASK_YZW;
+         if (tex_s)     out_mask |= TGSI_WRITEMASK_X;
       }
    } else {
-      unsigned mask = TGSI_WRITEMASK_XYZW;
-
-      if (mode != NV50_BLIT_MODE_PASS) {
-         mask &= ~TGSI_WRITEMASK_ZW;
-         if (!tex_s)
-            mask = TGSI_WRITEMASK_X;
-         if (!tex_rgbaz)
-            mask = TGSI_WRITEMASK_Y;
+      if (mode == NV50_BLIT_MODE_PASS) {
+         out_ssa = rgba;
+         out_mask |= TGSI_WRITEMASK_XYZW;
+      } else {
+         out_ssa = nir_vec2(&b, z ? z : nir_ssa_undef(&b, 1, 32),
+                                s ? s : nir_ssa_undef(&b, 1, 32));
+         if (tex_rgbaz) out_mask |= TGSI_WRITEMASK_X;
+         if (tex_s)     out_mask |= TGSI_WRITEMASK_Y;
       }
-      ureg_MOV(ureg, ureg_writemask(out, mask), ureg_src(data));
    }
-   ureg_END(ureg);
 
-   return ureg_create_shader_and_destroy(ureg, pipe);
+   /* write output */
+   const struct glsl_type* out_type =
+      glsl_vector_type(GLSL_TYPE_FLOAT, out_ssa->num_components);
+   nir_variable *out_var =
+      nir_variable_create(b.shader, nir_var_shader_out, out_type, "out");
+   out_var->data.location = FRAG_RESULT_DATA0;
+
+   nir_store_var(&b, out_var, out_ssa, out_mask);
+
+   /* return shader */
+   NIR_PASS_V(b.shader, nir_lower_samplers);
+
+   struct pipe_shader_state state;
+   pipe_shader_state_from_nir(&state, b.shader);
+   return pipe->create_fs_state(pipe, &state);
 }
 
 static void
@@ -1131,12 +1197,13 @@ nv50_blit_set_src(struct nv50_blitctx *blit,
 {
    struct nv50_context *nv50 = blit->nv50;
    struct pipe_context *pipe = &nv50->base.pipe;
-   struct pipe_sampler_view templ;
+   struct pipe_sampler_view templ = {0};
    uint32_t flags;
    enum pipe_texture_target target;
 
    target = nv50_blit_reinterpret_pipe_texture_target(res->target);
 
+   templ.target = target;
    templ.format = format;
    templ.u.tex.first_level = templ.u.tex.last_level = level;
    templ.u.tex.first_layer = templ.u.tex.last_layer = layer;
@@ -1156,18 +1223,19 @@ nv50_blit_set_src(struct nv50_blitctx *blit,
    if (filter && res->nr_samples == 8)
       flags |= NV50_TEXVIEW_FILTER_MSAA8;
 
-   nv50->textures[2][0] = nv50_create_texture_view(
-      pipe, res, &templ, flags, target);
-   nv50->textures[2][1] = NULL;
+   nv50->textures[NV50_SHADER_STAGE_FRAGMENT][0] = nv50_create_texture_view(
+      pipe, res, &templ, flags);
+   nv50->textures[NV50_SHADER_STAGE_FRAGMENT][1] = NULL;
 
-   nv50->num_textures[0] = nv50->num_textures[1] = 0;
-   nv50->num_textures[2] = 1;
+   nv50->num_textures[NV50_SHADER_STAGE_VERTEX] = 0;
+   nv50->num_textures[NV50_SHADER_STAGE_GEOMETRY] = 0;
+   nv50->num_textures[NV50_SHADER_STAGE_FRAGMENT] = 1;
 
    templ.format = nv50_zs_to_s_format(format);
    if (templ.format != res->format) {
-      nv50->textures[2][1] = nv50_create_texture_view(
-         pipe, res, &templ, flags, target);
-      nv50->num_textures[2] = 2;
+      nv50->textures[NV50_SHADER_STAGE_FRAGMENT][1] = nv50_create_texture_view(
+         pipe, res, &templ, flags);
+      nv50->num_textures[NV50_SHADER_STAGE_FRAGMENT] = 2;
    }
 }
 
@@ -1263,20 +1331,21 @@ nv50_blitctx_pre_blit(struct nv50_blitctx *ctx,
       memcpy(nv50->window_rect.rect, info->window_rectangles,
              sizeof(struct pipe_scissor_state) * nv50->window_rect.rects);
 
-   for (s = 0; s < 3; ++s) {
+   for (s = 0; s < NV50_MAX_3D_SHADER_STAGES; ++s) {
       ctx->saved.num_textures[s] = nv50->num_textures[s];
       ctx->saved.num_samplers[s] = nv50->num_samplers[s];
    }
-   ctx->saved.texture[0] = nv50->textures[2][0];
-   ctx->saved.texture[1] = nv50->textures[2][1];
-   ctx->saved.sampler[0] = nv50->samplers[2][0];
-   ctx->saved.sampler[1] = nv50->samplers[2][1];
+   ctx->saved.texture[0] = nv50->textures[NV50_SHADER_STAGE_FRAGMENT][0];
+   ctx->saved.texture[1] = nv50->textures[NV50_SHADER_STAGE_FRAGMENT][1];
+   ctx->saved.sampler[0] = nv50->samplers[NV50_SHADER_STAGE_FRAGMENT][0];
+   ctx->saved.sampler[1] = nv50->samplers[NV50_SHADER_STAGE_FRAGMENT][1];
 
-   nv50->samplers[2][0] = &blitter->sampler[ctx->filter];
-   nv50->samplers[2][1] = &blitter->sampler[ctx->filter];
+   nv50->samplers[NV50_SHADER_STAGE_FRAGMENT][0] = &blitter->sampler[ctx->filter];
+   nv50->samplers[NV50_SHADER_STAGE_FRAGMENT][1] = &blitter->sampler[ctx->filter];
 
-   nv50->num_samplers[0] = nv50->num_samplers[1] = 0;
-   nv50->num_samplers[2] = 2;
+   nv50->num_samplers[NV50_SHADER_STAGE_VERTEX] = 0;
+   nv50->num_samplers[NV50_SHADER_STAGE_GEOMETRY] = 0;
+   nv50->num_samplers[NV50_SHADER_STAGE_FRAGMENT] = 2;
 
    nv50->min_samples = 1;
 
@@ -1314,17 +1383,17 @@ nv50_blitctx_post_blit(struct nv50_blitctx *blit)
    nv50->min_samples = blit->saved.min_samples;
    nv50->window_rect = blit->saved.window_rect;
 
-   pipe_sampler_view_reference(&nv50->textures[2][0], NULL);
-   pipe_sampler_view_reference(&nv50->textures[2][1], NULL);
+   pipe_sampler_view_reference(&nv50->textures[NV50_SHADER_STAGE_FRAGMENT][0], NULL);
+   pipe_sampler_view_reference(&nv50->textures[NV50_SHADER_STAGE_FRAGMENT][1], NULL);
 
-   for (s = 0; s < 3; ++s) {
+   for (s = 0; s < NV50_MAX_3D_SHADER_STAGES; ++s) {
       nv50->num_textures[s] = blit->saved.num_textures[s];
       nv50->num_samplers[s] = blit->saved.num_samplers[s];
    }
-   nv50->textures[2][0] = blit->saved.texture[0];
-   nv50->textures[2][1] = blit->saved.texture[1];
-   nv50->samplers[2][0] = blit->saved.sampler[0];
-   nv50->samplers[2][1] = blit->saved.sampler[1];
+   nv50->textures[NV50_SHADER_STAGE_FRAGMENT][0] = blit->saved.texture[0];
+   nv50->textures[NV50_SHADER_STAGE_FRAGMENT][1] = blit->saved.texture[1];
+   nv50->samplers[NV50_SHADER_STAGE_FRAGMENT][0] = blit->saved.sampler[0];
+   nv50->samplers[NV50_SHADER_STAGE_FRAGMENT][1] = blit->saved.sampler[1];
 
    if (nv50->cond_query && !blit->render_condition_enable)
       nv50->base.pipe.render_condition(&nv50->base.pipe, nv50->cond_query,
@@ -1616,7 +1685,7 @@ nv50_blit_eng2d(struct nv50_context *nv50, const struct pipe_blit_info *info)
    BCTX_REFN(nv50->bufctx, 2D, &dst->base, WR);
    BCTX_REFN(nv50->bufctx, 2D, &src->base, RD);
    nouveau_pushbuf_bufctx(nv50->base.pushbuf, nv50->bufctx);
-   if (nouveau_pushbuf_validate(nv50->base.pushbuf))
+   if (PUSH_VAL(nv50->base.pushbuf))
       return;
 
    for (i = 0; i < info->dst.box.depth; ++i) {
@@ -1656,7 +1725,7 @@ nv50_blit_eng2d(struct nv50_context *nv50, const struct pipe_blit_info *info)
          PUSH_DATA (push, srcy >> 32);
       }
    }
-   nv50_bufctx_fence(nv50->bufctx, false);
+   nv50_bufctx_fence(nv50, nv50->bufctx, false);
 
    nouveau_bufctx_reset(nv50->bufctx, NV50_BIND_2D);
 
@@ -1683,7 +1752,7 @@ nv50_blit(struct pipe_context *pipe, const struct pipe_blit_info *info)
 
    if (info->src.box.width == 0 || info->src.box.height == 0 ||
        info->dst.box.width == 0 || info->dst.box.height == 0) {
-      pipe_debug_message(&nv50->base.debug, ERROR,
+      util_debug_message(&nv50->base.debug, ERROR,
                          "Blit with zero-size src or dst box");
       return;
    }
@@ -1750,6 +1819,7 @@ nv50_blit(struct pipe_context *pipe, const struct pipe_blit_info *info)
         info->src.box.height != -info->dst.box.height))
       eng3d = true;
 
+   simple_mtx_lock(&nv50->screen->state_lock);
    if (nv50->screen->num_occlusion_queries_active) {
       BEGIN_NV04(push, NV50_3D(SAMPLECNT_ENABLE), 1);
       PUSH_DATA (push, 0);
@@ -1764,6 +1834,8 @@ nv50_blit(struct pipe_context *pipe, const struct pipe_blit_info *info)
       BEGIN_NV04(push, NV50_3D(SAMPLECNT_ENABLE), 1);
       PUSH_DATA (push, 1);
    }
+   PUSH_KICK(push);
+   simple_mtx_unlock(&nv50->screen->state_lock);
 }
 
 static void
@@ -1800,7 +1872,7 @@ nv50_blitter_destroy(struct nv50_screen *screen)
          struct nv50_program *prog = blitter->fp[i][m];
          if (prog) {
             nv50_program_destroy(NULL, prog);
-            FREE((void *)prog->pipe.tokens);
+            ralloc_free((void *)prog->pipe.ir.nir);
             FREE(prog);
          }
       }

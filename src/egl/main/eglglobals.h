@@ -32,7 +32,7 @@
 #define EGLGLOBALS_INCLUDED
 
 #include <stdbool.h>
-#include "c11/threads.h"
+#include "util/simple_mtx.h"
 
 #include "egltypedefs.h"
 
@@ -49,7 +49,7 @@ enum
  */
 struct _egl_global
 {
-   mtx_t *Mutex;
+   simple_mtx_t *Mutex;
 
    /* the list of all displays */
    _EGLDisplay *DisplayList;
@@ -92,6 +92,6 @@ static inline unsigned int DebugBitFromType(EGLenum type)
  * Perform validity checks on a generic pointer.
  */
 extern EGLBoolean
-_eglPointerIsDereferencable(void *p);
+_eglPointerIsDereferenceable(void *p);
 
 #endif /* EGLGLOBALS_INCLUDED */

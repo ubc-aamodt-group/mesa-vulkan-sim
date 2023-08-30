@@ -28,63 +28,17 @@
 
 #include "util/u_memory.h"
 
-#ifdef _WIN32
-static void
-close_event(HANDLE event, int fd)
-{
-   if (event)
-      CloseHandle(event);
-}
-
-static HANDLE
-create_event(int *fd)
-{
-   *fd = -1;
-   return CreateEvent(NULL, FALSE, FALSE, NULL);
-}
-
-static bool
-wait_event(HANDLE event, int event_fd, uint64_t timeout_ns)
-{
-   DWORD timeout_ms = (timeout_ns == PIPE_TIMEOUT_INFINITE) ? INFINITE : timeout_ns / 1000000;
-   return WaitForSingleObject(event, timeout_ms) == WAIT_OBJECT_0;
-}
-#else
-#include <sys/eventfd.h>
-#include <poll.h>
-#include <util/libsync.h>
-
-static void
-close_event(HANDLE event, int fd)
-{
-   if (fd != -1)
-      close(fd);
-}
-
-static HANDLE
-create_event(int *fd)
-{
-   *fd = eventfd(0, 0);
-   return (HANDLE)(size_t)*fd;
-}
-
-static bool
-wait_event(HANDLE event, int event_fd, uint64_t timeout_ns)
-{
-   int timeout_ms = (timeout_ns == PIPE_TIMEOUT_INFINITE) ? -1 : timeout_ns / 1000000;
-   return sync_wait(event_fd, timeout_ms);
-}
-#endif
+#include <dxguids/dxguids.h>
 
 static void
 destroy_fence(struct d3d12_fence *fence)
 {
-   close_event(fence->event, fence->event_fd);
+   d3d12_fence_close_event(fence->event, fence->event_fd);
    FREE(fence);
 }
 
 struct d3d12_fence *
-d3d12_create_fence(struct d3d12_screen *screen, struct d3d12_context *ctx)
+d3d12_create_fence(struct d3d12_screen *screen)
 {
    struct d3d12_fence *ret = CALLOC_STRUCT(d3d12_fence);
    if (!ret) {
@@ -92,12 +46,12 @@ d3d12_create_fence(struct d3d12_screen *screen, struct d3d12_context *ctx)
       return NULL;
    }
 
-   ret->cmdqueue_fence = ctx->cmdqueue_fence;
-   ret->value = ++ctx->fence_value;
-   ret->event = create_event(&ret->event_fd);
-   if (FAILED(ctx->cmdqueue_fence->SetEventOnCompletion(ret->value, ret->event)))
+   ret->cmdqueue_fence = screen->fence;
+   ret->value = ++screen->fence_value;
+   ret->event = d3d12_fence_create_event(&ret->event_fd);
+   if (FAILED(screen->cmdqueue->Signal(screen->fence, ret->value)))
       goto fail;
-   if (FAILED(screen->cmdqueue->Signal(ctx->cmdqueue_fence, ret->value)))
+   if (FAILED(screen->fence->SetEventOnCompletion(ret->value, ret->event)))
       goto fail;
 
    pipe_reference_init(&ret->reference, 1);
@@ -106,6 +60,34 @@ d3d12_create_fence(struct d3d12_screen *screen, struct d3d12_context *ctx)
 fail:
    destroy_fence(ret);
    return NULL;
+}
+
+struct d3d12_fence *
+d3d12_open_fence(struct d3d12_screen *screen, HANDLE handle, const void *name)
+{
+   struct d3d12_fence *ret = CALLOC_STRUCT(d3d12_fence);
+   if (!ret) {
+      debug_printf("CALLOC_STRUCT failed\n");
+      return NULL;
+   }
+
+   HANDLE handle_to_close = nullptr;
+   assert(!!handle ^ !!name);
+   if (name) {
+      screen->dev->OpenSharedHandleByName((LPCWSTR)name, GENERIC_ALL, &handle_to_close);
+      handle = handle_to_close;
+   }
+
+   screen->dev->OpenSharedHandle(handle, IID_PPV_ARGS(&ret->cmdqueue_fence));
+   if (!ret->cmdqueue_fence) {
+      free(ret);
+      return NULL;
+   }
+
+   /* A new value will be assigned later */
+   ret->value = 0;
+   pipe_reference_init(&ret->reference, 1);
+   return ret;
 }
 
 void
@@ -133,7 +115,7 @@ d3d12_fence_finish(struct d3d12_fence *fence, uint64_t timeout_ns)
    
    bool complete = fence->cmdqueue_fence->GetCompletedValue() >= fence->value;
    if (!complete && timeout_ns)
-      complete = wait_event(fence->event, fence->event_fd, timeout_ns);
+      complete = d3d12_fence_wait_event(fence->event, fence->event_fd, timeout_ns);
 
    fence->signaled = complete;
    return complete;
@@ -145,6 +127,7 @@ fence_finish(struct pipe_screen *pscreen, struct pipe_context *pctx,
 {
    bool ret = d3d12_fence_finish(d3d12_fence(pfence), timeout_ns);
    if (ret && pctx) {
+      pctx = threaded_context_unwrap_sync(pctx);
       struct d3d12_context *ctx = d3d12_context(pctx);
       d3d12_foreach_submitted_batch(ctx, batch)
          d3d12_reset_batch(ctx, batch, 0);

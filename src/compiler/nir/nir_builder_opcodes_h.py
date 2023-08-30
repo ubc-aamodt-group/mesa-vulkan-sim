@@ -1,5 +1,3 @@
-from __future__ import print_function
-
 template = """\
 /* Copyright (C) 2015 Broadcom
  *
@@ -31,23 +29,30 @@ def src_decl_list(num_srcs):
    return ', '.join('nir_ssa_def *src' + str(i) for i in range(num_srcs))
 
 def src_list(num_srcs):
-   if num_srcs <= 4:
-      return ', '.join('src' + str(i) if i < num_srcs else 'NULL' for i in range(4))
-   else:
-      return ', '.join('src' + str(i) for i in range(num_srcs))
+   return ', '.join('src' + str(i) for i in range(num_srcs))
+
+def needs_num_components(opcode):
+   return "replicated" in opcode.name
 %>
 
 % for name, opcode in sorted(opcodes.items()):
+% if not needs_num_components(opcode):
 static inline nir_ssa_def *
 nir_${name}(nir_builder *build, ${src_decl_list(opcode.num_inputs)})
 {
+% if opcode.is_conversion and \
+     type_base_type(opcode.output_type) == opcode.input_types[0]:
+   if (src0->bit_size == ${type_size(opcode.output_type)})
+      return src0;
+%endif
 % if opcode.num_inputs <= 4:
-   return nir_build_alu(build, nir_op_${name}, ${src_list(opcode.num_inputs)});
+   return nir_build_alu${opcode.num_inputs}(build, nir_op_${name}, ${src_list(opcode.num_inputs)});
 % else:
    nir_ssa_def *srcs[${opcode.num_inputs}] = {${src_list(opcode.num_inputs)}};
    return nir_build_alu_src_arr(build, nir_op_${name}, srcs);
 % endif
 }
+% endif
 % endfor
 
 % for name, opcode in sorted(INTR_OPCODES.items()):
@@ -115,14 +120,25 @@ _nir_build_${name}(nir_builder *build${intrinsic_decl_list(opcode)})
    % endif
    % if opcode.has_dest:
       % if opcode.dest_components == 0:
-      nir_ssa_dest_init(&intrin->instr, &intrin->dest, intrin->num_components, ${get_intrinsic_bitsize(opcode)}, NULL);
+      nir_ssa_dest_init(&intrin->instr, &intrin->dest, intrin->num_components, ${get_intrinsic_bitsize(opcode)});
       % else:
-      nir_ssa_dest_init(&intrin->instr, &intrin->dest, ${opcode.dest_components}, ${get_intrinsic_bitsize(opcode)}, NULL);
+      nir_ssa_dest_init(&intrin->instr, &intrin->dest, ${opcode.dest_components}, ${get_intrinsic_bitsize(opcode)});
       % endif
    % endif
    % for i in range(opcode.num_srcs):
    intrin->src[${i}] = nir_src_for_ssa(src${i});
    % endfor
+   % if WRITE_MASK in opcode.indices and 0 in opcode.src_components:
+   if (!indices.write_mask)
+      indices.write_mask = BITFIELD_MASK(intrin->num_components);
+   % endif
+   % if ALIGN_MUL in opcode.indices and 0 in opcode.src_components:
+   if (!indices.align_mul)
+      indices.align_mul = src${opcode.src_components.index(0)}->bit_size / 8u;
+   % elif ALIGN_MUL in opcode.indices and opcode.dest_components == 0:
+   if (!indices.align_mul)
+      indices.align_mul = intrin->dest.ssa.bit_size / 8u;
+   % endif
    % for index in opcode.indices:
    nir_intrinsic_set_${index.name}(intrin, indices.${index.name});
    % endfor
@@ -151,10 +167,45 @@ _nir_build_${name}(build${intrinsic_macro_list(opcode)}, (struct _nir_${name}_in
 #define nir_${name} nir_build_${name}
 % endfor
 
+% for name in ['flt', 'fge', 'feq', 'fneu']:
+static inline nir_ssa_def *
+nir_${name}_imm(nir_builder *build, nir_ssa_def *src1, double src2)
+{
+   return nir_${name}(build, src1, nir_imm_floatN_t(build, src2, src1->bit_size));
+}
+% endfor
+
+% for name in ['ilt', 'ige', 'ieq', 'ine', 'ult', 'uge']:
+static inline nir_ssa_def *
+nir_${name}_imm(nir_builder *build, nir_ssa_def *src1, uint64_t src2)
+{
+   return nir_${name}(build, src1, nir_imm_intN_t(build, src2, src1->bit_size));
+}
+% endfor
+
+% for prefix in ['i', 'u']:
+static inline nir_ssa_def *
+nir_${prefix}gt_imm(nir_builder *build, nir_ssa_def *src1, uint64_t src2)
+{
+   return nir_${prefix}lt(build, nir_imm_intN_t(build, src2, src1->bit_size), src1);
+}
+
+static inline nir_ssa_def *
+nir_${prefix}le_imm(nir_builder *build, nir_ssa_def *src1, uint64_t src2)
+{
+   return nir_${prefix}ge(build, nir_imm_intN_t(build, src2, src1->bit_size), src1);
+}
+% endfor
+
 #endif /* _NIR_BUILDER_OPCODES_ */"""
 
-from nir_opcodes import opcodes
-from nir_intrinsics import INTR_OPCODES
+from nir_opcodes import opcodes, type_size, type_base_type
+from nir_intrinsics import INTR_OPCODES, WRITE_MASK, ALIGN_MUL
 from mako.template import Template
 
-print(Template(template).render(opcodes=opcodes, INTR_OPCODES=INTR_OPCODES))
+print(Template(template).render(opcodes=opcodes,
+                                type_size=type_size,
+                                type_base_type=type_base_type,
+                                INTR_OPCODES=INTR_OPCODES,
+                                WRITE_MASK=WRITE_MASK,
+                                ALIGN_MUL=ALIGN_MUL))

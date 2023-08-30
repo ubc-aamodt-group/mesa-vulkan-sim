@@ -50,7 +50,7 @@
 #include "ir_rvalue_visitor.h"
 #include "ir.h"
 #include "program/prog_instruction.h" /* For WRITEMASK_* */
-#include "main/mtypes.h"
+#include "main/shader_types.h"
 
 #define GLSL_CLIP_VAR_NAME "gl_ClipDistanceMESA"
 
@@ -169,6 +169,7 @@ lower_distance_visitor::visit(ir_variable *ir)
       *new_var = ir->clone(ralloc_parent(ir), NULL);
       (*new_var)->name = ralloc_strdup(*new_var, GLSL_CLIP_VAR_NAME);
       (*new_var)->data.location = VARYING_SLOT_CLIP_DIST0;
+      (*new_var)->data.assigned = true;
 
       if (!ir->type->fields.array->is_array()) {
          /* gl_ClipDistance (used for vertex, tessellation evaluation and

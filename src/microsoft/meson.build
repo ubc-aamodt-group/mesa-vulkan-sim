@@ -23,7 +23,9 @@ subdir('compiler')
 if with_microsoft_clc
   subdir('clc')
 endif
-subdir('resource_state_manager')
-if with_spirv_to_dxil
+if with_spirv_to_dxil or with_microsoft_vk
   subdir('spirv_to_dxil')
+endif
+if with_microsoft_vk
+  subdir('vulkan')
 endif

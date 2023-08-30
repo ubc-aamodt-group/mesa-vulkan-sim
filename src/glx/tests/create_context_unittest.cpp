@@ -43,7 +43,6 @@ glx_context_init(struct glx_context *gc,
 		 struct glx_screen *psc, struct glx_config *config)
 {
    gc->majorOpcode = 123;
-   gc->screen = psc->scr;
    gc->psc = psc;
    gc->config = config;
    gc->isDirect = GL_TRUE;
@@ -191,15 +190,6 @@ TEST_F(glXCreateContextAttribARB_test, NULL_display_returns_None)
    GLXContext ctx =
       glXCreateContextAttribsARB(NULL, (GLXFBConfig) &this->fbc, 0,
 				 False, NULL);
-
-   EXPECT_EQ(None, ctx);
-   EXPECT_EQ(0, fake_glx_context::contexts_allocated);
-}
-
-TEST_F(glXCreateContextAttribARB_test, NULL_fbconfig_returns_None)
-{
-   GLXContext ctx =
-      glXCreateContextAttribsARB(this->dpy, NULL, 0, False, NULL);
 
    EXPECT_EQ(None, ctx);
    EXPECT_EQ(0, fake_glx_context::contexts_allocated);
@@ -516,7 +506,7 @@ TEST_F(glXCreateContextAttribARB_test, correct_context_screen_number)
 
    struct glx_context *gc = (struct glx_context *) ctx;
 
-   EXPECT_EQ(7, gc->screen);
+   EXPECT_EQ(7, gc->psc->scr);
 }
 
 TEST_F(glXCreateContextAttribARB_test, correct_context_screen_pointer)

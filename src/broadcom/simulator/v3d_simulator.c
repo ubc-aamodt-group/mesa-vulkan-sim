@@ -24,10 +24,10 @@
 /**
  * @file v3d_simulator.c
  *
- * Implements VC5 simulation on top of a non-VC5 GEM fd.
+ * Implements V3D simulation on top of a non-V3D GEM fd.
  *
- * This file's goal is to emulate the VC5 ioctls' behavior in the kernel on
- * top of the simpenrose software simulator.  Generally, VC5 driver BOs have a
+ * This file's goal is to emulate the V3D ioctls' behavior in the kernel on
+ * top of the simpenrose software simulator.  Generally, V3D driver BOs have a
  * GEM-side copy of their contents and a simulator-side memory area that the
  * GEM contents get copied into during simulation.  Once simulation is done,
  * the simulator's data is copied back out to the GEM BOs, so that rendering
@@ -40,8 +40,8 @@
  * outside of this file still call ioctls directly on the fd).
  *
  * Another limitation is that BO import doesn't work unless the underlying
- * window system's BO size matches what VC5 is going to use, which of course
- * doesn't work out in practice.  This means that for now, only DRI3 (VC5
+ * window system's BO size matches what V3D is going to use, which of course
+ * doesn't work out in practice.  This means that for now, only DRI3 (V3D
  * makes the winsys BOs) is supported, not DRI2 (window system makes the winys
  * BOs).
  */
@@ -54,12 +54,14 @@
 #include "util/hash_table.h"
 #include "util/ralloc.h"
 #include "util/set.h"
+#include "util/simple_mtx.h"
 #include "util/u_dynarray.h"
 #include "util/u_memory.h"
 #include "util/u_mm.h"
 #include "util/u_math.h"
 
 #include <xf86drm.h>
+#include "drm-uapi/amdgpu_drm.h"
 #include "drm-uapi/i915_drm.h"
 #include "drm-uapi/v3d_drm.h"
 
@@ -68,7 +70,7 @@
 
 /** Global (across GEM fds) state for the simulator */
 static struct v3d_simulator_state {
-        mtx_t mutex;
+        simple_mtx_t mutex;
         mtx_t submit_lock;
 
         struct v3d_hw *v3d;
@@ -79,7 +81,7 @@ static struct v3d_simulator_state {
         /* Base hardware address of the heap. */
         uint32_t mem_base;
         /* Size of the heap. */
-        size_t mem_size;
+        uint32_t mem_size;
 
         struct mem_block *heap;
         struct mem_block *overflow;
@@ -87,10 +89,19 @@ static struct v3d_simulator_state {
         /** Mapping from GEM fd to struct v3d_simulator_file * */
         struct hash_table *fd_map;
 
+        /** Last performance monitor ID. */
+        uint32_t last_perfid;
+
         struct util_dynarray bin_oom;
         int refcount;
 } sim_state = {
-        .mutex = _MTX_INITIALIZER_NP,
+        .mutex = SIMPLE_MTX_INITIALIZER,
+};
+
+enum gem_type {
+        GEM_I915,
+        GEM_AMDGPU,
+        GEM_DUMB
 };
 
 /** Per-GEM-fd state for the simulator. */
@@ -100,11 +111,16 @@ struct v3d_simulator_file {
         /** Mapping from GEM handle to struct v3d_simulator_bo * */
         struct hash_table *bo_map;
 
+        /** Dynamic array with performance monitors */
+        struct v3d_simulator_perfmon **perfmons;
+        uint32_t perfmons_size;
+        uint32_t active_perfid;
+
         struct mem_block *gmp;
         void *gmp_vaddr;
 
-        /** Actual GEM fd is i915, so we should use their create ioctl. */
-        bool is_i915;
+        /** For specific gpus, use their create ioctl. Otherwise use dumb bo. */
+        enum gem_type gem_type;
 };
 
 /** Wrapper for drm_v3d_bo tracking the simulator-specific state. */
@@ -121,10 +137,32 @@ struct v3d_simulator_bo {
         int handle;
 };
 
+struct v3d_simulator_perfmon {
+        uint32_t ncounters;
+        uint8_t counters[DRM_V3D_MAX_PERF_COUNTERS];
+        uint64_t values[DRM_V3D_MAX_PERF_COUNTERS];
+};
+
 static void *
 int_to_key(int key)
 {
         return (void *)(uintptr_t)key;
+}
+
+#define PERFMONS_ALLOC_SIZE 100
+
+static uint32_t
+perfmons_next_id(struct v3d_simulator_file *sim_file) {
+        sim_state.last_perfid++;
+        if (sim_state.last_perfid > sim_file->perfmons_size) {
+                sim_file->perfmons_size += PERFMONS_ALLOC_SIZE;
+                sim_file->perfmons = reralloc(sim_file,
+                                              sim_file->perfmons,
+                                              struct v3d_simulator_perfmon *,
+                                              sim_file->perfmons_size);
+        }
+
+        return sim_state.last_perfid;
 }
 
 static struct v3d_simulator_file *
@@ -179,9 +217,9 @@ v3d_create_simulator_bo(int fd, unsigned size)
 
         sim_bo->file = file;
 
-        mtx_lock(&sim_state.mutex);
+        simple_mtx_lock(&sim_state.mutex);
         sim_bo->block = u_mmAllocMem(sim_state.heap, size + 4, GMP_ALIGN2, 0);
-        mtx_unlock(&sim_state.mutex);
+        simple_mtx_unlock(&sim_state.mutex);
         assert(sim_bo->block);
 
         set_gmp_flags(file, sim_bo->block->ofs, size, 0x3);
@@ -211,7 +249,9 @@ v3d_create_simulator_bo_for_gem(int fd, int handle, unsigned size)
          * one.
          */
         int ret;
-        if (file->is_i915) {
+        switch (file->gem_type) {
+        case GEM_I915:
+        {
                 struct drm_i915_gem_mmap_gtt map = {
                         .handle = handle,
                 };
@@ -222,13 +262,25 @@ v3d_create_simulator_bo_for_gem(int fd, int handle, unsigned size)
                  */
                 ret = drmIoctl(fd, DRM_IOCTL_I915_GEM_MMAP_GTT, &map);
                 sim_bo->mmap_offset = map.offset;
-        } else {
+                break;
+        }
+        case GEM_AMDGPU:
+        {
+                union drm_amdgpu_gem_mmap map = { 0 };
+                map.in.handle = handle;
+
+                ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_GEM_MMAP, &map);
+                sim_bo->mmap_offset = map.out.addr_ptr;
+                break;
+        }
+        default:
+        {
                 struct drm_mode_map_dumb map = {
                         .handle = handle,
                 };
-
                 ret = drmIoctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &map);
                 sim_bo->mmap_offset = map.offset;
+        }
         }
         if (ret) {
                 fprintf(stderr, "Failed to get MMAP offset: %d\n", ret);
@@ -248,10 +300,10 @@ v3d_create_simulator_bo_for_gem(int fd, int handle, unsigned size)
          * don't need to go in the lookup table.
          */
         if (handle != 0) {
-                mtx_lock(&sim_state.mutex);
+                simple_mtx_lock(&sim_state.mutex);
                 _mesa_hash_table_insert(file->bo_map, int_to_key(handle),
                                         sim_bo);
-                mtx_unlock(&sim_state.mutex);
+                simple_mtx_unlock(&sim_state.mutex);
         }
 
         return sim_bo;
@@ -281,13 +333,13 @@ v3d_free_simulator_bo(struct v3d_simulator_bo *sim_bo)
         if (sim_bo->gem_vaddr)
                 munmap(sim_bo->gem_vaddr, sim_bo->size);
 
-        mtx_lock(&sim_state.mutex);
+        simple_mtx_lock(&sim_state.mutex);
         u_mmFreeMem(sim_bo->block);
         if (sim_bo->handle) {
                 _mesa_hash_table_remove_key(sim_file->bo_map,
                                             int_to_key(sim_bo->handle));
         }
-        mtx_unlock(&sim_state.mutex);
+        simple_mtx_unlock(&sim_state.mutex);
         ralloc_free(sim_bo);
 }
 
@@ -297,10 +349,10 @@ v3d_get_simulator_bo(struct v3d_simulator_file *file, int gem_handle)
         if (gem_handle == 0)
                 return NULL;
 
-        mtx_lock(&sim_state.mutex);
+        simple_mtx_lock(&sim_state.mutex);
         struct hash_entry *entry =
                 _mesa_hash_table_search(file->bo_map, int_to_key(gem_handle));
-        mtx_unlock(&sim_state.mutex);
+        simple_mtx_unlock(&sim_state.mutex);
 
         return entry ? entry->data : NULL;
 }
@@ -357,6 +409,72 @@ v3d_simulator_unpin_bos(struct v3d_simulator_file *file,
         return 0;
 }
 
+static struct v3d_simulator_perfmon *
+v3d_get_simulator_perfmon(int fd, uint32_t perfid)
+{
+        if (!perfid || perfid > sim_state.last_perfid)
+                return NULL;
+
+        struct v3d_simulator_file *file = v3d_get_simulator_file_for_fd(fd);
+
+        simple_mtx_lock(&sim_state.mutex);
+        assert(perfid <= file->perfmons_size);
+        struct v3d_simulator_perfmon *perfmon = file->perfmons[perfid - 1];
+        simple_mtx_unlock(&sim_state.mutex);
+
+        return perfmon;
+}
+
+static void
+v3d_simulator_perfmon_switch(int fd, uint32_t perfid)
+{
+        struct v3d_simulator_file *file = v3d_get_simulator_file_for_fd(fd);
+        struct v3d_simulator_perfmon *perfmon;
+
+        if (perfid == file->active_perfid)
+                return;
+
+        perfmon = v3d_get_simulator_perfmon(fd, file->active_perfid);
+        if (perfmon)
+                v3d41_simulator_perfmon_stop(sim_state.v3d,
+                                             perfmon->ncounters,
+                                             perfmon->values);
+
+        perfmon = v3d_get_simulator_perfmon(fd, perfid);
+        if (perfmon)
+                v3d41_simulator_perfmon_start(sim_state.v3d,
+                                              perfmon->ncounters,
+                                              perfmon->counters);
+
+        file->active_perfid = perfid;
+}
+
+static int
+v3d_simulator_signal_syncobjs(int fd, struct drm_v3d_multi_sync *ms)
+{
+        struct drm_v3d_sem *out_syncs = (void *)(uintptr_t)ms->out_syncs;
+        int n_syncobjs = ms->out_sync_count;
+        uint32_t syncobjs[n_syncobjs];
+
+        for (int i = 0; i < n_syncobjs; i++)
+                syncobjs[i] = out_syncs[i].handle;
+        return drmSyncobjSignal(fd, (uint32_t *) &syncobjs, n_syncobjs);
+}
+
+static int
+v3d_simulator_process_post_deps(int fd, struct drm_v3d_extension *ext)
+{
+        int ret = 0;
+        while (ext && ext->id != DRM_V3D_EXT_ID_MULTI_SYNC)
+                ext = (void *)(uintptr_t) ext->next;
+
+        if (ext) {
+                struct drm_v3d_multi_sync *ms = (struct drm_v3d_multi_sync *) ext;
+                ret = v3d_simulator_signal_syncobjs(fd, ms);
+        }
+        return ret;
+}
+
 static int
 v3d_simulator_submit_cl_ioctl(int fd, struct drm_v3d_submit_cl *submit)
 {
@@ -369,6 +487,9 @@ v3d_simulator_submit_cl_ioctl(int fd, struct drm_v3d_submit_cl *submit)
 
         mtx_lock(&sim_state.submit_lock);
         bin_fd = fd;
+
+        v3d_simulator_perfmon_switch(fd, submit->perfmon_id);
+
         if (sim_state.ver >= 41)
                 v3d41_simulator_submit_cl_ioctl(sim_state.v3d, submit, file->gmp->ofs);
         else
@@ -386,7 +507,12 @@ v3d_simulator_submit_cl_ioctl(int fd, struct drm_v3d_submit_cl *submit)
         if (ret)
                 return ret;
 
-        return 0;
+        if (submit->flags & DRM_V3D_SUBMIT_EXTENSION) {
+                struct drm_v3d_extension *ext = (void *)(uintptr_t)submit->extensions;
+                ret = v3d_simulator_process_post_deps(fd, ext);
+        }
+
+        return ret;
 }
 
 /**
@@ -402,9 +528,9 @@ void v3d_simulator_open_from_handle(int fd, int handle, uint32_t size)
 }
 
 /**
- * Simulated ioctl(fd, DRM_VC5_CREATE_BO) implementation.
+ * Simulated ioctl(fd, DRM_V3D_CREATE_BO) implementation.
  *
- * Making a VC5 BO is just a matter of making a corresponding BO on the host.
+ * Making a V3D BO is just a matter of making a corresponding BO on the host.
  */
 static int
 v3d_simulator_create_bo_ioctl(int fd, struct drm_v3d_create_bo *args)
@@ -415,14 +541,30 @@ v3d_simulator_create_bo_ioctl(int fd, struct drm_v3d_create_bo *args)
          * native ioctl in case we're on a render node.
          */
         int ret;
-        if (file->is_i915) {
+        switch (file->gem_type) {
+        case GEM_I915:
+        {
                 struct drm_i915_gem_create create = {
                         .size = args->size,
                 };
+
                 ret = drmIoctl(fd, DRM_IOCTL_I915_GEM_CREATE, &create);
 
                 args->handle = create.handle;
-        } else {
+                break;
+        }
+        case GEM_AMDGPU:
+        {
+                union drm_amdgpu_gem_create create = { 0 };
+                create.in.bo_size = args->size;
+
+                ret = drmIoctl(fd, DRM_IOCTL_AMDGPU_GEM_CREATE, &create);
+
+                args->handle = create.out.handle;
+                break;
+        }
+        default:
+        {
                 struct drm_mode_create_dumb create = {
                         .width = 128,
                         .bpp = 8,
@@ -434,7 +576,7 @@ v3d_simulator_create_bo_ioctl(int fd, struct drm_v3d_create_bo *args)
 
                 args->handle = create.handle;
         }
-
+        }
         if (ret == 0) {
                 struct v3d_simulator_bo *sim_bo =
                         v3d_create_simulator_bo_for_gem(fd, args->handle,
@@ -447,7 +589,7 @@ v3d_simulator_create_bo_ioctl(int fd, struct drm_v3d_create_bo *args)
 }
 
 /**
- * Simulated ioctl(fd, DRM_VC5_MMAP_BO) implementation.
+ * Simulated ioctl(fd, DRM_V3D_MMAP_BO) implementation.
  *
  * We've already grabbed the mmap offset when we created the sim bo, so just
  * return it.
@@ -517,6 +659,14 @@ v3d_simulator_submit_tfu_ioctl(int fd, struct drm_v3d_submit_tfu *args)
 
         v3d_simulator_copy_out_handle(file, args->bo_handles[0]);
 
+        if (ret)
+                return ret;
+
+        if (args->flags & DRM_V3D_SUBMIT_EXTENSION) {
+                struct drm_v3d_extension *ext = (void *)(uintptr_t)args->extensions;
+                ret = v3d_simulator_process_post_deps(fd, ext);
+        }
+
         return ret;
 }
 
@@ -530,6 +680,8 @@ v3d_simulator_submit_csd_ioctl(int fd, struct drm_v3d_submit_csd *args)
         for (int i = 0; i < args->bo_handle_count; i++)
                 v3d_simulator_copy_in_handle(file, bo_handles[i]);
 
+        v3d_simulator_perfmon_switch(fd, args->perfmon_id);
+
         if (sim_state.ver >= 41)
                 ret = v3d41_simulator_submit_csd_ioctl(sim_state.v3d, args,
                                                        file->gmp->ofs);
@@ -539,7 +691,88 @@ v3d_simulator_submit_csd_ioctl(int fd, struct drm_v3d_submit_csd *args)
         for (int i = 0; i < args->bo_handle_count; i++)
                 v3d_simulator_copy_out_handle(file, bo_handles[i]);
 
+        if (ret < 0)
+                return ret;
+
+        if (args->flags & DRM_V3D_SUBMIT_EXTENSION) {
+                struct drm_v3d_extension *ext = (void *)(uintptr_t)args->extensions;
+                ret = v3d_simulator_process_post_deps(fd, ext);
+        }
+
         return ret;
+}
+
+static int
+v3d_simulator_perfmon_create_ioctl(int fd, struct drm_v3d_perfmon_create *args)
+{
+        struct v3d_simulator_file *file = v3d_get_simulator_file_for_fd(fd);
+
+        if (args->ncounters == 0 ||
+            args->ncounters > DRM_V3D_MAX_PERF_COUNTERS)
+                return -EINVAL;
+
+        struct v3d_simulator_perfmon *perfmon = rzalloc(file,
+                                                        struct v3d_simulator_perfmon);
+
+        perfmon->ncounters = args->ncounters;
+        for (int i = 0; i < args->ncounters; i++) {
+                if (args->counters[i] >= V3D_PERFCNT_NUM) {
+                        ralloc_free(perfmon);
+                        return -EINVAL;
+                } else {
+                        perfmon->counters[i] = args->counters[i];
+                }
+        }
+
+        simple_mtx_lock(&sim_state.mutex);
+        args->id = perfmons_next_id(file);
+        file->perfmons[args->id - 1] = perfmon;
+        simple_mtx_unlock(&sim_state.mutex);
+
+        return 0;
+}
+
+static int
+v3d_simulator_perfmon_destroy_ioctl(int fd, struct drm_v3d_perfmon_destroy *args)
+{
+        struct v3d_simulator_file *file = v3d_get_simulator_file_for_fd(fd);
+        struct v3d_simulator_perfmon *perfmon =
+                v3d_get_simulator_perfmon(fd, args->id);
+
+        if (!perfmon)
+                return -EINVAL;
+
+        simple_mtx_lock(&sim_state.mutex);
+        file->perfmons[args->id - 1] = NULL;
+        simple_mtx_unlock(&sim_state.mutex);
+
+        ralloc_free(perfmon);
+
+        return 0;
+}
+
+static int
+v3d_simulator_perfmon_get_values_ioctl(int fd, struct drm_v3d_perfmon_get_values *args)
+{
+        struct v3d_simulator_file *file = v3d_get_simulator_file_for_fd(fd);
+
+        mtx_lock(&sim_state.submit_lock);
+
+        /* Stop the perfmon if it is still active */
+        if (args->id == file->active_perfid)
+                v3d_simulator_perfmon_switch(fd, 0);
+
+        mtx_unlock(&sim_state.submit_lock);
+
+        struct v3d_simulator_perfmon *perfmon =
+                v3d_get_simulator_perfmon(fd, args->id);
+
+        if (!perfmon)
+                return -EINVAL;
+
+        memcpy((void *)args->values_ptr, perfmon->values, perfmon->ncounters * sizeof(uint64_t));
+
+        return 0;
 }
 
 int
@@ -575,6 +808,15 @@ v3d_simulator_ioctl(int fd, unsigned long request, void *args)
         case DRM_IOCTL_V3D_SUBMIT_CSD:
                 return v3d_simulator_submit_csd_ioctl(fd, args);
 
+        case DRM_IOCTL_V3D_PERFMON_CREATE:
+                return v3d_simulator_perfmon_create_ioctl(fd, args);
+
+        case DRM_IOCTL_V3D_PERFMON_DESTROY:
+                return v3d_simulator_perfmon_destroy_ioctl(fd, args);
+
+        case DRM_IOCTL_V3D_PERFMON_GET_VALUES:
+                return v3d_simulator_perfmon_get_values_ioctl(fd, args);
+
         case DRM_IOCTL_GEM_OPEN:
         case DRM_IOCTL_GEM_FLINK:
                 return drmIoctl(fd, request, args);
@@ -590,12 +832,22 @@ v3d_simulator_get_mem_size(void)
    return sim_state.mem_size;
 }
 
+uint32_t
+v3d_simulator_get_mem_free(void)
+{
+   uint32_t total_free = 0;
+   struct mem_block *p;
+   for (p = sim_state.heap->next_free; p != sim_state.heap; p = p->next_free)
+      total_free += p->size;
+   return total_free;
+}
+
 static void
 v3d_simulator_init_global()
 {
-        mtx_lock(&sim_state.mutex);
+        simple_mtx_lock(&sim_state.mutex);
         if (sim_state.refcount++) {
-                mtx_unlock(&sim_state.mutex);
+                simple_mtx_unlock(&sim_state.mutex);
                 return;
         }
 
@@ -619,7 +871,7 @@ v3d_simulator_init_global()
 
         sim_state.ver = v3d_hw_get_version(sim_state.v3d);
 
-        mtx_unlock(&sim_state.mutex);
+        simple_mtx_unlock(&sim_state.mutex);
 
         sim_state.fd_map =
                 _mesa_hash_table_create(NULL,
@@ -643,7 +895,11 @@ v3d_simulator_init(int fd)
 
         drmVersionPtr version = drmGetVersion(fd);
         if (version && strncmp(version->name, "i915", version->name_len) == 0)
-                sim_file->is_i915 = true;
+                sim_file->gem_type = GEM_I915;
+        else if (version && strncmp(version->name, "amdgpu", version->name_len) == 0)
+                sim_file->gem_type = GEM_AMDGPU;
+        else
+                sim_file->gem_type = GEM_DUMB;
         drmFreeVersion(version);
 
         sim_file->bo_map =
@@ -651,10 +907,10 @@ v3d_simulator_init(int fd)
                                         _mesa_hash_pointer,
                                         _mesa_key_pointer_equal);
 
-        mtx_lock(&sim_state.mutex);
+        simple_mtx_lock(&sim_state.mutex);
         _mesa_hash_table_insert(sim_state.fd_map, int_to_key(fd + 1),
                                 sim_file);
-        mtx_unlock(&sim_state.mutex);
+        simple_mtx_unlock(&sim_state.mutex);
 
         sim_file->gmp = u_mmAllocMem(sim_state.heap, 8096, GMP_ALIGN2, 0);
         sim_file->gmp_vaddr = (sim_state.mem + sim_file->gmp->ofs -
@@ -667,7 +923,7 @@ v3d_simulator_init(int fd)
 void
 v3d_simulator_destroy(struct v3d_simulator_file *sim_file)
 {
-        mtx_lock(&sim_state.mutex);
+        simple_mtx_lock(&sim_state.mutex);
         if (!--sim_state.refcount) {
                 _mesa_hash_table_destroy(sim_state.fd_map, NULL);
                 util_dynarray_fini(&sim_state.bin_oom);
@@ -675,7 +931,7 @@ v3d_simulator_destroy(struct v3d_simulator_file *sim_file)
                 /* No memsetting the struct, because it contains the mutex. */
                 sim_state.mem = NULL;
         }
-        mtx_unlock(&sim_state.mutex);
+        simple_mtx_unlock(&sim_state.mutex);
         ralloc_free(sim_file);
 }
 

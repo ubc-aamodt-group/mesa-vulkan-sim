@@ -30,7 +30,7 @@
 #include "xa_tracker.h"
 #include "xa_priv.h"
 #include "pipe/p_state.h"
-#include "pipe/p_format.h"
+#include "util/format/u_formats.h"
 #include "pipe-loader/pipe_loader.h"
 #include "frontend/drm_driver.h"
 #include "util/u_inlines.h"
@@ -155,7 +155,7 @@ xa_get_pipe_format(struct xa_tracker *xa, enum xa_formats xa_format)
             fdesc.format = PIPE_FORMAT_L8_UNORM;
 	break;
     default:
-	fdesc.xa_format = xa_format_unknown;
+	unreachable("Unexpected format");
 	break;
     }
     return fdesc;

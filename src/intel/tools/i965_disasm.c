@@ -27,7 +27,7 @@
 #include <getopt.h>
 
 #include "compiler/brw_eu.h"
-#include "dev/gen_device_info.h"
+#include "dev/intel_device_info.h"
 #include "util/u_dynarray.h"
 
 enum opt_input_type {
@@ -113,24 +113,6 @@ i965_disasm_read_binary(FILE *fp, size_t *end)
    return assembly;
 }
 
-static struct gen_device_info *
-i965_disasm_init(uint16_t pci_id)
-{
-   struct gen_device_info *devinfo;
-
-   devinfo = malloc(sizeof *devinfo);
-   if (devinfo == NULL)
-      return NULL;
-
-   if (!gen_get_device_info_from_pci_id(pci_id, devinfo)) {
-      fprintf(stderr, "can't find device information: pci_id=0x%x\n",
-              pci_id);
-      exit(EXIT_FAILURE);
-   }
-
-   return devinfo;
-}
-
 static void
 print_help(const char *progname, FILE *file)
 {
@@ -154,7 +136,6 @@ int main(int argc, char *argv[])
    size_t start = 0, end = 0;
    uint16_t pci_id = 0;
    int c;
-   struct gen_device_info *devinfo = NULL;
    int result = EXIT_FAILURE;
 
    bool help = false;
@@ -169,7 +150,7 @@ int main(int argc, char *argv[])
    while ((c = getopt_long(argc, argv, ":i:t:g:h", i965_disasm_opts, NULL)) != -1) {
       switch (c) {
       case 'g': {
-         const int id = gen_device_name_to_pci_device_id(optarg);
+         const int id = intel_device_name_to_pci_device_id(optarg);
          if (id < 0) {
             fprintf(stderr, "can't parse gen: '%s', expected 3 letter "
                             "platform name\n", optarg);
@@ -221,12 +202,14 @@ int main(int argc, char *argv[])
       exit(0);
    }
 
-   devinfo = i965_disasm_init(pci_id);
-   if (!devinfo) {
-      fprintf(stderr, "Unable to allocate memory for "
-                      "gen_device_info struct instance.\n");
-      goto end;
+   struct intel_device_info devinfo;
+   if (!intel_get_device_info_from_pci_id(pci_id, &devinfo)) {
+      fprintf(stderr, "can't find device information: pci_id=0x%x\n", pci_id);
+      exit(EXIT_FAILURE);
    }
+
+   struct brw_isa_info isa;
+   brw_init_isa_info(&isa, &devinfo);
 
    if (input_type == OPT_INPUT_BINARY)
       assembly = i965_disasm_read_binary(fp, &end);
@@ -243,7 +226,7 @@ int main(int argc, char *argv[])
    }
 
    /* Disassemble i965 instructions from buffer assembly */
-   brw_disassemble_with_labels(devinfo, assembly, start, end, stdout);
+   brw_disassemble_with_labels(&isa, assembly, start, end, stdout);
 
    result = EXIT_SUCCESS;
 
@@ -253,7 +236,6 @@ end:
 
    free(file_path);
    free(assembly);
-   free(devinfo);
 
    exit(result);
 }

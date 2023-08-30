@@ -50,6 +50,8 @@
 #include "pipe/p_video_codec.h"
 #include "util/u_memory.h"
 
+#include "vl/vl_codec.h"
+
 #include "entrypoint.h"
 #include "vid_enc.h"
 #include "vid_omx_common.h"
@@ -153,8 +155,7 @@ static OMX_ERRORTYPE vid_enc_Constructor(OMX_COMPONENTTYPE *comp, OMX_STRING nam
       return OMX_ErrorInsufficientResources;
 
    screen = priv->screen->pscreen;
-   if (!screen->get_video_param(screen, PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH,
-                                PIPE_VIDEO_ENTRYPOINT_ENCODE, PIPE_VIDEO_CAP_SUPPORTED))
+   if (!vl_codec_supported(screen, PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH, true))
       return OMX_ErrorBadParameter;
 
    priv->s_pipe = pipe_create_multimedia_context(screen);
@@ -311,7 +312,7 @@ static OMX_ERRORTYPE enc_AllocateBackTexture(omx_base_PortType *port,
    box.width = (*resource)->width0;
    box.height = (*resource)->height0;
    box.depth = (*resource)->depth0;
-   ptr = priv->s_pipe->transfer_map(priv->s_pipe, *resource, 0, PIPE_MAP_WRITE, &box, transfer);
+   ptr = priv->s_pipe->texture_map(priv->s_pipe, *resource, 0, PIPE_MAP_WRITE, &box, transfer);
    if (map)
       *map = ptr;
 
@@ -345,7 +346,7 @@ static OMX_ERRORTYPE vid_enc_SetParameter(OMX_HANDLETYPE handle, OMX_INDEXTYPE i
          enc_AllocateBackTexture(priv->ports[OMX_BASE_FILTER_INPUTPORT_INDEX],
                                  &resource, &transfer, NULL);
          port->sPortParam.format.video.nStride = transfer->stride;
-         pipe_transfer_unmap(priv->s_pipe, transfer);
+         pipe_texture_unmap(priv->s_pipe, transfer);
          pipe_resource_reference(&resource, NULL);
 
          framesize = port->sPortParam.format.video.nStride *
@@ -700,7 +701,7 @@ static OMX_ERRORTYPE vid_enc_FreeInBuffer(omx_base_PortType *port, OMX_U32 idx, 
    if (inp) {
       enc_ReleaseTasks(&inp->tasks);
       if (inp->transfer)
-         pipe_transfer_unmap(priv->s_pipe, inp->transfer);
+         pipe_texture_unmap(priv->s_pipe, inp->transfer);
       pipe_resource_reference(&inp->resource, NULL);
       FREE(inp);
    }
@@ -737,7 +738,7 @@ static OMX_ERRORTYPE vid_enc_FreeOutBuffer(omx_base_PortType *port, OMX_U32 idx,
    if (buf->pOutputPortPrivate) {
       struct output_buf_private *outp = buf->pOutputPortPrivate;
       if (outp->transfer)
-         pipe_transfer_unmap(priv->t_pipe, outp->transfer);
+         pipe_buffer_unmap(priv->t_pipe, outp->transfer);
       pipe_resource_reference(&outp->bitstream, NULL);
       FREE(outp);
       buf->pOutputPortPrivate = NULL;
@@ -822,7 +823,7 @@ static void enc_ClearBframes(omx_base_PortType *port, struct input_buf_private *
    if (list_is_empty(&priv->b_frames))
       return;
 
-   task = LIST_ENTRY(struct encode_task, priv->b_frames.prev, list);
+   task = list_entry(priv->b_frames.prev, struct encode_task, list);
    list_del(&task->list);
 
    /* promote last from to P frame */
@@ -911,7 +912,7 @@ static OMX_ERRORTYPE vid_enc_EncodeFrame(omx_base_PortType *port, OMX_BUFFERHEAD
       }
       if (stacked_num == priv->stacked_frames_num) {
          struct encode_task *t;
-         t = LIST_ENTRY(struct encode_task, priv->stacked_tasks.next, list);
+         t = list_entry(priv->stacked_tasks.next, struct encode_task, list);
          list_del(&t->list);
          list_addtail(&t->list, &inp->tasks);
       }

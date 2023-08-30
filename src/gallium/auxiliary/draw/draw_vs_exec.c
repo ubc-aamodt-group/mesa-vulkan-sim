@@ -68,7 +68,7 @@ vs_exec_prepare(struct draw_vertex_shader *shader,
 {
    struct exec_vertex_shader *evs = exec_vertex_shader(shader);
 
-   debug_assert(!draw->llvm);
+   assert(!draw->llvm);
    /* Specify the vertex program to interpret/execute.
     * Avoid rebinding when possible.
     */
@@ -92,8 +92,7 @@ static void
 vs_exec_run_linear(struct draw_vertex_shader *shader,
                    const float (*input)[4],
                    float (*output)[4],
-                   const void *constants[PIPE_MAX_CONSTANT_BUFFERS],
-                    const unsigned const_size[PIPE_MAX_CONSTANT_BUFFERS],
+                   const struct draw_buffer_info *constants,
                    unsigned count,
                    unsigned input_stride,
                    unsigned output_stride,
@@ -105,9 +104,9 @@ vs_exec_run_linear(struct draw_vertex_shader *shader,
    unsigned slot;
    boolean clamp_vertex_color = shader->draw->rasterizer->clamp_vertex_color;
 
-   debug_assert(!shader->draw->llvm);
+   assert(!shader->draw->llvm);
    tgsi_exec_set_constant_buffers(machine, PIPE_MAX_CONSTANT_BUFFERS,
-                                  constants, const_size);
+                                  (const struct tgsi_exec_consts_info *)constants);
 
    if (shader->info.uses_instanceid) {
       unsigned i = machine->SysSemanticToIndex[TGSI_SEMANTIC_INSTANCEID];

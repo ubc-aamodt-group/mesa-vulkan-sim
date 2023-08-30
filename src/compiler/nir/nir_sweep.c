@@ -44,7 +44,7 @@ static bool
 sweep_src_indirect(nir_src *src, void *nir)
 {
    if (!src->is_ssa && src->reg.indirect)
-      ralloc_steal(nir, src->reg.indirect);
+      gc_mark_live(((nir_shader*)nir)->gctx, src->reg.indirect);
 
    return true;
 }
@@ -53,7 +53,7 @@ static bool
 sweep_dest_indirect(nir_dest *dest, void *nir)
 {
    if (!dest->is_ssa && dest->reg.indirect)
-      ralloc_steal(nir, dest->reg.indirect);
+      gc_mark_live(((nir_shader*)nir)->gctx, dest->reg.indirect);
 
    return true;
 }
@@ -73,7 +73,19 @@ sweep_block(nir_shader *nir, nir_block *block)
    block->live_out = NULL;
 
    nir_foreach_instr(instr, block) {
-      ralloc_steal(nir, instr);
+      gc_mark_live(nir->gctx, instr);
+
+      switch (instr->type) {
+      case nir_instr_type_tex:
+         gc_mark_live(nir->gctx, nir_instr_as_tex(instr)->src);
+         break;
+      case nir_instr_type_phi:
+         nir_foreach_phi_src(src, nir_instr_as_phi(instr))
+            gc_mark_live(nir->gctx, src);
+         break;
+      default:
+         break;
+      }
 
       nir_foreach_src(instr, sweep_src_indirect, nir);
       nir_foreach_dest(instr, sweep_dest_indirect, nir);
@@ -97,6 +109,7 @@ sweep_if(nir_shader *nir, nir_if *iff)
 static void
 sweep_loop(nir_shader *nir, nir_loop *loop)
 {
+   assert(!nir_loop_has_continue_construct(loop));
    ralloc_steal(nir, loop);
 
    foreach_list_typed(nir_cf_node, cf_node, node, &loop->body) {
@@ -155,9 +168,16 @@ nir_sweep(nir_shader *nir)
 {
    void *rubbish = ralloc_context(NULL);
 
+   struct list_head instr_gc_list;
+   list_inithead(&instr_gc_list);
+
    /* First, move ownership of all the memory to a temporary context; assume dead. */
    ralloc_adopt(rubbish, nir);
 
+   /* Start sweeping */
+   gc_sweep_start(nir->gctx);
+
+   ralloc_steal(nir, nir->gctx);
    ralloc_steal(nir, (char *)nir->info.name);
    if (nir->info.label)
       ralloc_steal(nir, (char *)nir->info.label);
@@ -171,7 +191,14 @@ nir_sweep(nir_shader *nir)
    }
 
    ralloc_steal(nir, nir->constant_data);
+   ralloc_steal(nir, nir->xfb_info);
+   ralloc_steal(nir, nir->printf_info);
+   for (int i = 0; i < nir->printf_info_count; i++) {
+      ralloc_steal(nir, nir->printf_info[i].arg_sizes);
+      ralloc_steal(nir, nir->printf_info[i].strings);
+   }
 
    /* Free everything we didn't steal back. */
+   gc_sweep_end(nir->gctx);
    ralloc_free(rubbish);
 }

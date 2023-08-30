@@ -25,15 +25,59 @@
 #include <stdint.h>
 #include <stdexcept>
 
+#include <unknwn.h>
 #include <directx/d3d12.h>
 #include <dxgi1_4.h>
 #include <gtest/gtest.h>
 #include <wrl.h>
+#include <dxguids/dxguids.h>
 
 #include "util/u_debug.h"
 #include "clc_compiler.h"
 #include "compute_test.h"
-#include "dxcapi.h"
+#include "dxil_validator.h"
+
+#include <spirv-tools/libspirv.hpp>
+
+#if (defined(_WIN32) && defined(_MSC_VER))
+inline D3D12_CPU_DESCRIPTOR_HANDLE
+GetCPUDescriptorHandleForHeapStart(ID3D12DescriptorHeap *heap)
+{
+   return heap->GetCPUDescriptorHandleForHeapStart();
+}
+inline D3D12_GPU_DESCRIPTOR_HANDLE
+GetGPUDescriptorHandleForHeapStart(ID3D12DescriptorHeap *heap)
+{
+   return heap->GetGPUDescriptorHandleForHeapStart();
+}
+inline D3D12_HEAP_PROPERTIES
+GetCustomHeapProperties(ID3D12Device *dev, D3D12_HEAP_TYPE type)
+{
+   return dev->GetCustomHeapProperties(0, type);
+}
+#else
+inline D3D12_CPU_DESCRIPTOR_HANDLE
+GetCPUDescriptorHandleForHeapStart(ID3D12DescriptorHeap *heap)
+{
+   D3D12_CPU_DESCRIPTOR_HANDLE ret;
+   heap->GetCPUDescriptorHandleForHeapStart(&ret);
+   return ret;
+}
+inline D3D12_GPU_DESCRIPTOR_HANDLE
+GetGPUDescriptorHandleForHeapStart(ID3D12DescriptorHeap *heap)
+{
+   D3D12_GPU_DESCRIPTOR_HANDLE ret;
+   heap->GetGPUDescriptorHandleForHeapStart(&ret);
+   return ret;
+}
+inline D3D12_HEAP_PROPERTIES
+GetCustomHeapProperties(ID3D12Device *dev, D3D12_HEAP_TYPE type)
+{
+   D3D12_HEAP_PROPERTIES ret;
+   dev->GetCustomHeapProperties(&ret, 0, type);
+   return ret;
+}
+#endif
 
 using std::runtime_error;
 using Microsoft::WRL::ComPtr;
@@ -48,8 +92,8 @@ enum compute_test_debug_flags {
 static const struct debug_named_value compute_debug_options[] = {
    { "experimental_shaders",  COMPUTE_DEBUG_EXPERIMENTAL_SHADERS, "Enable experimental shaders" },
    { "use_hw_d3d",            COMPUTE_DEBUG_USE_HW_D3D,           "Use a hardware D3D device"   },
-   { "optimize_libclc",       COMPUTE_DEBUG_OPTIMIZE_LIBCLC,      "Optimize the clc_context before using it" },
-   { "serialize_libclc",      COMPUTE_DEBUG_SERIALIZE_LIBCLC,     "Serialize and deserialize the clc_context" },
+   { "optimize_libclc",       COMPUTE_DEBUG_OPTIMIZE_LIBCLC,      "Optimize the clc_libclc before using it" },
+   { "serialize_libclc",      COMPUTE_DEBUG_SERIALIZE_LIBCLC,     "Serialize and deserialize the clc_libclc" },
    DEBUG_NAMED_VALUE_END
 };
 
@@ -206,7 +250,7 @@ ComputeTest::create_root_signature(const ComputeTest::Resources &resources)
    if (FAILED(dev->CreateRootSignature(0,
        sig->GetBufferPointer(),
        sig->GetBufferSize(),
-       __uuidof(ret),
+       __uuidof(ID3D12RootSignature),
        (void **)& ret)))
       throw runtime_error("CreateRootSignature failed");
 
@@ -223,7 +267,7 @@ ComputeTest::create_pipeline_state(ComPtr<ID3D12RootSignature> &root_sig,
 
    ComPtr<ID3D12PipelineState> pipeline_state;
    if (FAILED(dev->CreateComputePipelineState(&pipeline_desc,
-                                              __uuidof(pipeline_state),
+                                              __uuidof(ID3D12PipelineState),
                                               (void **)& pipeline_state)))
       throw runtime_error("Failed to create pipeline state");
    return pipeline_state;
@@ -245,22 +289,11 @@ ComputeTest::create_buffer(int size, D3D12_HEAP_TYPE heap_type)
    desc.Flags = heap_type == D3D12_HEAP_TYPE_DEFAULT ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
-   D3D12_HEAP_PROPERTIES heap_pris = dev->GetCustomHeapProperties(0, heap_type);
-
-   D3D12_RESOURCE_STATES initial_state = D3D12_RESOURCE_STATE_COMMON;
-   switch (heap_type) {
-   case D3D12_HEAP_TYPE_UPLOAD:
-      initial_state = D3D12_RESOURCE_STATE_GENERIC_READ;
-      break;
-
-   case D3D12_HEAP_TYPE_READBACK:
-      initial_state = D3D12_RESOURCE_STATE_COPY_DEST;
-      break;
-   }
+   D3D12_HEAP_PROPERTIES heap_pris = GetCustomHeapProperties(dev, heap_type);
 
    ComPtr<ID3D12Resource> res;
    if (FAILED(dev->CreateCommittedResource(&heap_pris,
-       D3D12_HEAP_FLAG_NONE, &desc, initial_state,
+       D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON,
        NULL, __uuidof(ID3D12Resource), (void **)&res)))
       throw runtime_error("CreateCommittedResource failed");
 
@@ -391,7 +424,7 @@ ComputeTest::add_uav_resource(ComputeTest::Resources &resources,
    size_t size = align(elem_size * num_elems, 4);
    D3D12_CPU_DESCRIPTOR_HANDLE handle;
    ComPtr<ID3D12Resource> res;
-   handle = uav_heap->GetCPUDescriptorHandleForHeapStart();
+   handle = GetCPUDescriptorHandleForHeapStart(uav_heap);
    handle = offset_cpu_handle(handle, resources.descs.size() * uav_heap_incr);
 
    if (size) {
@@ -416,7 +449,7 @@ ComputeTest::add_cbv_resource(ComputeTest::Resources &resources,
    unsigned aligned_size = align(size, 256);
    D3D12_CPU_DESCRIPTOR_HANDLE handle;
    ComPtr<ID3D12Resource> res;
-   handle = uav_heap->GetCPUDescriptorHandleForHeapStart();
+   handle = GetCPUDescriptorHandleForHeapStart(uav_heap);
    handle = offset_cpu_handle(handle, resources.descs.size() * uav_heap_incr);
 
    if (size) {
@@ -450,6 +483,8 @@ ComputeTest::run_shader_with_raw_args(Shader shader,
    // Older WARP and some hardware doesn't support int64, so for these tests, unconditionally lower away int64
    // A more complex runtime can be smarter about detecting when this needs to be done
    conf.lower_bit_size = 64;
+   conf.max_shader_model = SHADER_MODEL_6_2;
+   conf.validator_version = DXIL_VALIDATOR_1_4;
 
    if (!shader.dxil->metadata.local_size[0])
       conf.local_size[0] = compile_args.x;
@@ -478,7 +513,7 @@ ComputeTest::run_shader_with_raw_args(Shader shader,
       compile_args.work_props.global_offset_x != 0 ||
       compile_args.work_props.global_offset_y != 0 ||
       compile_args.work_props.global_offset_z != 0;
-   conf.support_work_group_id_offsets =
+   conf.support_workgroup_id_offsets =
       compile_args.work_props.group_id_offset_x != 0 ||
       compile_args.work_props.group_id_offset_y != 0 ||
       compile_args.work_props.group_id_offset_z != 0;
@@ -504,7 +539,7 @@ ComputeTest::run_shader_with_raw_args(Shader shader,
    std::vector<uint8_t> argsbuf(dxil->metadata.kernel_inputs_buf_size);
    std::vector<ComPtr<ID3D12Resource>> argres(shader.dxil->kernel->num_args);
    clc_work_properties_data work_props = compile_args.work_props;
-   if (!conf.support_work_group_id_offsets) {
+   if (!conf.support_workgroup_id_offsets) {
       work_props.group_count_total_x = compile_args.x / conf.local_size[0];
       work_props.group_count_total_y = compile_args.y / conf.local_size[1];
       work_props.group_count_total_z = compile_args.z / conf.local_size[2];
@@ -577,7 +612,7 @@ ComputeTest::run_shader_with_raw_args(Shader shader,
 
    cmdlist->SetDescriptorHeaps(1, &uav_heap);
    cmdlist->SetComputeRootSignature(root_sig.Get());
-   cmdlist->SetComputeRootDescriptorTable(0, uav_heap->GetGPUDescriptorHandleForHeapStart());
+   cmdlist->SetComputeRootDescriptorTable(0, GetGPUDescriptorHandleForHeapStart(uav_heap));
    cmdlist->SetPipelineState(pipeline_state.Get());
 
    cmdlist->Dispatch(compile_args.x / conf.local_size[0],
@@ -628,31 +663,31 @@ ComputeTest::run_shader_with_raw_args(Shader shader,
 void
 ComputeTest::SetUp()
 {
-   static struct clc_context *compiler_ctx_g = nullptr;
+   static struct clc_libclc *compiler_ctx_g = nullptr;
 
    if (!compiler_ctx_g) {
-      clc_context_options options = { };
+      clc_libclc_dxil_options options = { };
       options.optimize = (debug_get_option_debug_compute() & COMPUTE_DEBUG_OPTIMIZE_LIBCLC) != 0;
 
-      compiler_ctx_g = clc_context_new(&logger, &options);
+      compiler_ctx_g = clc_libclc_new_dxil(&logger, &options);
       if (!compiler_ctx_g)
          throw runtime_error("failed to create CLC compiler context");
 
       if (debug_get_option_debug_compute() & COMPUTE_DEBUG_SERIALIZE_LIBCLC) {
          void *serialized = nullptr;
          size_t serialized_size = 0;
-         clc_context_serialize(compiler_ctx_g, &serialized, &serialized_size);
+         clc_libclc_serialize(compiler_ctx_g, &serialized, &serialized_size);
          if (!serialized)
             throw runtime_error("failed to serialize CLC compiler context");
 
-         clc_free_context(compiler_ctx_g);
+         clc_free_libclc(compiler_ctx_g);
          compiler_ctx_g = nullptr;
 
-         compiler_ctx_g = clc_context_deserialize(serialized, serialized_size);
+         compiler_ctx_g = clc_libclc_deserialize(serialized, serialized_size);
          if (!compiler_ctx_g)
             throw runtime_error("failed to deserialize CLC compiler context");
 
-         clc_context_free_serialized(serialized);
+         clc_libclc_free_serialized(serialized);
       }
    }
    compiler_ctx = compiler_ctx_g;
@@ -731,59 +766,15 @@ PFN_D3D12_SERIALIZE_VERSIONED_ROOT_SIGNATURE ComputeTest::D3D12SerializeVersione
 bool
 validate_module(const struct clc_dxil_object &dxil)
 {
-   static HMODULE hmod = LoadLibrary("DXIL.DLL");
-   if (!hmod) {
-      /* Enabling experimental shaders allows us to run unsigned shader code,
-       * such as when under the debugger where we can't run the validator. */
-      if (debug_get_option_debug_compute() & COMPUTE_DEBUG_EXPERIMENTAL_SHADERS)
-         return true;
-      else
-         throw runtime_error("failed to load DXIL.DLL");
-   }
+   struct dxil_validator *val = dxil_create_validator(NULL);
+   char *err;
+   bool res = dxil_validate_module(val, dxil.binary.data,
+                                   dxil.binary.size, &err);
+   if (!res && err)
+      fprintf(stderr, "D3D12: validation failed: %s", err);
 
-   DxcCreateInstanceProc pfnDxcCreateInstance =
-      (DxcCreateInstanceProc)GetProcAddress(hmod, "DxcCreateInstance");
-   if (!pfnDxcCreateInstance)
-      throw runtime_error("failed to load DxcCreateInstance");
-
-   struct shader_blob : public IDxcBlob {
-      shader_blob(void *data, size_t size) : data(data), size(size) {}
-      LPVOID STDMETHODCALLTYPE GetBufferPointer() override { return data; }
-      SIZE_T STDMETHODCALLTYPE GetBufferSize() override { return size; }
-      HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void **) override { return E_NOINTERFACE; }
-      ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
-      ULONG STDMETHODCALLTYPE Release() override { return 0; }
-      void *data;
-      size_t size;
-   } blob(dxil.binary.data, dxil.binary.size);
-
-   IDxcValidator *validator;
-   if (FAILED(pfnDxcCreateInstance(CLSID_DxcValidator, __uuidof(IDxcValidator),
-                                   (void **)&validator)))
-      throw runtime_error("failed to create IDxcValidator");
-
-   IDxcOperationResult *result;
-   if (FAILED(validator->Validate(&blob, DxcValidatorFlags_InPlaceEdit,
-                                  &result)))
-      throw runtime_error("Validate failed");
-
-   HRESULT hr;
-   if (FAILED(result->GetStatus(&hr)) ||
-       FAILED(hr)) {
-      IDxcBlobEncoding *message;
-      result->GetErrorBuffer(&message);
-      fprintf(stderr, "D3D12: validation failed: %*s\n",
-                   (int)message->GetBufferSize(),
-                   (char *)message->GetBufferPointer());
-      message->Release();
-      validator->Release();
-      result->Release();
-      return false;
-   }
-
-   validator->Release();
-   result->Release();
-   return true;
+   dxil_destroy_validator(val);
+   return res;
 }
 
 static void
@@ -802,10 +793,13 @@ ComputeTest::compile(const std::vector<const char *> &sources,
                      const std::vector<const char *> &compile_args,
                      bool create_library)
 {
-   struct clc_compile_args args = { 0 };
+   struct clc_compile_args args = {
+   };
    args.args = compile_args.data();
    args.num_args = (unsigned)compile_args.size();
-   struct clc_dxil_object *dxil;
+   args.features.images = true;
+   args.features.images_read_write = true;
+   args.features.int64 = true;
    ComputeTest::Shader shader;
 
    std::vector<Shader> shaders;
@@ -815,12 +809,16 @@ ComputeTest::compile(const std::vector<const char *> &sources,
    for (unsigned i = 0; i < sources.size(); i++) {
       args.source.value = sources[i];
 
-      auto obj = clc_compile(compiler_ctx, &args, &logger);
-      if (!obj)
+      clc_binary spirv{};
+      if (!clc_compile_c_to_spirv(&args, &logger, &spirv))
          throw runtime_error("failed to compile object!");
 
       Shader shader;
-      shader.obj = std::shared_ptr<struct clc_object>(obj, clc_free_object);
+      shader.obj = std::shared_ptr<clc_binary>(new clc_binary(spirv), [](clc_binary *spirv)
+         {
+            clc_free_spirv(spirv);
+            delete spirv;
+         });
       shaders.push_back(shader);
    }
 
@@ -834,7 +832,7 @@ ComputeTest::Shader
 ComputeTest::link(const std::vector<Shader> &sources,
                   bool create_library)
 {
-   std::vector<const clc_object*> objs;
+   std::vector<const clc_binary*> objs;
    for (auto& source : sources)
       objs.push_back(&*source.obj);
 
@@ -842,16 +840,41 @@ ComputeTest::link(const std::vector<Shader> &sources,
    link_args.in_objs = objs.data();
    link_args.num_in_objs = (unsigned)objs.size();
    link_args.create_library = create_library;
-   struct clc_object *obj = clc_link(compiler_ctx,
-                                     &link_args,
-                                     &logger);
-   if (!obj)
+   clc_binary spirv{};
+   if (!clc_link_spirv(&link_args, &logger, &spirv))
       throw runtime_error("failed to link objects!");
 
    ComputeTest::Shader shader;
-   shader.obj = std::shared_ptr<struct clc_object>(obj, clc_free_object);
+   shader.obj = std::shared_ptr<clc_binary>(new clc_binary(spirv), [](clc_binary *spirv)
+      {
+         clc_free_spirv(spirv);
+         delete spirv;
+      });
    if (!link_args.create_library)
       configure(shader, NULL);
+
+   return shader;
+}
+
+ComputeTest::Shader
+ComputeTest::assemble(const char *source)
+{
+   spvtools::SpirvTools tools(SPV_ENV_UNIVERSAL_1_0);
+   std::vector<uint32_t> binary;
+   if (!tools.Assemble(source, strlen(source), &binary))
+      throw runtime_error("failed to assemble");
+
+   ComputeTest::Shader shader;
+   shader.obj = std::shared_ptr<clc_binary>(new clc_binary{}, [](clc_binary *spirv)
+      {
+         free(spirv->data);
+         delete spirv;
+      });
+   shader.obj->size = binary.size() * 4;
+   shader.obj->data = malloc(shader.obj->size);
+   memcpy(shader.obj->data, binary.data(), shader.obj->size);
+
+   configure(shader, NULL);
 
    return shader;
 }
@@ -860,13 +883,24 @@ void
 ComputeTest::configure(Shader &shader,
                        const struct clc_runtime_kernel_conf *conf)
 {
-   struct clc_dxil_object *dxil;
+   if (!shader.metadata) {
+      shader.metadata = std::shared_ptr<clc_parsed_spirv>(new clc_parsed_spirv{}, [](clc_parsed_spirv *metadata)
+         {
+            clc_free_parsed_spirv(metadata);
+            delete metadata;
+         });
+      if (!clc_parse_spirv(shader.obj.get(), NULL, shader.metadata.get()))
+         throw runtime_error("failed to parse spirv!");
+   }
 
-   dxil = clc_to_dxil(compiler_ctx, shader.obj.get(), "main_test", conf, &logger);
-   if (!dxil)
+   std::unique_ptr<clc_dxil_object> dxil(new clc_dxil_object{});
+   if (!clc_spirv_to_dxil(compiler_ctx, shader.obj.get(), shader.metadata.get(), "main_test", conf, nullptr, &logger, dxil.get()))
       throw runtime_error("failed to compile kernel!");
-
-   shader.dxil = std::shared_ptr<struct clc_dxil_object>(dxil, clc_free_dxil_object);
+   shader.dxil = std::shared_ptr<clc_dxil_object>(dxil.release(), [](clc_dxil_object *dxil)
+      {
+         clc_free_dxil_object(dxil);
+         delete dxil;
+      });
 }
 
 void

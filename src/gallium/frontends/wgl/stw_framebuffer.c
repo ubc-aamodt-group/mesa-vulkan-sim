@@ -25,6 +25,8 @@
  *
  **************************************************************************/
 
+#include "state_tracker/st_context.h"
+
 #include <windows.h>
 
 #include "pipe/p_screen.h"
@@ -35,6 +37,7 @@
 #include "frontend/api.h"
 
 #include <GL/gl.h>
+#include "stw_gdishim.h"
 #include "gldrv.h"
 #include "stw_framebuffer.h"
 #include "stw_device.h"
@@ -58,7 +61,15 @@ stw_framebuffer_from_hwnd_locked(HWND hwnd)
    for (fb = stw_dev->fb_head; fb != NULL; fb = fb->next)
       if (fb->hWnd == hwnd) {
          stw_framebuffer_lock(fb);
-         assert(fb->mutex.RecursionCount == 1);
+
+         /* When running with Zink, during the Vulkan surface creation
+          * it's possible that the underlying Vulkan driver will try to
+          * access the HWND/HDC we passed in (see stw_st_fill_private_loader_data()).
+          * Because we create the Vulkan surface while holding the framebuffer
+          * lock, when the driver starts to look up properties,
+          * we'd end up double locking when looking up the framebuffer.
+          */
+         assert(stw_dev->zink || fb->mutex.RecursionCount == 1);
          return fb;
       }
 
@@ -74,13 +85,14 @@ stw_framebuffer_from_hwnd_locked(HWND hwnd)
  * locked.  After this function completes, the fb's mutex will be unlocked.
  */
 void
-stw_framebuffer_release_locked(struct stw_framebuffer *fb)
+stw_framebuffer_release_locked(struct stw_framebuffer *fb,
+                               struct st_context *st)
 {
    struct stw_framebuffer **link;
 
    assert(fb);
    assert(stw_own_mutex(&fb->mutex));
-   assert(stw_own_mutex(&stw_dev->fb_mutex));
+   assert(stw_own_mutex(&stw_dev->fb_mutex) || fb->owner == STW_FRAMEBUFFER_EGL_WINDOW);
 
    /* check the reference count */
    fb->refcnt--;
@@ -89,22 +101,24 @@ stw_framebuffer_release_locked(struct stw_framebuffer *fb)
       return;
    }
 
-   /* remove this stw_framebuffer from the device's linked list */
-   link = &stw_dev->fb_head;
-   while (*link != fb)
-      link = &(*link)->next;
-   assert(*link);
-   *link = fb->next;
-   fb->next = NULL;
+   if (fb->owner != STW_FRAMEBUFFER_EGL_WINDOW) {
+      /* remove this stw_framebuffer from the device's linked list */
+      link = &stw_dev->fb_head;
+      while (*link != fb)
+         link = &(*link)->next;
+      assert(*link);
+      *link = fb->next;
+      fb->next = NULL;
+   }
 
    if (fb->shared_surface)
       stw_dev->stw_winsys->shared_surface_close(stw_dev->screen,
                                                 fb->shared_surface);
 
    if (fb->winsys_framebuffer)
-      fb->winsys_framebuffer->destroy(fb->winsys_framebuffer);
+      fb->winsys_framebuffer->destroy(fb->winsys_framebuffer, st ? st->pipe : NULL);
 
-   stw_st_destroy_framebuffer_locked(fb->stfb);
+   stw_st_destroy_framebuffer_locked(fb->drawable);
 
    stw_framebuffer_unlock(fb);
 
@@ -165,32 +179,35 @@ stw_framebuffer_get_size(struct stw_framebuffer *fb)
 
    client_pos.x = 0;
    client_pos.y = 0;
+#ifndef _GAMING_XBOX
    if (ClientToScreen(fb->hWnd, &client_pos) &&
        GetWindowRect(fb->hWnd, &window_rect)) {
       fb->client_rect.left = client_pos.x - window_rect.left;
       fb->client_rect.top  = client_pos.y - window_rect.top;
    }
+#endif
 
    fb->client_rect.right  = fb->client_rect.left + fb->width;
    fb->client_rect.bottom = fb->client_rect.top  + fb->height;
 
 #if 0
    debug_printf("\n");
-   debug_printf("%s: hwnd = %p\n", __FUNCTION__, fb->hWnd);
+   debug_printf("%s: hwnd = %p\n", __func__, fb->hWnd);
    debug_printf("%s: client_position = (%li, %li)\n",
-                __FUNCTION__, client_pos.x, client_pos.y);
+                __func__, client_pos.x, client_pos.y);
    debug_printf("%s: window_rect = (%li, %li) - (%li, %li)\n",
-                __FUNCTION__,
+                __func__,
                 window_rect.left, window_rect.top,
                 window_rect.right, window_rect.bottom);
    debug_printf("%s: client_rect = (%li, %li) - (%li, %li)\n",
-                __FUNCTION__,
+                __func__,
                 fb->client_rect.left, fb->client_rect.top,
                 fb->client_rect.right, fb->client_rect.bottom);
 #endif
 }
 
 
+#ifndef _GAMING_XBOX
 /**
  * @sa http://msdn.microsoft.com/en-us/library/ms644975(VS.85).aspx
  * @sa http://msdn.microsoft.com/en-us/library/ms644960(VS.85).aspx
@@ -238,14 +255,52 @@ stw_call_window_proc(int nCode, WPARAM wParam, LPARAM lParam)
       else if (pParams->message == WM_DESTROY) {
          stw_lock_framebuffers(stw_dev);
          fb = stw_framebuffer_from_hwnd_locked( pParams->hwnd );
-         if (fb)
-            stw_framebuffer_release_locked(fb);
+         if (fb) {
+            struct stw_context *current_context = stw_current_context();
+            struct st_context *st = current_context &&
+               current_context->current_framebuffer == fb ? current_context->st : NULL;
+            stw_framebuffer_release_locked(fb, st);
+         }
          stw_unlock_framebuffers(stw_dev);
       }
    }
 
    return CallNextHookEx(tls_data->hCallWndProcHook, nCode, wParam, lParam);
 }
+#else
+LRESULT CALLBACK
+stw_call_window_proc_xbox(HWND hWnd, UINT message,
+                          WPARAM wParam, LPARAM lParam)
+{
+   WNDPROC prev_wndproc = NULL;
+
+   /* We check that the stw_dev object is initialized before we try to do
+    * anything with it.  Otherwise, in multi-threaded programs there's a
+    * chance of executing this code before the stw_dev object is fully
+    * initialized.
+    */
+   if (stw_dev && stw_dev->initialized) {
+      if (message == WM_DESTROY) {
+         stw_lock_framebuffers(stw_dev);
+         struct stw_framebuffer *fb = stw_framebuffer_from_hwnd_locked(hWnd);
+         if (fb) {
+            struct stw_context *current_context = stw_current_context();
+            struct st_context *st = current_context &&
+               current_context->current_framebuffer == fb ? current_context->st : NULL;
+            prev_wndproc = fb->prev_wndproc;
+            stw_framebuffer_release_locked(fb, st);
+         }
+         stw_unlock_framebuffers(stw_dev);
+      }
+   }
+
+   /* Pass the parameters up the chain, if applicable */
+   if (prev_wndproc)
+      return prev_wndproc(hWnd, message, wParam, lParam);
+
+   return 0;
+}
+#endif /* _GAMING_XBOX */
 
 
 /**
@@ -254,43 +309,44 @@ stw_call_window_proc(int nCode, WPARAM wParam, LPARAM lParam)
  * with its mutex locked.
  */
 struct stw_framebuffer *
-stw_framebuffer_create(HDC hdc, int iPixelFormat)
+stw_framebuffer_create(HWND hWnd, const struct stw_pixelformat_info *pfi, enum stw_framebuffer_owner owner,
+                       struct pipe_frontend_screen *fscreen)
 {
-   HWND hWnd;
    struct stw_framebuffer *fb;
-   const struct stw_pixelformat_info *pfi;
-
-   /* We only support drawing to a window. */
-   hWnd = WindowFromDC( hdc );
-   if (!hWnd)
-      return NULL;
 
    fb = CALLOC_STRUCT( stw_framebuffer );
    if (fb == NULL)
       return NULL;
 
    fb->hWnd = hWnd;
-   fb->iPixelFormat = iPixelFormat;
 
    if (stw_dev->stw_winsys->create_framebuffer)
       fb->winsys_framebuffer =
-         stw_dev->stw_winsys->create_framebuffer(stw_dev->screen, hdc, iPixelFormat);
+         stw_dev->stw_winsys->create_framebuffer(stw_dev->screen, hWnd, pfi->iPixelFormat);
+
+#ifdef _GAMING_XBOX
+   fb->prev_wndproc = (WNDPROC)SetWindowLongPtr(hWnd, GWLP_WNDPROC, (LONG_PTR)&stw_call_window_proc_xbox);
+#endif
 
    /*
     * We often need a displayable pixel format to make GDI happy. Set it
     * here (always 1, i.e., out first pixel format) where appropriate.
     */
-   fb->iDisplayablePixelFormat = iPixelFormat <= stw_dev->pixelformat_count
-      ? iPixelFormat : 1;
+   fb->iDisplayablePixelFormat = pfi->iPixelFormat <= stw_dev->pixelformat_count
+      ? pfi->iPixelFormat : 1;
+   fb->owner = owner;
 
-   fb->pfi = pfi = stw_pixelformat_get_info( iPixelFormat );
-   fb->stfb = stw_st_create_framebuffer( fb );
-   if (!fb->stfb) {
+   fb->pfi = pfi;
+   fb->drawable = stw_st_create_framebuffer( fb, fscreen );
+   if (!fb->drawable) {
       FREE( fb );
       return NULL;
    }
 
    fb->refcnt = 1;
+
+   /* A -1 means defer to the global stw_dev->swap_interval */
+   fb->swap_interval = -1;
 
    /*
     * Windows can be sometimes have zero width and or height, but we ensure
@@ -315,12 +371,41 @@ stw_framebuffer_create(HDC hdc, int iPixelFormat)
     */
    stw_framebuffer_lock(fb);
 
-   stw_lock_framebuffers(stw_dev);
-   fb->next = stw_dev->fb_head;
-   stw_dev->fb_head = fb;
-   stw_unlock_framebuffers(stw_dev);
+   if (owner != STW_FRAMEBUFFER_EGL_WINDOW) {
+      stw_lock_framebuffers(stw_dev);
+      fb->next = stw_dev->fb_head;
+      stw_dev->fb_head = fb;
+      stw_unlock_framebuffers(stw_dev);
+   }
 
    return fb;
+}
+
+/**
+ * Increase fb reference count.  The referenced framebuffer should be locked.
+ *
+ * It's not necessary to hold stw_dev::fb_mutex global lock.
+ */
+void
+stw_framebuffer_reference_locked(struct stw_framebuffer *fb)
+{
+   if (fb) {
+      assert(stw_own_mutex(&fb->mutex));
+      fb->refcnt++;
+   }
+}
+
+/**
+ * Release stw_framebuffer::mutex lock. This framebuffer must not be accessed
+ * after calling this function, as it may have been deleted by another thread
+ * in the meanwhile.
+ */
+void
+stw_framebuffer_unlock(struct stw_framebuffer *fb)
+{
+   assert(fb);
+   assert(stw_own_mutex(&fb->mutex));
+   LeaveCriticalSection(&fb->mutex);
 }
 
 
@@ -330,7 +415,7 @@ stw_framebuffer_create(HDC hdc, int iPixelFormat)
 void
 stw_framebuffer_update(struct stw_framebuffer *fb)
 {
-   assert(fb->stfb);
+   assert(fb->drawable);
    assert(fb->height);
    assert(fb->width);
 
@@ -363,7 +448,7 @@ stw_framebuffer_cleanup(void)
       next = fb->next;
 
       stw_framebuffer_lock(fb);
-      stw_framebuffer_release_locked(fb);
+      stw_framebuffer_release_locked(fb, NULL);
 
       fb = next;
    }
@@ -449,14 +534,16 @@ DrvSetPixelFormat(HDC hdc, LONG iPixelFormat)
        * SetPixelFormat must be called only once.  However ignore
        * pbuffers, for which the framebuffer object is created first.
        */
-      boolean bPbuffer = fb->bPbuffer;
+      boolean bPbuffer = fb->owner == STW_FRAMEBUFFER_PBUFFER;
 
       stw_framebuffer_unlock( fb );
 
       return bPbuffer;
    }
 
-   fb = stw_framebuffer_create(hdc, iPixelFormat);
+   const struct stw_pixelformat_info *pfi = stw_pixelformat_get_info(iPixelFormat);
+
+   fb = stw_framebuffer_create(WindowFromDC(hdc), pfi, STW_FRAMEBUFFER_WGL_WINDOW, stw_dev->fscreen);
    if (!fb) {
       return FALSE;
    }
@@ -485,7 +572,7 @@ stw_pixelformat_get(HDC hdc)
 
    fb = stw_framebuffer_from_hdc(hdc);
    if (fb) {
-      iPixelFormat = fb->iPixelFormat;
+      iPixelFormat = fb->pfi->iPixelFormat;
       stw_framebuffer_unlock(fb);
    }
 
@@ -565,7 +652,8 @@ stw_framebuffer_present_locked(HDC hdc,
                                struct pipe_resource *res)
 {
    if (fb->winsys_framebuffer) {
-      BOOL result = fb->winsys_framebuffer->present(fb->winsys_framebuffer);
+      int interval = fb->swap_interval == -1 ? stw_dev->swap_interval : fb->swap_interval;
+      BOOL result = fb->winsys_framebuffer->present(fb->winsys_framebuffer, interval);
 
       stw_framebuffer_update(fb);
       stw_notify_current_locked(fb);
@@ -614,7 +702,7 @@ stw_framebuffer_present_locked(HDC hdc,
  * This is for the WGL_ARB_swap_interval extension.
  */
 static void
-wait_swap_interval(struct stw_framebuffer *fb)
+wait_swap_interval(struct stw_framebuffer *fb, int interval)
 {
    /* Note: all time variables here are in units of microseconds */
    int64_t cur_time = os_time_get_nano() / 1000;
@@ -623,7 +711,7 @@ wait_swap_interval(struct stw_framebuffer *fb)
       /* Compute time since previous swap */
       int64_t delta = cur_time - fb->prev_swap_time;
       int64_t min_swap_period =
-         1.0e6 / stw_dev->refresh_rate * stw_dev->swap_interval;
+         1.0e6 / stw_dev->refresh_rate * interval;
 
       /* If time since last swap is less than wait period, wait.
        * Note that it's possible for the delta to be negative because of
@@ -639,20 +727,10 @@ wait_swap_interval(struct stw_framebuffer *fb)
    fb->prev_swap_time = cur_time;
 }
 
-
-BOOL APIENTRY
-DrvSwapBuffers(HDC hdc)
+BOOL
+stw_framebuffer_swap_locked(HDC hdc, struct stw_framebuffer *fb)
 {
    struct stw_context *ctx;
-   struct stw_framebuffer *fb;
-
-   if (!stw_dev)
-      return FALSE;
-
-   fb = stw_framebuffer_from_hdc( hdc );
-   if (fb == NULL)
-      return FALSE;
-
    if (!(fb->pfi->pfd.dwFlags & PFD_DOUBLEBUFFER)) {
       stw_framebuffer_unlock(fb);
       return TRUE;
@@ -663,7 +741,7 @@ DrvSwapBuffers(HDC hdc)
       if (ctx->hud) {
          /* Display the HUD */
          struct pipe_resource *back =
-            stw_get_framebuffer_resource(fb->stfb, ST_ATTACHMENT_BACK_LEFT);
+            stw_get_framebuffer_resource(fb->drawable, ST_ATTACHMENT_BACK_LEFT);
          if (back) {
             hud_run(ctx->hud, NULL, back);
          }
@@ -671,15 +749,31 @@ DrvSwapBuffers(HDC hdc)
 
       if (ctx->current_framebuffer == fb) {
          /* flush current context */
-         stw_st_flush(ctx->st, fb->stfb, ST_FLUSH_END_OF_FRAME);
+         stw_st_flush(ctx->st, fb->drawable, ST_FLUSH_END_OF_FRAME);
       }
    }
 
-   if (stw_dev->swap_interval != 0 && !fb->winsys_framebuffer) {
-      wait_swap_interval(fb);
+   int interval = fb->swap_interval == -1 ? stw_dev->swap_interval : fb->swap_interval;
+   if (interval != 0 && !fb->winsys_framebuffer) {
+      wait_swap_interval(fb, interval);
    }
 
-   return stw_st_swap_framebuffer_locked(hdc, ctx->st, fb->stfb);
+   return stw_st_swap_framebuffer_locked(hdc, ctx->st, fb->drawable);
+}
+
+BOOL APIENTRY
+DrvSwapBuffers(HDC hdc)
+{
+   struct stw_framebuffer *fb;
+
+   if (!stw_dev)
+      return FALSE;
+
+   fb = stw_framebuffer_from_hdc( hdc );
+   if (fb == NULL)
+      return FALSE;
+
+   return stw_framebuffer_swap_locked(hdc, fb);
 }
 
 

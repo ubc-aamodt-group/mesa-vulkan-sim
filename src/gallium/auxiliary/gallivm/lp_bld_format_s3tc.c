@@ -642,8 +642,8 @@ s3tc_dxt1_full_to_rgba_aos(struct gallivm_state *gallivm,
        * XXX with sse2 and 16x8 vectors, should use pavgb even when n == 1.
        * Much cheaper (but we don't care that much if n == 1).
        */
-      if ((util_cpu_caps.has_sse2 && n == 4) ||
-          (util_cpu_caps.has_avx2 && n == 8)) {
+      if ((util_get_cpu_caps()->has_sse2 && n == 4) ||
+          (util_get_cpu_caps()->has_avx2 && n == 8)) {
          color2_2 = lp_build_pavgb(&bld8, colors0, colors1);
          color2_2 = LLVMBuildBitCast(builder, color2_2, bld32.vec_type, "");
       }
@@ -1097,13 +1097,12 @@ lp_build_gather_s3tc_simple_scalar(struct gallivm_state *gallivm,
    LLVMValueRef elem, shuf;
    LLVMTypeRef type32 = LLVMIntTypeInContext(gallivm->context, 32);
    LLVMTypeRef src_type = LLVMIntTypeInContext(gallivm->context, block_bits);
-   LLVMTypeRef src_ptr_type = LLVMPointerType(src_type, 0);
    LLVMTypeRef type32_4 = LLVMVectorType(type32, 4);
 
    assert(block_bits == 64 || block_bits == 128);
 
-   ptr = LLVMBuildBitCast(builder, ptr, src_ptr_type, "");
-   elem = LLVMBuildLoad(builder, ptr, "");
+   ptr = LLVMBuildBitCast(builder, ptr, LLVMPointerType(src_type, 0), "");
+   elem = LLVMBuildLoad2(builder, src_type, ptr, "");
 
    if (block_bits == 128) {
       /* just return block as is */
@@ -1135,50 +1134,55 @@ s3tc_store_cached_block(struct gallivm_state *gallivm,
    indices[0] = lp_build_const_int32(gallivm, 0);
    indices[1] = lp_build_const_int32(gallivm, LP_BUILD_FORMAT_CACHE_MEMBER_TAGS);
    indices[2] = hash_index;
-   ptr = LLVMBuildGEP(builder, cache, indices, ARRAY_SIZE(indices), "");
+   LLVMTypeRef cache_type = lp_build_format_cache_type(gallivm);
+   ptr = LLVMBuildGEP2(builder, cache_type, cache, indices, ARRAY_SIZE(indices), "");
    LLVMBuildStore(builder, tag_value, ptr);
 
    indices[1] = lp_build_const_int32(gallivm, LP_BUILD_FORMAT_CACHE_MEMBER_DATA);
-   hash_index = LLVMBuildMul(builder, hash_index,
-                             lp_build_const_int32(gallivm, 16), "");
+   hash_index = LLVMBuildMul(builder, hash_index, lp_build_const_int32(gallivm, 16), "");
    for (count = 0; count < 4; count++) {
       indices[2] = hash_index;
-      ptr = LLVMBuildGEP(builder, cache, indices, ARRAY_SIZE(indices), "");
+      ptr = LLVMBuildGEP2(builder, cache_type, cache, indices, ARRAY_SIZE(indices), "");
       ptr = LLVMBuildBitCast(builder, ptr, type_ptr4x32, "");
       LLVMBuildStore(builder, col[count], ptr);
-      hash_index = LLVMBuildAdd(builder, hash_index,
-                                lp_build_const_int32(gallivm, 4), "");
+      hash_index = LLVMBuildAdd(builder, hash_index, lp_build_const_int32(gallivm, 4), "");
    }
 }
 
 static LLVMValueRef
-s3tc_lookup_cached_pixel(struct gallivm_state *gallivm,
-                         LLVMValueRef ptr,
-                         LLVMValueRef index)
-{
+lookup_cache_member(struct gallivm_state *gallivm, LLVMValueRef cache, enum cache_member member, LLVMValueRef index) {
+   assert(member == LP_BUILD_FORMAT_CACHE_MEMBER_DATA || member == LP_BUILD_FORMAT_CACHE_MEMBER_TAGS);
    LLVMBuilderRef builder = gallivm->builder;
    LLVMValueRef member_ptr, indices[3];
 
    indices[0] = lp_build_const_int32(gallivm, 0);
-   indices[1] = lp_build_const_int32(gallivm, LP_BUILD_FORMAT_CACHE_MEMBER_DATA);
+   indices[1] = lp_build_const_int32(gallivm, member);
    indices[2] = index;
-   member_ptr = LLVMBuildGEP(builder, ptr, indices, ARRAY_SIZE(indices), "");
-   return LLVMBuildLoad(builder, member_ptr, "cache_data");
+
+   const char *name =
+         member == LP_BUILD_FORMAT_CACHE_MEMBER_DATA ? "cache_data" :
+         member == LP_BUILD_FORMAT_CACHE_MEMBER_TAGS ? "tag_data" : "";
+
+   member_ptr = LLVMBuildGEP2(builder, lp_build_format_cache_type(gallivm),
+                              cache, indices, ARRAY_SIZE(indices), "cache_gep");
+
+   return LLVMBuildLoad2(builder, lp_build_format_cache_elem_type(gallivm, member), member_ptr, name);
+}
+
+static LLVMValueRef
+s3tc_lookup_cached_pixel(struct gallivm_state *gallivm,
+                         LLVMValueRef cache,
+                         LLVMValueRef index)
+{
+   return lookup_cache_member(gallivm, cache, LP_BUILD_FORMAT_CACHE_MEMBER_DATA, index);
 }
 
 static LLVMValueRef
 s3tc_lookup_tag_data(struct gallivm_state *gallivm,
-                     LLVMValueRef ptr,
+                     LLVMValueRef cache,
                      LLVMValueRef index)
 {
-   LLVMBuilderRef builder = gallivm->builder;
-   LLVMValueRef member_ptr, indices[3];
-
-   indices[0] = lp_build_const_int32(gallivm, 0);
-   indices[1] = lp_build_const_int32(gallivm, LP_BUILD_FORMAT_CACHE_MEMBER_TAGS);
-   indices[2] = index;
-   member_ptr = LLVMBuildGEP(builder, ptr, indices, ARRAY_SIZE(indices), "");
-   return LLVMBuildLoad(builder, member_ptr, "tag_data");
+   return lookup_cache_member(gallivm, cache, LP_BUILD_FORMAT_CACHE_MEMBER_TAGS, index);
 }
 
 #if LP_BUILD_FORMAT_CACHE_DEBUG
@@ -1193,12 +1197,11 @@ s3tc_update_cache_access(struct gallivm_state *gallivm,
 
    assert(index == LP_BUILD_FORMAT_CACHE_MEMBER_ACCESS_TOTAL ||
           index == LP_BUILD_FORMAT_CACHE_MEMBER_ACCESS_MISS);
-
-   member_ptr = lp_build_struct_get_ptr(gallivm, ptr, index, "");
-   cache_access = LLVMBuildLoad(builder, member_ptr, "cache_access");
+   LLVMTypeRef cache_type = lp_build_format_cache_type(gallivm);
+   member_ptr = lp_build_struct_get_ptr2(gallivm, cache_type, ptr, index, "");
+   cache_access = LLVMBuildLoad2(builder, LLVMInt64TypeInContext(gallivm->context), member_ptr, "cache_access");
    cache_access = LLVMBuildAdd(builder, cache_access,
-                               LLVMConstInt(LLVMInt64TypeInContext(gallivm->context),
-                                                                   count, 0), "");
+                               LLVMConstInt(LLVMInt64TypeInContext(gallivm->context), count, 0), "");
    LLVMBuildStore(builder, cache_access, member_ptr);
 }
 #endif
@@ -1350,7 +1353,7 @@ s3tc_decode_block_dxt1(struct gallivm_state *gallivm,
    if (is_dxt1_variant) {
       LLVMValueRef color23_2, color2_2;
 
-      if (util_cpu_caps.has_sse2) {
+      if (util_get_cpu_caps()->has_sse2) {
          LLVMValueRef intrargs[2];
          intrargs[0] = LLVMBuildBitCast(builder, color01, bld8.vec_type, "");
          /* same interleave as for lerp23 - correct result in 2nd element */
@@ -1389,7 +1392,7 @@ s3tc_decode_block_dxt1(struct gallivm_state *gallivm,
       color23 = lp_build_select(&bld32, sel_mask, color23, color23_2);
    }
 
-   if (util_cpu_caps.has_ssse3) {
+   if (util_get_cpu_caps()->has_ssse3) {
       /*
        * Use pshufb as mini-lut. (Only doable with intrinsics as the
        * final shuffles are non-constant. pshufb is awesome!)
@@ -1689,7 +1692,7 @@ s3tc_decode_block_dxt5(struct gallivm_state *gallivm,
    type16.sign = FALSE;
    sel_mask = LLVMBuildBitCast(builder, sel_mask, bld8.vec_type, "");
 
-   if (!util_cpu_caps.has_ssse3) {
+   if (!util_get_cpu_caps()->has_ssse3) {
       LLVMValueRef acodeg, mask1, acode0, acode1;
 
       /* extraction of the 3 bit values into something more useful is HARD */
@@ -1996,24 +1999,17 @@ update_cached_block(struct gallivm_state *gallivm,
             format_desc->short_name);
    function = LLVMGetNamedFunction(module, name);
 
+   LLVMTypeRef ret_type = LLVMVoidTypeInContext(gallivm->context);
+   LLVMTypeRef arg_types[3];
+   arg_types[0] = pi8t;
+   arg_types[1] = LLVMInt32TypeInContext(gallivm->context);
+   arg_types[2] = LLVMTypeOf(cache); // XXX: put right type here
+   LLVMTypeRef function_type = LLVMFunctionType(ret_type, arg_types, ARRAY_SIZE(arg_types), 0);
+
    if (!function) {
-      LLVMTypeRef ret_type;
-      LLVMTypeRef arg_types[3];
-      LLVMTypeRef function_type;
-      unsigned arg;
-
-      /*
-       * Generate the function prototype.
-       */
-
-      ret_type = LLVMVoidTypeInContext(gallivm->context);
-      arg_types[0] = pi8t;
-      arg_types[1] = LLVMInt32TypeInContext(gallivm->context);
-      arg_types[2] = LLVMTypeOf(cache); // XXX: put right type here
-      function_type = LLVMFunctionType(ret_type, arg_types, ARRAY_SIZE(arg_types), 0);
       function = LLVMAddFunction(module, name, function_type);
 
-      for (arg = 0; arg < ARRAY_SIZE(arg_types); ++arg)
+      for (unsigned arg = 0; arg < ARRAY_SIZE(arg_types); ++arg)
          if (LLVMGetTypeKind(arg_types[arg]) == LLVMPointerTypeKind)
             lp_add_function_attr(function, arg + 1, LP_FUNC_ATTR_NOALIAS);
 
@@ -2026,7 +2022,7 @@ update_cached_block(struct gallivm_state *gallivm,
    args[1] = hash_index;
    args[2] = cache;
  
-   LLVMBuildCall(builder, function, args, ARRAY_SIZE(args), "");
+   LLVMBuildCall2(builder, function_type, function, args, ARRAY_SIZE(args), "");
    bb = LLVMGetInsertBlock(builder);
    inst = LLVMGetLastInstruction(bb);
    LLVMSetInstructionCallConv(inst, LLVMFastCallConv);
@@ -2365,6 +2361,9 @@ lp_build_gather_rgtc(struct gallivm_state *gallivm,
                                              lp_build_const_int32(gallivm, 2), "");
          *green_hi = LLVMBuildExtractElement(builder, elem,
                                              lp_build_const_int32(gallivm, 3), "");
+      } else {
+         *green_lo = NULL;
+         *green_hi = NULL;
       }
    } else {
       LLVMValueRef tmp[4];

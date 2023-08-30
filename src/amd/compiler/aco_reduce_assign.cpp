@@ -23,8 +23,10 @@
  *
  */
 
-#include "aco_ir.h"
 #include "aco_builder.h"
+#include "aco_ir.h"
+
+#include <vector>
 
 /*
  * Insert p_linear_start instructions right before RA to correctly allocate
@@ -34,7 +36,8 @@
 
 namespace aco {
 
-void setup_reduce_temp(Program* program)
+void
+setup_reduce_temp(Program* program)
 {
    unsigned last_top_level_block_idx = 0;
    unsigned maxSize = 0;
@@ -42,11 +45,14 @@ void setup_reduce_temp(Program* program)
    std::vector<bool> hasReductions(program->blocks.size());
    for (Block& block : program->blocks) {
       for (aco_ptr<Instruction>& instr : block.instructions) {
-         if (instr->format != Format::PSEUDO_REDUCTION)
-            continue;
-
-         maxSize = MAX2(maxSize, instr->operands[0].size());
-         hasReductions[block.index] = true;
+         if (instr->opcode == aco_opcode::p_interp_gfx11 ||
+             instr->opcode == aco_opcode::p_bpermute_gfx11w64) {
+            maxSize = MAX2(maxSize, 1);
+            hasReductions[block.index] = true;
+         } else if (instr->format == Format::PSEUDO_REDUCTION) {
+            maxSize = MAX2(maxSize, instr->operands[0].size());
+            hasReductions[block.index] = true;
+         }
       }
    }
 
@@ -58,45 +64,50 @@ void setup_reduce_temp(Program* program)
    Temp vtmp(0, RegClass(RegType::vgpr, maxSize).as_linear());
    int inserted_at = -1;
    int vtmp_inserted_at = -1;
-   bool reduceTmp_in_loop = false;
-   bool vtmp_in_loop = false;
 
    for (Block& block : program->blocks) {
 
-      /* insert p_end_linear_vgpr after the outermost loop */
-      if (reduceTmp_in_loop && block.loop_nest_depth == 0) {
-         assert(inserted_at == (int)last_top_level_block_idx);
-
-         aco_ptr<Instruction> end{create_instruction<Instruction>(aco_opcode::p_end_linear_vgpr, Format::PSEUDO, vtmp_in_loop ? 2 : 1, 0)};
-         end->operands[0] = Operand(reduceTmp);
-         if (vtmp_in_loop)
-            end->operands[1] = Operand(vtmp);
-         /* insert after the phis of the loop exit block */
-         std::vector<aco_ptr<Instruction>>::iterator it = block.instructions.begin();
-         while ((*it)->opcode == aco_opcode::p_linear_phi || (*it)->opcode == aco_opcode::p_phi)
-            ++it;
-         block.instructions.insert(it, std::move(end));
-         reduceTmp_in_loop = false;
-      }
-
-      if (block.kind & block_kind_top_level)
+      if (block.kind & block_kind_top_level) {
          last_top_level_block_idx = block.index;
+
+         /* TODO: this could be improved in this case:
+          *    start_linear_vgpr
+          *    if (...) {
+          *       use_linear_vgpr
+          *    }
+          *    end_linear_vgpr
+          * Here, the linear vgpr is used before any phi copies, so this isn't necessary.
+          */
+         if (inserted_at >= 0) {
+            aco_ptr<Instruction> end{create_instruction<Instruction>(
+               aco_opcode::p_end_linear_vgpr, Format::PSEUDO, vtmp_inserted_at >= 0 ? 2 : 1, 0)};
+            end->operands[0] = Operand(reduceTmp);
+            if (vtmp_inserted_at >= 0)
+               end->operands[1] = Operand(vtmp);
+            /* insert after the phis of the block */
+            std::vector<aco_ptr<Instruction>>::iterator it = block.instructions.begin();
+            while ((*it)->opcode == aco_opcode::p_linear_phi || (*it)->opcode == aco_opcode::p_phi)
+               ++it;
+            block.instructions.insert(it, std::move(end));
+            inserted_at = vtmp_inserted_at = -1;
+         }
+      }
 
       if (!hasReductions[block.index])
          continue;
 
       std::vector<aco_ptr<Instruction>>::iterator it;
       for (it = block.instructions.begin(); it != block.instructions.end(); ++it) {
-         Instruction *instr = (*it).get();
-         if (instr->format != Format::PSEUDO_REDUCTION)
+         Instruction* instr = (*it).get();
+         if (instr->format != Format::PSEUDO_REDUCTION &&
+             instr->opcode != aco_opcode::p_interp_gfx11 &&
+             instr->opcode != aco_opcode::p_bpermute_gfx11w64)
             continue;
-
-         ReduceOp op = static_cast<Pseudo_reduction_instruction *>(instr)->reduce_op;
-         reduceTmp_in_loop |= block.loop_nest_depth > 0;
 
          if ((int)last_top_level_block_idx != inserted_at) {
             reduceTmp = program->allocateTmp(reduceTmp.regClass());
-            aco_ptr<Pseudo_instruction> create{create_instruction<Pseudo_instruction>(aco_opcode::p_start_linear_vgpr, Format::PSEUDO, 0, 1)};
+            aco_ptr<Pseudo_instruction> create{create_instruction<Pseudo_instruction>(
+               aco_opcode::p_start_linear_vgpr, Format::PSEUDO, 0, 1)};
             create->definitions[0] = Definition(reduceTmp);
             /* find the right place to insert this definition */
             if (last_top_level_block_idx == block.index) {
@@ -108,53 +119,66 @@ void setup_reduce_temp(Program* program)
             } else {
                assert(last_top_level_block_idx < block.index);
                /* insert before the branch at last top level block */
-               std::vector<aco_ptr<Instruction>>& instructions = program->blocks[last_top_level_block_idx].instructions;
-               instructions.insert(std::next(instructions.begin(), instructions.size() - 1), std::move(create));
+               std::vector<aco_ptr<Instruction>>& instructions =
+                  program->blocks[last_top_level_block_idx].instructions;
+               instructions.insert(std::next(instructions.begin(), instructions.size() - 1),
+                                   std::move(create));
                inserted_at = last_top_level_block_idx;
             }
          }
 
          /* same as before, except for the vector temporary instead of the reduce temporary */
-         unsigned cluster_size = static_cast<Pseudo_reduction_instruction *>(instr)->cluster_size;
-         bool need_vtmp = op == imul32 || op == fadd64 || op == fmul64 ||
-                          op == fmin64 || op == fmax64 || op == umin64 ||
-                          op == umax64 || op == imin64 || op == imax64 ||
-                          op == imul64;
-         bool gfx10_need_vtmp = op == imul8 || op == imax8 || op == imin8 || op == umin8 ||
-                                op == imul16 || op == imax16 || op == imin16 || op == umin16 ||
-                                op == iadd64;
+         bool need_vtmp = false;
+         if (instr->isReduction()) {
+            ReduceOp op = instr->reduction().reduce_op;
+            unsigned cluster_size = instr->reduction().cluster_size;
+            need_vtmp = op == imul32 || op == fadd64 || op == fmul64 || op == fmin64 ||
+                        op == fmax64 || op == umin64 || op == umax64 || op == imin64 ||
+                        op == imax64 || op == imul64;
+            bool gfx10_need_vtmp = op == imul8 || op == imax8 || op == imin8 || op == umin8 ||
+                                   op == imul16 || op == imax16 || op == imin16 || op == umin16 ||
+                                   op == iadd64;
 
-         if (program->chip_class >= GFX10 && cluster_size == 64)
-            need_vtmp = true;
-         if (program->chip_class >= GFX10 && gfx10_need_vtmp)
-            need_vtmp = true;
-         if (program->chip_class <= GFX7)
-            need_vtmp = true;
+            if (program->gfx_level >= GFX10 && cluster_size == 64)
+               need_vtmp = true;
+            if (program->gfx_level >= GFX10 && gfx10_need_vtmp)
+               need_vtmp = true;
+            if (program->gfx_level <= GFX7)
+               need_vtmp = true;
 
-         need_vtmp |= cluster_size == 32;
+            need_vtmp |= cluster_size == 32;
+         }
 
-         vtmp_in_loop |= need_vtmp && block.loop_nest_depth > 0;
          if (need_vtmp && (int)last_top_level_block_idx != vtmp_inserted_at) {
             vtmp = program->allocateTmp(vtmp.regClass());
-            aco_ptr<Pseudo_instruction> create{create_instruction<Pseudo_instruction>(aco_opcode::p_start_linear_vgpr, Format::PSEUDO, 0, 1)};
+            aco_ptr<Pseudo_instruction> create{create_instruction<Pseudo_instruction>(
+               aco_opcode::p_start_linear_vgpr, Format::PSEUDO, 0, 1)};
             create->definitions[0] = Definition(vtmp);
             if (last_top_level_block_idx == block.index) {
                it = block.instructions.insert(it, std::move(create));
                it++;
             } else {
                assert(last_top_level_block_idx < block.index);
-               std::vector<aco_ptr<Instruction>>& instructions = program->blocks[last_top_level_block_idx].instructions;
-               instructions.insert(std::next(instructions.begin(), instructions.size() - 1), std::move(create));
+               std::vector<aco_ptr<Instruction>>& instructions =
+                  program->blocks[last_top_level_block_idx].instructions;
+               instructions.insert(std::next(instructions.begin(), instructions.size() - 1),
+                                   std::move(create));
                vtmp_inserted_at = last_top_level_block_idx;
             }
          }
 
-         instr->operands[1] = Operand(reduceTmp);
-         if (need_vtmp)
-            instr->operands[2] = Operand(vtmp);
+         if (instr->isReduction()) {
+            instr->operands[1] = Operand(reduceTmp);
+            if (need_vtmp)
+               instr->operands[2] = Operand(vtmp);
+         } else {
+            assert(instr->opcode == aco_opcode::p_interp_gfx11 ||
+                   instr->opcode == aco_opcode::p_bpermute_gfx11w64);
+            instr->operands[0] = Operand(reduceTmp);
+            instr->operands[0].setLateKill(true);
+         }
       }
    }
 }
 
-};
-
+}; // namespace aco

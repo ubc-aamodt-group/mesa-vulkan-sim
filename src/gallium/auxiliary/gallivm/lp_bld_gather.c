@@ -55,7 +55,8 @@ lp_build_gather_elem_ptr(struct gallivm_state *gallivm,
    LLVMValueRef offset;
    LLVMValueRef ptr;
 
-   assert(LLVMTypeOf(base_ptr) == LLVMPointerType(LLVMInt8TypeInContext(gallivm->context), 0));
+   ASSERTED LLVMTypeRef element_type = LLVMInt8TypeInContext(gallivm->context);
+   assert(LLVMTypeOf(base_ptr) == LLVMPointerType(element_type, 0));
 
    if (length == 1) {
       assert(i == 0);
@@ -65,7 +66,7 @@ lp_build_gather_elem_ptr(struct gallivm_state *gallivm,
       offset = LLVMBuildExtractElement(gallivm->builder, offsets, index, "");
    }
 
-   ptr = LLVMBuildGEP(gallivm->builder, base_ptr, &offset, 1, "");
+   ptr = LLVMBuildGEP2(gallivm->builder, element_type, base_ptr, &offset, 1, "");
 
    return ptr;
 }
@@ -88,7 +89,6 @@ lp_build_gather_elem(struct gallivm_state *gallivm,
                      boolean vector_justify)
 {
    LLVMTypeRef src_type = LLVMIntTypeInContext(gallivm->context, src_width);
-   LLVMTypeRef src_ptr_type = LLVMPointerType(src_type, 0);
    LLVMTypeRef dst_elem_type = LLVMIntTypeInContext(gallivm->context, dst_width);
    LLVMValueRef ptr;
    LLVMValueRef res;
@@ -96,8 +96,8 @@ lp_build_gather_elem(struct gallivm_state *gallivm,
    assert(LLVMTypeOf(base_ptr) == LLVMPointerType(LLVMInt8TypeInContext(gallivm->context), 0));
 
    ptr = lp_build_gather_elem_ptr(gallivm, length, base_ptr, offsets, i);
-   ptr = LLVMBuildBitCast(gallivm->builder, ptr, src_ptr_type, "");
-   res = LLVMBuildLoad(gallivm->builder, ptr, "");
+   ptr = LLVMBuildBitCast(gallivm->builder, ptr, LLVMPointerType(src_type, 0), "");
+   res = LLVMBuildLoad2(gallivm->builder, src_type, ptr, "");
 
    /* XXX
     * On some archs we probably really want to avoid having to deal
@@ -173,12 +173,11 @@ lp_build_gather_elem_vec(struct gallivm_state *gallivm,
                          boolean vector_justify)
 {
    LLVMValueRef ptr, res;
-   LLVMTypeRef src_ptr_type = LLVMPointerType(src_type, 0);
    assert(LLVMTypeOf(base_ptr) == LLVMPointerType(LLVMInt8TypeInContext(gallivm->context), 0));
 
    ptr = lp_build_gather_elem_ptr(gallivm, length, base_ptr, offsets, i);
-   ptr = LLVMBuildBitCast(gallivm->builder, ptr, src_ptr_type, "");
-   res = LLVMBuildLoad(gallivm->builder, ptr, "");
+   ptr = LLVMBuildBitCast(gallivm->builder, ptr, LLVMPointerType(src_type, 0), "");
+   res = LLVMBuildLoad2(gallivm->builder, src_type, ptr, "");
 
    /* XXX
     * On some archs we probably really want to avoid having to deal
@@ -324,7 +323,7 @@ lp_build_gather_avx2(struct gallivm_state *gallivm,
       assert(LLVMTypeOf(offsets) == i32_vec_type);
       offsets = LLVMBuildSDiv(builder, offsets, scale, "");
 
-      src_ptr = LLVMBuildGEP(builder, base_ptr, &offsets, 1, "vector-gep");
+      src_ptr = LLVMBuildGEP2(builder, src_type, base_ptr, &offsets, 1, "vector-gep");
 
       char intrinsic[64];
       snprintf(intrinsic, sizeof intrinsic, "llvm.masked.gather.v%u%s%u",
@@ -488,7 +487,7 @@ lp_build_gather(struct gallivm_state *gallivm,
        * 32bit/64bit fetches you're doing it wrong (this is gather, not
        * conversion) and it would be awkward for floats.
        */
-   } else if (util_cpu_caps.has_avx2 && !need_expansion &&
+   } else if (util_get_cpu_caps()->has_avx2 && !need_expansion &&
               src_width == 32 && (length == 4 || length == 8)) {
       return lp_build_gather_avx2(gallivm, length, src_width, dst_type,
                                   base_ptr, offsets);
@@ -500,7 +499,7 @@ lp_build_gather(struct gallivm_state *gallivm,
     * (In general, should be more of a win if the fetch is 256bit wide -
     * this is true for the 32bit case above too.)
     */
-   } else if (0 && util_cpu_caps.has_avx2 && !need_expansion &&
+   } else if (0 && util_get_cpu_caps()->has_avx2 && !need_expansion &&
               src_width == 64 && (length == 2 || length == 4)) {
       return lp_build_gather_avx2(gallivm, length, src_width, dst_type,
                                   base_ptr, offsets);
@@ -598,4 +597,63 @@ lp_build_gather_values(struct gallivm_state * gallivm,
       vec = LLVMBuildInsertElement(builder, vec, values[i], index, "");
    }
    return vec;
+}
+
+LLVMValueRef
+lp_build_masked_gather(struct gallivm_state *gallivm,
+                       unsigned length,
+                       unsigned bit_size,
+                       LLVMTypeRef vec_type,
+                       LLVMValueRef offset_ptr,
+                       LLVMValueRef exec_mask)
+{
+   LLVMBuilderRef builder = gallivm->builder;
+   LLVMValueRef args[4];
+   char intrin_name[64];
+
+#if LLVM_VERSION_MAJOR >= 16
+   snprintf(intrin_name, 64, "llvm.masked.gather.v%ui%u.v%up0",
+            length, bit_size, length);
+#else
+   snprintf(intrin_name, 64, "llvm.masked.gather.v%ui%u.v%up0i%u",
+            length, bit_size, length, bit_size);
+#endif
+
+   args[0] = offset_ptr;
+   args[1] = lp_build_const_int32(gallivm, bit_size / 8);
+   args[2] = LLVMBuildICmp(builder, LLVMIntNE, exec_mask,
+                           LLVMConstNull(LLVMTypeOf(exec_mask)), "");
+   args[3] = LLVMConstNull(vec_type);
+   return lp_build_intrinsic(builder, intrin_name, vec_type,
+                             args, 4, 0);
+
+}
+
+void
+lp_build_masked_scatter(struct gallivm_state *gallivm,
+                        unsigned length,
+                        unsigned bit_size,
+                        LLVMValueRef offset_ptr,
+                        LLVMValueRef value_vec,
+                        LLVMValueRef exec_mask)
+{
+   LLVMBuilderRef builder = gallivm->builder;
+   LLVMValueRef args[4];
+   char intrin_name[64];
+
+#if LLVM_VERSION_MAJOR >= 16
+   snprintf(intrin_name, 64, "llvm.masked.scatter.v%ui%u.v%up0",
+            length, bit_size, length);
+#else
+   snprintf(intrin_name, 64, "llvm.masked.scatter.v%ui%u.v%up0i%u",
+            length, bit_size, length, bit_size);
+#endif
+
+   args[0] = value_vec;
+   args[1] = offset_ptr;
+   args[2] = lp_build_const_int32(gallivm, bit_size / 8);
+   args[3] = LLVMBuildICmp(builder, LLVMIntNE, exec_mask,
+                           LLVMConstNull(LLVMTypeOf(exec_mask)), "");
+   lp_build_intrinsic(builder, intrin_name, LLVMVoidTypeInContext(gallivm->context),
+                      args, 4, 0);
 }

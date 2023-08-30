@@ -23,7 +23,6 @@
 
 #include "nir.h"
 #include "nir_builder.h"
-#include "program/prog_instruction.h"
 
 /* Lower gl_PointCoord to account for user requested point-coord origin
  * and for whether draw buffer is flipped.
@@ -43,16 +42,11 @@ get_pntc_transform(lower_pntc_ytransform_state *state)
       /* NOTE: name must be prefixed w/ "gl_" to trigger slot based
        * special handling in uniform setup:
        */
-      nir_variable *var = nir_variable_create(state->shader,
-                                              nir_var_uniform,
-                                              glsl_vec4_type(),
-                                              "gl_PntcYTransform");
+      nir_variable *var = nir_state_variable_create(state->shader,
+                                                    glsl_vec4_type(),
+                                                    "gl_PntcYTransform",
+                                                    state->pntc_state_tokens);
 
-      var->num_state_slots = 1;
-      var->state_slots = ralloc_array(var, nir_state_slot, 1);
-      var->state_slots[0].swizzle = SWIZZLE_XYZW;
-      memcpy(var->state_slots[0].tokens, state->pntc_state_tokens,
-             sizeof(var->state_slots[0].tokens));
       var->data.how_declared = nir_var_hidden;
       state->pntc_transform = var;
    }
@@ -79,7 +73,7 @@ lower_load_pointcoord(lower_pntc_ytransform_state *state,
                                         nir_channel(b, pntc, 0),
                                         nir_fadd(b, offset, scaled));
 
-   nir_ssa_def_rewrite_uses_after(&intr->dest.ssa, nir_src_for_ssa(flipped_pntc),
+   nir_ssa_def_rewrite_uses_after(&intr->dest.ssa, flipped_pntc,
                                   flipped_pntc->parent_instr);
 }
 
@@ -94,8 +88,10 @@ lower_pntc_ytransform_block(lower_pntc_ytransform_state *state,
             nir_deref_instr *deref = nir_src_as_deref(intr->src[0]);
             nir_variable *var = nir_deref_instr_get_variable(deref);
 
-            if (var->data.mode == nir_var_shader_in &&
-                var->data.location == VARYING_SLOT_PNTC) {
+            if ((var->data.mode == nir_var_shader_in &&
+                 var->data.location == VARYING_SLOT_PNTC) ||
+                (var->data.mode == nir_var_system_value &&
+                 var->data.location == SYSTEM_VALUE_POINT_COORD)) {
                 lower_load_pointcoord(state, intr);
             }
          }

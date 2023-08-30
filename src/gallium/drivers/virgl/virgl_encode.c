@@ -36,12 +36,19 @@
 #include "virtio-gpu/virgl_protocol.h"
 #include "virgl_resource.h"
 #include "virgl_screen.h"
+#include "virgl_video.h"
 
 #define VIRGL_ENCODE_MAX_DWORDS MIN2(VIRGL_MAX_CMDBUF_DWORDS, VIRGL_CMD0_MAX_DWORDS)
 
 #define CONV_FORMAT(f) [PIPE_FORMAT_##f] = VIRGL_FORMAT_##f,
 
 static const enum virgl_formats virgl_formats_conv_table[PIPE_FORMAT_COUNT] = {
+   CONV_FORMAT(NONE)
+   CONV_FORMAT(A1B5G5R5_UNORM)
+   CONV_FORMAT(A1R5G5B5_UNORM)
+   CONV_FORMAT(A2B10G10R10_UNORM)
+   CONV_FORMAT(A2R10G10B10_UNORM)
+   CONV_FORMAT(A4R4G4B4_UNORM)
    CONV_FORMAT(B8G8R8A8_UNORM)
    CONV_FORMAT(B8G8R8X8_UNORM)
    CONV_FORMAT(A8R8G8B8_UNORM)
@@ -49,11 +56,15 @@ static const enum virgl_formats virgl_formats_conv_table[PIPE_FORMAT_COUNT] = {
    CONV_FORMAT(B5G5R5A1_UNORM)
    CONV_FORMAT(B4G4R4A4_UNORM)
    CONV_FORMAT(B5G6R5_UNORM)
+   CONV_FORMAT(B8G8R8_UNORM)
    CONV_FORMAT(R10G10B10A2_UNORM)
    CONV_FORMAT(L8_UNORM)
    CONV_FORMAT(A8_UNORM)
+   CONV_FORMAT(I8_UNORM)
    CONV_FORMAT(L8A8_UNORM)
    CONV_FORMAT(L16_UNORM)
+   CONV_FORMAT(UYVY)
+   CONV_FORMAT(YUYV)
    CONV_FORMAT(Z16_UNORM)
    CONV_FORMAT(Z32_UNORM)
    CONV_FORMAT(Z32_FLOAT)
@@ -86,6 +97,10 @@ static const enum virgl_formats virgl_formats_conv_table[PIPE_FORMAT_COUNT] = {
    CONV_FORMAT(R32G32_SSCALED)
    CONV_FORMAT(R32G32B32_SSCALED)
    CONV_FORMAT(R32G32B32A32_SSCALED)
+   CONV_FORMAT(R3G3B2_UNORM)
+   CONV_FORMAT(R4G4B4A4_UNORM)
+   CONV_FORMAT(R5G5B5A1_UNORM)
+   CONV_FORMAT(R5G6B5_UNORM)
    CONV_FORMAT(R16_UNORM)
    CONV_FORMAT(R16G16_UNORM)
    CONV_FORMAT(R16G16B16_UNORM)
@@ -171,9 +186,11 @@ static const enum virgl_formats virgl_formats_conv_table[PIPE_FORMAT_COUNT] = {
    CONV_FORMAT(L16_SNORM)
    CONV_FORMAT(L16A16_SNORM)
    CONV_FORMAT(A16_FLOAT)
+   CONV_FORMAT(I16_FLOAT)
    CONV_FORMAT(L16_FLOAT)
    CONV_FORMAT(L16A16_FLOAT)
    CONV_FORMAT(A32_FLOAT)
+   CONV_FORMAT(I32_FLOAT)
    CONV_FORMAT(L32_FLOAT)
    CONV_FORMAT(L32A32_FLOAT)
    CONV_FORMAT(YV12)
@@ -206,21 +223,27 @@ static const enum virgl_formats virgl_formats_conv_table[PIPE_FORMAT_COUNT] = {
    CONV_FORMAT(R32G32B32_SINT)
    CONV_FORMAT(R32G32B32A32_SINT)
    CONV_FORMAT(A8_UINT)
+   CONV_FORMAT(I8_UINT)
    CONV_FORMAT(L8_UINT)
    CONV_FORMAT(L8A8_UINT)
    CONV_FORMAT(A8_SINT)
    CONV_FORMAT(L8_SINT)
+   CONV_FORMAT(I8_SINT)
    CONV_FORMAT(L8A8_SINT)
    CONV_FORMAT(A16_UINT)
+   CONV_FORMAT(I16_UINT)
    CONV_FORMAT(L16_UINT)
    CONV_FORMAT(L16A16_UINT)
    CONV_FORMAT(A16_SINT)
+   CONV_FORMAT(I16_SINT)
    CONV_FORMAT(L16_SINT)
    CONV_FORMAT(L16A16_SINT)
    CONV_FORMAT(A32_UINT)
+   CONV_FORMAT(I32_UINT)
    CONV_FORMAT(L32_UINT)
    CONV_FORMAT(L32A32_UINT)
    CONV_FORMAT(A32_SINT)
+   CONV_FORMAT(I32_SINT)
    CONV_FORMAT(L32_SINT)
    CONV_FORMAT(L32A32_SINT)
    CONV_FORMAT(R10G10B10A2_SSCALED)
@@ -249,6 +272,8 @@ static const enum virgl_formats virgl_formats_conv_table[PIPE_FORMAT_COUNT] = {
    CONV_FORMAT(A4B4G4R4_UNORM)
    CONV_FORMAT(R8_SRGB)
    CONV_FORMAT(R8G8_SRGB)
+   CONV_FORMAT(P010)
+   CONV_FORMAT(ETC1_RGB8)
    CONV_FORMAT(ETC2_RGB8)
    CONV_FORMAT(ETC2_SRGB8)
    CONV_FORMAT(ETC2_RGB8A1)
@@ -259,6 +284,34 @@ static const enum virgl_formats virgl_formats_conv_table[PIPE_FORMAT_COUNT] = {
    CONV_FORMAT(ETC2_R11_SNORM)
    CONV_FORMAT(ETC2_RG11_UNORM)
    CONV_FORMAT(ETC2_RG11_SNORM)
+   CONV_FORMAT(ASTC_4x4)
+   CONV_FORMAT(ASTC_5x4)
+   CONV_FORMAT(ASTC_5x5)
+   CONV_FORMAT(ASTC_6x5)
+   CONV_FORMAT(ASTC_6x6)
+   CONV_FORMAT(ASTC_8x5)
+   CONV_FORMAT(ASTC_8x6)
+   CONV_FORMAT(ASTC_8x8)
+   CONV_FORMAT(ASTC_10x5)
+   CONV_FORMAT(ASTC_10x6)
+   CONV_FORMAT(ASTC_10x8)
+   CONV_FORMAT(ASTC_10x10)
+   CONV_FORMAT(ASTC_12x10)
+   CONV_FORMAT(ASTC_12x12)
+   CONV_FORMAT(ASTC_4x4_SRGB)
+   CONV_FORMAT(ASTC_5x4_SRGB)
+   CONV_FORMAT(ASTC_5x5_SRGB)
+   CONV_FORMAT(ASTC_6x5_SRGB)
+   CONV_FORMAT(ASTC_6x6_SRGB)
+   CONV_FORMAT(ASTC_8x5_SRGB)
+   CONV_FORMAT(ASTC_8x6_SRGB)
+   CONV_FORMAT(ASTC_8x8_SRGB )
+   CONV_FORMAT(ASTC_10x5_SRGB)
+   CONV_FORMAT(ASTC_10x6_SRGB)
+   CONV_FORMAT(ASTC_10x8_SRGB)
+   CONV_FORMAT(ASTC_10x10_SRGB)
+   CONV_FORMAT(ASTC_12x10_SRGB)
+   CONV_FORMAT(ASTC_12x12_SRGB)
 };
 
 enum virgl_formats pipe_to_virgl_format(enum pipe_format format)
@@ -267,6 +320,18 @@ enum virgl_formats pipe_to_virgl_format(enum pipe_format format)
    if (format != PIPE_FORMAT_NONE && !vformat)
       debug_printf("VIRGL: pipe format %s not in the format table\n", util_format_name(format));
    return vformat;
+}
+
+enum pipe_format virgl_to_pipe_format(enum virgl_formats format)
+{
+   enum pipe_format pformat;
+
+   for (pformat = PIPE_FORMAT_NONE; pformat < PIPE_FORMAT_COUNT; pformat++)
+      if (virgl_formats_conv_table[pformat] == format)
+          return pformat;
+
+   debug_printf("VIRGL: virgl format %u not in the format table\n", format);
+   return PIPE_FORMAT_NONE;
 }
 
 static int virgl_encoder_write_cmd_dword(struct virgl_context *ctx,
@@ -484,7 +549,7 @@ static void virgl_emit_shader_streamout(struct virgl_context *ctx,
 
 int virgl_encode_shader_state(struct virgl_context *ctx,
                               uint32_t handle,
-                              uint32_t type,
+                              enum pipe_shader_type type,
                               const struct pipe_stream_output_info *so_info,
                               uint32_t cs_req_local_mem,
                               const struct tgsi_token *tokens)
@@ -523,6 +588,13 @@ int virgl_encode_shader_state(struct virgl_context *ctx,
    if (virgl_debug & VIRGL_DEBUG_TGSI)
       debug_printf("TGSI:\n---8<---\n%s\n---8<---\n", str);
 
+   /* virglrenderer before addbd9c5058dcc9d561b20ab747aed58c53499da mis-counts
+    * the tokens needed for a BARRIER, so ask it to allocate some more space.
+    */
+   const char *barrier = str;
+   while ((barrier = strstr(barrier + 1, "BARRIER")))
+      num_tokens++;
+
    shader_len = strlen(str) + 1;
 
    left_bytes = shader_len;
@@ -547,7 +619,7 @@ int virgl_encode_shader_state(struct virgl_context *ctx,
       else
          offlen = VIRGL_OBJ_SHADER_OFFSET_VAL((uintptr_t)sptr - (uintptr_t)str) | VIRGL_OBJ_SHADER_OFFSET_CONT;
 
-      virgl_emit_shader_header(ctx, handle, len, type, offlen, num_tokens);
+      virgl_emit_shader_header(ctx, handle, len, virgl_shader_stage_convert(type), offlen, num_tokens);
 
       if (type == PIPE_SHADER_COMPUTE)
          virgl_encoder_write_dword(ctx->cbuf, cs_req_local_mem);
@@ -592,7 +664,7 @@ int virgl_encode_clear_texture(struct virgl_context *ctx,
                                const struct pipe_box *box,
                                const void *data)
 {
-   const struct util_format_description *desc = util_format_description(res->u.b.format);
+   const struct util_format_description *desc = util_format_description(res->b.format);
    unsigned block_bits = desc->block.bits;
    uint32_t arr[4] = {0};
    /* The spec describe <data> as a pointer to an array of between one
@@ -709,11 +781,12 @@ int virgl_encoder_set_index_buffer(struct virgl_context *ctx,
 
 int virgl_encoder_draw_vbo(struct virgl_context *ctx,
                            const struct pipe_draw_info *info,
+                           unsigned drawid_offset,
                            const struct pipe_draw_indirect_info *indirect,
-                           const struct pipe_draw_start_count *draw)
+                           const struct pipe_draw_start_count_bias *draw)
 {
    uint32_t length = VIRGL_DRAW_VBO_SIZE;
-   if (info->mode == PIPE_PRIM_PATCHES)
+   if (info->mode == MESA_PRIM_PATCHES || drawid_offset > 0)
       length = VIRGL_DRAW_VBO_SIZE_TESS;
    if (indirect && indirect->buffer)
       length = VIRGL_DRAW_VBO_SIZE_INDIRECT;
@@ -723,10 +796,10 @@ int virgl_encoder_draw_vbo(struct virgl_context *ctx,
    virgl_encoder_write_dword(ctx->cbuf, info->mode);
    virgl_encoder_write_dword(ctx->cbuf, !!info->index_size);
    virgl_encoder_write_dword(ctx->cbuf, info->instance_count);
-   virgl_encoder_write_dword(ctx->cbuf, info->index_size ? info->index_bias : 0);
+   virgl_encoder_write_dword(ctx->cbuf, info->index_size ? draw->index_bias : 0);
    virgl_encoder_write_dword(ctx->cbuf, info->start_instance);
    virgl_encoder_write_dword(ctx->cbuf, info->primitive_restart);
-   virgl_encoder_write_dword(ctx->cbuf, info->restart_index);
+   virgl_encoder_write_dword(ctx->cbuf, info->primitive_restart ? info->restart_index : 0);
    virgl_encoder_write_dword(ctx->cbuf, info->index_bounds_valid ? info->min_index : 0);
    virgl_encoder_write_dword(ctx->cbuf, info->index_bounds_valid ? info->max_index : ~0);
    if (indirect && indirect->count_from_stream_output)
@@ -734,8 +807,8 @@ int virgl_encoder_draw_vbo(struct virgl_context *ctx,
    else
       virgl_encoder_write_dword(ctx->cbuf, 0);
    if (length >= VIRGL_DRAW_VBO_SIZE_TESS) {
-      virgl_encoder_write_dword(ctx->cbuf, info->vertices_per_patch); /* vertices per patch */
-      virgl_encoder_write_dword(ctx->cbuf, info->drawid); /* drawid */
+      virgl_encoder_write_dword(ctx->cbuf, ctx->patch_vertices); /* vertices per patch */
+      virgl_encoder_write_dword(ctx->cbuf, drawid_offset); /* drawid */
    }
    if (length == VIRGL_DRAW_VBO_SIZE_INDIRECT) {
       virgl_encoder_write_res(ctx, virgl_resource(indirect->buffer));
@@ -751,12 +824,11 @@ int virgl_encoder_draw_vbo(struct virgl_context *ctx,
    return 0;
 }
 
-int virgl_encoder_create_surface(struct virgl_context *ctx,
-                                uint32_t handle,
-                                struct virgl_resource *res,
-                                const struct pipe_surface *templat)
+static int virgl_encoder_create_surface_common(struct virgl_context *ctx,
+                                               uint32_t handle,
+                                               struct virgl_resource *res,
+                                               const struct pipe_surface *templat)
 {
-   virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_SURFACE, VIRGL_OBJ_SURFACE_SIZE));
    virgl_encoder_write_dword(ctx->cbuf, handle);
    virgl_encoder_write_res(ctx, res);
    virgl_encoder_write_dword(ctx->cbuf, pipe_to_virgl_format(templat->format));
@@ -764,6 +836,26 @@ int virgl_encoder_create_surface(struct virgl_context *ctx,
    assert(templat->texture->target != PIPE_BUFFER);
    virgl_encoder_write_dword(ctx->cbuf, templat->u.tex.level);
    virgl_encoder_write_dword(ctx->cbuf, templat->u.tex.first_layer | (templat->u.tex.last_layer << 16));
+
+   return 0;
+}
+
+int virgl_encoder_create_surface(struct virgl_context *ctx,
+                                 uint32_t handle,
+                                 struct virgl_resource *res,
+                                 const struct pipe_surface *templat)
+{
+   if (templat->nr_samples > 0) {
+      ASSERTED struct virgl_screen *rs = virgl_screen(ctx->base.screen);
+      assert(rs->caps.caps.v2.capability_bits_v2 & VIRGL_CAP_V2_IMPLICIT_MSAA);
+
+      virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_MSAA_SURFACE, VIRGL_OBJ_MSAA_SURFACE_SIZE));
+      virgl_encoder_create_surface_common(ctx, handle, res, templat);
+      virgl_encoder_write_dword(ctx->cbuf, templat->nr_samples);
+   } else {
+      virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_SURFACE, VIRGL_OBJ_SURFACE_SIZE));
+      virgl_encoder_create_surface_common(ctx, handle, res, templat);
+   }
 
    return 0;
 }
@@ -799,7 +891,7 @@ static void virgl_encoder_transfer3d_common(struct virgl_screen *vs,
 {
    struct pipe_transfer *transfer = &xfer->base;
    unsigned stride;
-   unsigned layer_stride;
+   uintptr_t layer_stride;
 
    if (encode_stride == virgl_transfer3d_explicit_stride) {
       stride = transfer->stride;
@@ -828,53 +920,6 @@ static void virgl_encoder_transfer3d_common(struct virgl_screen *vs,
    virgl_encoder_write_dword(buf, transfer->box.depth);
 }
 
-int virgl_encoder_inline_write(struct virgl_context *ctx,
-                              struct virgl_resource *res,
-                              unsigned level, unsigned usage,
-                              const struct pipe_box *box,
-                              const void *data, unsigned stride,
-                              unsigned layer_stride)
-{
-   uint32_t size = (stride ? stride : box->width) * box->height;
-   uint32_t length, thispass, left_bytes;
-   struct virgl_transfer transfer;
-   struct virgl_screen *vs = virgl_screen(ctx->base.screen);
-
-   transfer.base.resource = &res->u.b;
-   transfer.hw_res = res->hw_res;
-   transfer.base.level = level;
-   transfer.base.usage = usage;
-   transfer.base.box = *box;
-
-   length = 11 + (size + 3) / 4;
-   if ((ctx->cbuf->cdw + length + 1) > VIRGL_ENCODE_MAX_DWORDS) {
-      if (box->height > 1 || box->depth > 1) {
-         debug_printf("inline transfer failed due to multi dimensions and too large\n");
-         assert(0);
-      }
-   }
-
-   left_bytes = size;
-   while (left_bytes) {
-      if (ctx->cbuf->cdw + 12 >= VIRGL_ENCODE_MAX_DWORDS)
-         ctx->base.flush(&ctx->base, NULL, 0);
-
-      thispass = (VIRGL_ENCODE_MAX_DWORDS - ctx->cbuf->cdw - 12) * 4;
-
-      length = MIN2(thispass, left_bytes);
-
-      transfer.base.box.width = length;
-      virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_RESOURCE_INLINE_WRITE, 0, ((length + 3) / 4) + 11));
-      virgl_encoder_transfer3d_common(vs, ctx->cbuf, &transfer,
-                                      virgl_transfer3d_host_inferred_stride);
-      virgl_encoder_write_block(ctx->cbuf, data, length);
-      left_bytes -= length;
-      transfer.base.box.x += length;
-      data += length;
-   }
-   return 0;
-}
-
 int virgl_encoder_flush_frontbuffer(struct virgl_context *ctx,
                                    struct virgl_resource *res)
 {
@@ -900,7 +945,8 @@ int virgl_encode_sampler_state(struct virgl_context *ctx,
       VIRGL_OBJ_SAMPLE_STATE_S0_MAG_IMG_FILTER(state->mag_img_filter) |
       VIRGL_OBJ_SAMPLE_STATE_S0_COMPARE_MODE(state->compare_mode) |
       VIRGL_OBJ_SAMPLE_STATE_S0_COMPARE_FUNC(state->compare_func) |
-      VIRGL_OBJ_SAMPLE_STATE_S0_SEAMLESS_CUBE_MAP(state->seamless_cube_map);
+      VIRGL_OBJ_SAMPLE_STATE_S0_SEAMLESS_CUBE_MAP(state->seamless_cube_map) |
+      VIRGL_OBJ_SAMPLE_STATE_S0_MAX_ANISOTROPY((int)(state->max_anisotropy));
 
    virgl_encoder_write_dword(ctx->cbuf, tmp);
    virgl_encoder_write_dword(ctx->cbuf, fui(state->lod_bias));
@@ -927,12 +973,12 @@ int virgl_encode_sampler_view(struct virgl_context *ctx,
    if (rs->caps.caps.v2.capability_bits & VIRGL_CAP_TEXTURE_VIEW)
      dword_fmt_target |= (state->target << 24);
    virgl_encoder_write_dword(ctx->cbuf, dword_fmt_target);
-   if (res->u.b.target == PIPE_BUFFER) {
+   if (res->b.target == PIPE_BUFFER) {
       virgl_encoder_write_dword(ctx->cbuf, state->u.buf.offset / elem_size);
       virgl_encoder_write_dword(ctx->cbuf, (state->u.buf.offset + state->u.buf.size) / elem_size - 1);
    } else {
       if (res->metadata.plane) {
-         debug_assert(state->u.tex.first_layer == 0 && state->u.tex.last_layer == 0);
+         assert(state->u.tex.first_layer == 0 && state->u.tex.last_layer == 0);
          virgl_encoder_write_dword(ctx->cbuf, res->metadata.plane);
       } else {
          virgl_encoder_write_dword(ctx->cbuf, state->u.tex.first_layer | state->u.tex.last_layer << 16);
@@ -948,14 +994,14 @@ int virgl_encode_sampler_view(struct virgl_context *ctx,
 }
 
 int virgl_encode_set_sampler_views(struct virgl_context *ctx,
-                                  uint32_t shader_type,
+                                  enum pipe_shader_type shader_type,
                                   uint32_t start_slot,
                                   uint32_t num_views,
                                   struct virgl_sampler_view **views)
 {
    int i;
    virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_SET_SAMPLER_VIEWS, 0, VIRGL_SET_SAMPLER_VIEWS_SIZE(num_views)));
-   virgl_encoder_write_dword(ctx->cbuf, shader_type);
+   virgl_encoder_write_dword(ctx->cbuf, virgl_shader_stage_convert(shader_type));
    virgl_encoder_write_dword(ctx->cbuf, start_slot);
    for (i = 0; i < num_views; i++) {
       uint32_t handle = views[i] ? views[i]->handle : 0;
@@ -965,14 +1011,14 @@ int virgl_encode_set_sampler_views(struct virgl_context *ctx,
 }
 
 int virgl_encode_bind_sampler_states(struct virgl_context *ctx,
-                                    uint32_t shader_type,
+                                    enum pipe_shader_type shader_type,
                                     uint32_t start_slot,
                                     uint32_t num_handles,
                                     uint32_t *handles)
 {
    int i;
    virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_BIND_SAMPLER_STATES, 0, VIRGL_BIND_SAMPLER_STATES(num_handles)));
-   virgl_encoder_write_dword(ctx->cbuf, shader_type);
+   virgl_encoder_write_dword(ctx->cbuf, virgl_shader_stage_convert(shader_type));
    virgl_encoder_write_dword(ctx->cbuf, start_slot);
    for (i = 0; i < num_handles; i++)
       virgl_encoder_write_dword(ctx->cbuf, handles[i]);
@@ -980,13 +1026,13 @@ int virgl_encode_bind_sampler_states(struct virgl_context *ctx,
 }
 
 int virgl_encoder_write_constant_buffer(struct virgl_context *ctx,
-                                       uint32_t shader,
+                                       enum pipe_shader_type shader,
                                        uint32_t index,
                                        uint32_t size,
                                        const void *data)
 {
    virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_SET_CONSTANT_BUFFER, 0, size + 2));
-   virgl_encoder_write_dword(ctx->cbuf, shader);
+   virgl_encoder_write_dword(ctx->cbuf, virgl_shader_stage_convert(shader));
    virgl_encoder_write_dword(ctx->cbuf, index);
    if (data)
       virgl_encoder_write_block(ctx->cbuf, data, size * 4);
@@ -994,14 +1040,14 @@ int virgl_encoder_write_constant_buffer(struct virgl_context *ctx,
 }
 
 int virgl_encoder_set_uniform_buffer(struct virgl_context *ctx,
-                                     uint32_t shader,
+                                     enum pipe_shader_type shader,
                                      uint32_t index,
                                      uint32_t offset,
                                      uint32_t length,
                                      struct virgl_resource *res)
 {
    virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_SET_UNIFORM_BUFFER, 0, VIRGL_SET_UNIFORM_BUFFER_SIZE));
-   virgl_encoder_write_dword(ctx->cbuf, shader);
+   virgl_encoder_write_dword(ctx->cbuf, virgl_shader_stage_convert(shader));
    virgl_encoder_write_dword(ctx->cbuf, index);
    virgl_encoder_write_dword(ctx->cbuf, offset);
    virgl_encoder_write_dword(ctx->cbuf, length);
@@ -1231,12 +1277,25 @@ int virgl_encoder_destroy_sub_ctx(struct virgl_context *ctx, uint32_t sub_ctx_id
    return 0;
 }
 
+int virgl_encode_link_shader(struct virgl_context *ctx, uint32_t *handles)
+{
+   virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_LINK_SHADER, 0, VIRGL_LINK_SHADER_SIZE));
+   virgl_encoder_write_dword(ctx->cbuf, handles[PIPE_SHADER_VERTEX]);
+   virgl_encoder_write_dword(ctx->cbuf, handles[PIPE_SHADER_FRAGMENT]);
+   virgl_encoder_write_dword(ctx->cbuf, handles[PIPE_SHADER_GEOMETRY]);
+   virgl_encoder_write_dword(ctx->cbuf, handles[PIPE_SHADER_TESS_CTRL]);
+   virgl_encoder_write_dword(ctx->cbuf, handles[PIPE_SHADER_TESS_EVAL]);
+   virgl_encoder_write_dword(ctx->cbuf, handles[PIPE_SHADER_COMPUTE]);
+   return 0;
+}
+
 int virgl_encode_bind_shader(struct virgl_context *ctx,
-                             uint32_t handle, uint32_t type)
+                             uint32_t handle,
+                             enum pipe_shader_type type)
 {
    virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_BIND_SHADER, 0, 2));
    virgl_encoder_write_dword(ctx->cbuf, handle);
-   virgl_encoder_write_dword(ctx->cbuf, type);
+   virgl_encoder_write_dword(ctx->cbuf, virgl_shader_stage_convert(type));
    return 0;
 }
 
@@ -1261,7 +1320,7 @@ int virgl_encode_set_shader_buffers(struct virgl_context *ctx,
    int i;
    virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_SET_SHADER_BUFFERS, 0, VIRGL_SET_SHADER_BUFFER_SIZE(count)));
 
-   virgl_encoder_write_dword(ctx->cbuf, shader);
+   virgl_encoder_write_dword(ctx->cbuf, virgl_shader_stage_convert(shader));
    virgl_encoder_write_dword(ctx->cbuf, start_slot);
    for (i = 0; i < count; i++) {
       if (buffers && buffers[i].buffer) {
@@ -1270,7 +1329,7 @@ int virgl_encode_set_shader_buffers(struct virgl_context *ctx,
          virgl_encoder_write_dword(ctx->cbuf, buffers[i].buffer_size);
          virgl_encoder_write_res(ctx, res);
 
-         util_range_add(&res->u.b, &res->valid_buffer_range, buffers[i].buffer_offset,
+         util_range_add(&res->b, &res->valid_buffer_range, buffers[i].buffer_offset,
                buffers[i].buffer_offset + buffers[i].buffer_size);
          virgl_resource_dirty(res, 0);
       } else {
@@ -1297,7 +1356,7 @@ int virgl_encode_set_hw_atomic_buffers(struct virgl_context *ctx,
          virgl_encoder_write_dword(ctx->cbuf, buffers[i].buffer_size);
          virgl_encoder_write_res(ctx, res);
 
-         util_range_add(&res->u.b, &res->valid_buffer_range, buffers[i].buffer_offset,
+         util_range_add(&res->b, &res->valid_buffer_range, buffers[i].buffer_offset,
                buffers[i].buffer_offset + buffers[i].buffer_size);
          virgl_resource_dirty(res, 0);
       } else {
@@ -1317,7 +1376,7 @@ int virgl_encode_set_shader_images(struct virgl_context *ctx,
    int i;
    virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_SET_SHADER_IMAGES, 0, VIRGL_SET_SHADER_IMAGE_SIZE(count)));
 
-   virgl_encoder_write_dword(ctx->cbuf, shader);
+   virgl_encoder_write_dword(ctx->cbuf, virgl_shader_stage_convert(shader));
    virgl_encoder_write_dword(ctx->cbuf, start_slot);
    for (i = 0; i < count; i++) {
       if (images && images[i].resource) {
@@ -1328,8 +1387,8 @@ int virgl_encode_set_shader_images(struct virgl_context *ctx,
          virgl_encoder_write_dword(ctx->cbuf, images[i].u.buf.size);
          virgl_encoder_write_res(ctx, res);
 
-         if (res->u.b.target == PIPE_BUFFER) {
-            util_range_add(&res->u.b, &res->valid_buffer_range, images[i].u.buf.offset,
+         if (res->b.target == PIPE_BUFFER) {
+            util_range_add(&res->b, &res->valid_buffer_range, images[i].u.buf.offset,
                   images[i].u.buf.offset + images[i].u.buf.size);
          }
          virgl_resource_dirty(res, images[i].u.tex.level);
@@ -1453,10 +1512,22 @@ void virgl_encode_copy_transfer(struct virgl_context *ctx,
 {
    uint32_t command;
    struct virgl_screen *vs = virgl_screen(ctx->base.screen);
+   // set always synchronized to 1, second bit is used for direction
+   uint32_t direction_and_synchronized = VIRGL_COPY_TRANSFER3D_FLAGS_SYNCHRONIZED;
 
+   if (vs->caps.caps.v2.capability_bits_v2 & VIRGL_CAP_V2_COPY_TRANSFER_BOTH_DIRECTIONS) {
+      if (trans->direction == VIRGL_TRANSFER_TO_HOST) {
+         // do nothing, as 0 means transfer to host
+      } else if (trans->direction == VIRGL_TRANSFER_FROM_HOST) {
+         direction_and_synchronized |= VIRGL_COPY_TRANSFER3D_FLAGS_READ_FROM_HOST;
+      } else {
+         // something wrong happened here
+         assert(0);
+      }
+   }
    assert(trans->copy_src_hw_res);
-
    command = VIRGL_CMD0(VIRGL_CCMD_COPY_TRANSFER3D, 0, VIRGL_COPY_TRANSFER3D_SIZE);
+   
    virgl_encoder_write_cmd_dword(ctx, command);
    /* Copy transfers need to explicitly specify the stride, since it may differ
     * from the image stride.
@@ -1464,8 +1535,7 @@ void virgl_encode_copy_transfer(struct virgl_context *ctx,
    virgl_encoder_transfer3d_common(vs, ctx->cbuf, trans, virgl_transfer3d_explicit_stride);
    vs->vws->emit_res(vs->vws, ctx->cbuf, trans->copy_src_hw_res, TRUE);
    virgl_encoder_write_dword(ctx->cbuf, trans->copy_src_offset);
-   /* At the moment all copy transfers are synchronized. */
-   virgl_encoder_write_dword(ctx->cbuf, 1);
+   virgl_encoder_write_dword(ctx->cbuf, direction_and_synchronized);
 }
 
 void virgl_encode_end_transfers(struct virgl_cmd_buf *buf)
@@ -1476,4 +1546,120 @@ void virgl_encode_end_transfers(struct virgl_cmd_buf *buf)
       command = VIRGL_CMD0(VIRGL_CCMD_END_TRANSFERS, 0, diff - 1);
       virgl_encoder_write_dword(buf, command);
    }
+}
+
+void virgl_encode_get_memory_info(struct virgl_context *ctx, struct virgl_resource *res)
+{
+   virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_GET_MEMORY_INFO, 0, 1));
+   virgl_encoder_write_res(ctx, res);
+}
+
+void virgl_encode_emit_string_marker(struct virgl_context *ctx,
+                                     const char *message, int len)
+{
+   /* len is guaranteed to be non-negative but be defensive */
+   assert(len >= 0);
+   if (len <= 0)
+      return;
+
+   if (len > 4 * 0xffff) {
+      debug_printf("VIRGL: host debug flag string too long, will be truncated\n");
+      len = 4 * 0xffff;
+   }
+
+   uint32_t buf_len = (uint32_t )(len + 3) / 4 + 1;
+   virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_EMIT_STRING_MARKER, 0, buf_len));
+   virgl_encoder_write_dword(ctx->cbuf, len);
+   virgl_encoder_write_block(ctx->cbuf, (const uint8_t *)message, len);
+}
+
+void virgl_encode_create_video_codec(struct virgl_context *ctx,
+                                     struct virgl_video_codec *cdc)
+{
+   struct virgl_screen *rs = virgl_screen(ctx->base.screen);
+   uint32_t len = rs->caps.caps.v2.host_feature_check_version >= 14 ? 8 : 7;
+
+   virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_CREATE_VIDEO_CODEC, 0, len));
+   virgl_encoder_write_dword(ctx->cbuf, cdc->handle);
+   virgl_encoder_write_dword(ctx->cbuf, cdc->base.profile);
+   virgl_encoder_write_dword(ctx->cbuf, cdc->base.entrypoint);
+   virgl_encoder_write_dword(ctx->cbuf, cdc->base.chroma_format);
+   virgl_encoder_write_dword(ctx->cbuf, cdc->base.level);
+   virgl_encoder_write_dword(ctx->cbuf, cdc->base.width);
+   virgl_encoder_write_dword(ctx->cbuf, cdc->base.height);
+   if (rs->caps.caps.v2.host_feature_check_version >= 14)
+       virgl_encoder_write_dword(ctx->cbuf, cdc->base.max_references);
+}
+
+void virgl_encode_destroy_video_codec(struct virgl_context *ctx,
+                                      struct virgl_video_codec *cdc)
+{
+   virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_DESTROY_VIDEO_CODEC, 0, 1));
+   virgl_encoder_write_dword(ctx->cbuf, cdc->handle);
+}
+
+void virgl_encode_create_video_buffer(struct virgl_context *ctx,
+                                      struct virgl_video_buffer *vbuf)
+{
+   unsigned i;
+
+   virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_CREATE_VIDEO_BUFFER, 0,
+                                                 4 + vbuf->num_planes));
+   virgl_encoder_write_dword(ctx->cbuf, vbuf->handle);
+   virgl_encoder_write_dword(ctx->cbuf, pipe_to_virgl_format(vbuf->buf->buffer_format));
+   virgl_encoder_write_dword(ctx->cbuf, vbuf->buf->width);
+   virgl_encoder_write_dword(ctx->cbuf, vbuf->buf->height);
+   for (i = 0; i < vbuf->num_planes; i++)
+       virgl_encoder_write_res(ctx, virgl_resource(vbuf->plane_views[i]->texture));
+}
+
+void virgl_encode_destroy_video_buffer(struct virgl_context *ctx,
+                                       struct virgl_video_buffer *buf)
+{
+   virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_DESTROY_VIDEO_BUFFER, 0, 1));
+   virgl_encoder_write_dword(ctx->cbuf, buf->handle);
+}
+
+void virgl_encode_begin_frame(struct virgl_context *ctx,
+                              struct virgl_video_codec *cdc,
+                              struct virgl_video_buffer *buf)
+{
+   virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_BEGIN_FRAME, 0, 2));
+   virgl_encoder_write_dword(ctx->cbuf, cdc->handle);
+   virgl_encoder_write_dword(ctx->cbuf, buf->handle);
+}
+
+void virgl_encode_decode_bitstream(struct virgl_context *ctx,
+                                   struct virgl_video_codec *cdc,
+                                   struct virgl_video_buffer *buf,
+                                   void *desc, uint32_t desc_size)
+{
+   virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_DECODE_BITSTREAM, 0, 5));
+   virgl_encoder_write_dword(ctx->cbuf, cdc->handle);
+   virgl_encoder_write_dword(ctx->cbuf, buf->handle);
+   virgl_encoder_write_res(ctx, virgl_resource(cdc->desc_buffers[cdc->cur_buffer]));
+   virgl_encoder_write_res(ctx, virgl_resource(cdc->bs_buffers[cdc->cur_buffer]));
+   virgl_encoder_write_dword(ctx->cbuf, cdc->bs_size);
+}
+
+void virgl_encode_encode_bitstream(struct virgl_context *ctx,
+                                   struct virgl_video_codec *cdc,
+                                   struct virgl_video_buffer *buf,
+                                   struct virgl_resource *tgt)
+{
+   virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_ENCODE_BITSTREAM, 0, 5));
+   virgl_encoder_write_dword(ctx->cbuf, cdc->handle);
+   virgl_encoder_write_dword(ctx->cbuf, buf->handle);
+   virgl_encoder_write_res(ctx, tgt);
+   virgl_encoder_write_res(ctx, virgl_resource(cdc->desc_buffers[cdc->cur_buffer]));
+   virgl_encoder_write_res(ctx, virgl_resource(cdc->feed_buffers[cdc->cur_buffer]));
+}
+
+void virgl_encode_end_frame(struct virgl_context *ctx,
+                            struct virgl_video_codec *cdc,
+                            struct virgl_video_buffer *buf)
+{
+   virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_END_FRAME, 0, 2));
+   virgl_encoder_write_dword(ctx->cbuf, cdc->handle);
+   virgl_encoder_write_dword(ctx->cbuf, buf->handle);
 }

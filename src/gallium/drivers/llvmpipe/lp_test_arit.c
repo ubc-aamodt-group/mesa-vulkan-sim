@@ -194,9 +194,7 @@ const float rcp_values[] = {
    -1e+035, -100000,
    100000, 1e+035,
    5.88e-39f, // denormal
-#if (__STDC_VERSION__ >= 199901L)
    INFINITY, -INFINITY,
-#endif
 };
 
 
@@ -213,9 +211,7 @@ const float rsqrt_values[] = {
    1e-007, 4.0,
    100000, 1e+035,
    5.88e-39f, // denormal
-#if (__STDC_VERSION__ >= 199901L)
    INFINITY,
-#endif
 };
 
 
@@ -296,7 +292,7 @@ const float fract_values[] = {
 #ifdef _MSC_VER
 #define WRAP(func) \
 static float \
-wrap_ ## func ## (float x) \
+wrap_ ## func(float x) \
 { \
    return func(x); \
 }
@@ -366,11 +362,11 @@ build_unary_test_func(struct gallivm_state *gallivm,
    LLVMSetFunctionCallConv(func, LLVMCCallConv);
 
    LLVMPositionBuilderAtEnd(builder, block);
-   
-   arg1 = LLVMBuildLoad(builder, arg1, "");
+
+   arg1 = LLVMBuildLoad2(builder, vf32t, arg1, "");
 
    ret = test->builder(&bld, arg1);
-   
+
    LLVMBuildStore(builder, ret, arg0);
 
    LLVMBuildRetVoid(builder);
@@ -402,8 +398,8 @@ flush_denorm_to_zero(float val)
 
    fi_val.f = val;
 
-#if defined(PIPE_ARCH_SSE)
-   if (util_cpu_caps.has_sse) {
+#if DETECT_ARCH_SSE
+   if (util_get_cpu_caps()->has_sse) {
       if ((fi_val.ui & 0x7f800000) == 0) {
          fi_val.ui &= 0xff800000;
       }
@@ -438,6 +434,9 @@ test_unary(unsigned verbose, FILE *fp, const struct unary_test_t *test, unsigned
    }
 
    context = LLVMContextCreate();
+#if LLVM_VERSION_MAJOR == 15
+   LLVMContextSetOpaquePointers(context, false);
+#endif
    gallivm = gallivm_create("test_module", context, NULL);
 
    test_func = build_unary_test_func(gallivm, test, length, test_name);
@@ -479,7 +478,8 @@ test_unary(unsigned verbose, FILE *fp, const struct unary_test_t *test, unsigned
             continue;
          }
 
-         if (!util_cpu_caps.has_neon &&
+         if (!util_get_cpu_caps()->has_neon &&
+             util_get_cpu_caps()->family != CPU_S390X &&
              test->ref == &nearbyintf && length == 2 &&
              ref != roundf(testval)) {
             /* FIXME: The generic (non SSE) path in lp_build_iround, which is

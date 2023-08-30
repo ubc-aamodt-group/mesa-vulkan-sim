@@ -31,12 +31,52 @@
 #include "util/ralloc.h"
 
 struct etna_compiler *
-etna_compiler_create(const char *renderer)
+etna_compiler_create(const char *renderer, const struct etna_specs *specs)
 {
    struct etna_compiler *compiler = rzalloc(NULL, struct etna_compiler);
 
-   if (!DBG_ENABLED(ETNA_DBG_NIR))
-      return compiler;
+   compiler->options = (nir_shader_compiler_options) {
+      .lower_fpow = true,
+      .lower_fround_even = true,
+      .lower_ftrunc = true,
+      .fuse_ffma16 = true,
+      .fuse_ffma32 = true,
+      .fuse_ffma64 = true,
+      .lower_uadd_carry = true,
+      .lower_usub_borrow = true,
+      .lower_ldexp = true,
+      .lower_mul_high = true,
+      .lower_bitops = true,
+      .lower_all_io_to_temps = true,
+      .vertex_id_zero_based = true,
+      .lower_flrp32 = true,
+      .lower_fmod = true,
+      .lower_vector_cmp = true,
+      .lower_fdph = true,
+      .lower_extract_byte = true,
+      .lower_extract_word = true,
+      .lower_insert_byte = true,
+      .lower_insert_word = true,
+      .lower_fdiv = true, /* !specs->has_new_transcendentals */
+      .lower_extract_byte = true,
+      .lower_extract_word = true,
+      .lower_fsign = !specs->has_sign_floor_ceil,
+      .lower_ffloor = !specs->has_sign_floor_ceil,
+      .lower_fceil = !specs->has_sign_floor_ceil,
+      .lower_fsqrt = !specs->has_sin_cos_sqrt,
+      .lower_sincos = !specs->has_sin_cos_sqrt,
+      .lower_uniforms_to_ubo = specs->halti >= 2,
+      .force_indirect_unrolling = nir_var_all,
+      .max_unroll_iterations = 32,
+      .vectorize_io = true,
+      .lower_pack_32_2x16_split = true,
+      .lower_pack_64_2x32_split = true,
+      .lower_unpack_32_2x16_split = true,
+      .lower_unpack_64_2x32_split = true,
+      .lower_find_lsb = true,
+      .lower_ifind_msb_to_uclz = true,
+      .lower_ufind_msb_to_uclz = true,
+   };
 
    compiler->regs = etna_ra_setup(compiler);
    if (!compiler->regs) {
@@ -53,4 +93,10 @@ void
 etna_compiler_destroy(const struct etna_compiler *compiler)
 {
    ralloc_free((void *)compiler);
+}
+
+const nir_shader_compiler_options *
+etna_compiler_get_options(struct etna_compiler *compiler)
+{
+   return &compiler->options;
 }

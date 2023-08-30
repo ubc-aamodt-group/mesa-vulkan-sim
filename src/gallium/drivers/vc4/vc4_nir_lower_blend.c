@@ -49,7 +49,7 @@ static bool
 blend_depends_on_dst_color(struct vc4_compile *c)
 {
         return (c->fs_key->blend.blend_enable ||
-                c->fs_key->blend.colormask != 0xf ||
+                c->fs_key->blend.colormask != PIPE_MASK_RGBA ||
                 c->fs_key->logicop_func != PIPE_LOGICOP_COPY);
 }
 
@@ -83,9 +83,8 @@ vc4_blend_channel_f(nir_builder *b,
                 if (channel != 3) {
                         return nir_fmin(b,
                                         src[3],
-                                        nir_fsub(b,
-                                                 nir_imm_float(b, 1.0),
-                                                 dst[3]));
+                                        nir_fsub_imm(b, 1.0,
+                                                     dst[3]));
                 } else {
                         return nir_imm_float(b, 1.0);
                 }
@@ -99,22 +98,22 @@ vc4_blend_channel_f(nir_builder *b,
         case PIPE_BLENDFACTOR_ZERO:
                 return nir_imm_float(b, 0.0);
         case PIPE_BLENDFACTOR_INV_SRC_COLOR:
-                return nir_fsub(b, nir_imm_float(b, 1.0), src[channel]);
+                return nir_fsub_imm(b, 1.0, src[channel]);
         case PIPE_BLENDFACTOR_INV_SRC_ALPHA:
-                return nir_fsub(b, nir_imm_float(b, 1.0), src[3]);
+                return nir_fsub_imm(b, 1.0, src[3]);
         case PIPE_BLENDFACTOR_INV_DST_ALPHA:
-                return nir_fsub(b, nir_imm_float(b, 1.0), dst[3]);
+                return nir_fsub_imm(b, 1.0, dst[3]);
         case PIPE_BLENDFACTOR_INV_DST_COLOR:
-                return nir_fsub(b, nir_imm_float(b, 1.0), dst[channel]);
+                return nir_fsub_imm(b, 1.0, dst[channel]);
         case PIPE_BLENDFACTOR_INV_CONST_COLOR:
-                return nir_fsub(b, nir_imm_float(b, 1.0),
-                                nir_load_system_value(b,
-                                                      nir_intrinsic_load_blend_const_color_r_float +
-                                                      channel,
-                                                      0, 1, 32));
+                return nir_fsub_imm(b, 1.0,
+                                    nir_load_system_value(b,
+                                                          nir_intrinsic_load_blend_const_color_r_float +
+                                                          channel,
+                                                          0, 1, 32));
         case PIPE_BLENDFACTOR_INV_CONST_ALPHA:
-                return nir_fsub(b, nir_imm_float(b, 1.0),
-                                nir_load_blend_const_color_a_float(b));
+                return nir_fsub_imm(b, 1.0,
+                                    nir_load_blend_const_color_a_float(b));
 
         default:
         case PIPE_BLENDFACTOR_SRC1_COLOR:
@@ -159,7 +158,7 @@ vc4_blend_channel_i(nir_builder *b,
                 return dst;
         case PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE:
                 return vc4_nir_set_packed_chan(b,
-                                               nir_umin_4x8(b,
+                                               nir_umin_4x8_vc4(b,
                                                             src_a,
                                                             nir_inot(b, dst_a)),
                                                nir_imm_int(b, ~0),
@@ -226,15 +225,15 @@ vc4_blend_func_i(nir_builder *b, nir_ssa_def *src, nir_ssa_def *dst,
 {
         switch (func) {
         case PIPE_BLEND_ADD:
-                return nir_usadd_4x8(b, src, dst);
+                return nir_usadd_4x8_vc4(b, src, dst);
         case PIPE_BLEND_SUBTRACT:
-                return nir_ussub_4x8(b, src, dst);
+                return nir_ussub_4x8_vc4(b, src, dst);
         case PIPE_BLEND_REVERSE_SUBTRACT:
-                return nir_ussub_4x8(b, dst, src);
+                return nir_ussub_4x8_vc4(b, dst, src);
         case PIPE_BLEND_MIN:
-                return nir_umin_4x8(b, src, dst);
+                return nir_umin_4x8_vc4(b, src, dst);
         case PIPE_BLEND_MAX:
-                return nir_umax_4x8(b, src, dst);
+                return nir_umax_4x8_vc4(b, src, dst);
 
         default:
                 /* Unsupported. */
@@ -353,8 +352,8 @@ vc4_do_blending_i(struct vc4_compile *c, nir_builder *b,
                                                      dst_alpha_factor,
                                                      alpha_chan);
         }
-        nir_ssa_def *src_blend = nir_umul_unorm_4x8(b, src_color, src_factor);
-        nir_ssa_def *dst_blend = nir_umul_unorm_4x8(b, dst_color, dst_factor);
+        nir_ssa_def *src_blend = nir_umul_unorm_4x8_vc4(b, src_color, src_factor);
+        nir_ssa_def *dst_blend = nir_umul_unorm_4x8_vc4(b, dst_color, dst_factor);
 
         nir_ssa_def *result =
                 vc4_blend_func_i(b, src_blend, dst_blend, blend->rgb_func);
@@ -406,7 +405,7 @@ vc4_logicop(nir_builder *b, int logicop_func,
                 return nir_imm_int(b, ~0);
         default:
                 fprintf(stderr, "Unknown logic op %d\n", logicop_func);
-                /* FALLTHROUGH */
+                FALLTHROUGH;
         case PIPE_LOGICOP_COPY:
                 return src;
         }
@@ -562,7 +561,11 @@ vc4_nir_lower_blend_instr(struct vc4_compile *c, nir_builder *b,
 
         nir_instr_rewrite_src(&intr->instr, &intr->src[0],
                               nir_src_for_ssa(blend_output));
-        intr->num_components = blend_output->num_components;
+        if (intr->num_components != blend_output->num_components) {
+                unsigned component_mask = BITFIELD_MASK(blend_output->num_components);
+                nir_intrinsic_set_write_mask(intr, component_mask);
+                intr->num_components = blend_output->num_components;
+        }
 }
 
 static bool

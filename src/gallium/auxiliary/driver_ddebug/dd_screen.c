@@ -352,6 +352,19 @@ dd_screen_check_resource_capability(struct pipe_screen *_screen,
    return screen->check_resource_capability(screen, resource, bind);
 }
 
+static int
+dd_screen_get_sparse_texture_virtual_page_size(struct pipe_screen *_screen,
+                                               enum pipe_texture_target target,
+                                               bool multi_sample,
+                                               enum pipe_format format,
+                                               unsigned offset, unsigned size,
+                                               int *x, int *y, int *z)
+{
+   struct pipe_screen *screen = dd_screen(_screen)->screen;
+
+   return screen->get_sparse_texture_virtual_page_size(
+      _screen, target, multi_sample, format, offset, size, x, y, z);
+}
 
 /********************************************************************
  * fence
@@ -389,6 +402,38 @@ dd_screen_fence_get_fd(struct pipe_screen *_screen,
 }
 
 /********************************************************************
+ * vertex state
+ */
+
+static struct pipe_vertex_state *
+dd_screen_create_vertex_state(struct pipe_screen *_screen,
+                              struct pipe_vertex_buffer *buffer,
+                              const struct pipe_vertex_element *elements,
+                              unsigned num_elements,
+                              struct pipe_resource *indexbuf,
+                              uint32_t full_velem_mask)
+{
+   struct pipe_screen *screen = dd_screen(_screen)->screen;
+   struct pipe_vertex_state *state =
+      screen->create_vertex_state(screen, buffer, elements, num_elements,
+                                  indexbuf, full_velem_mask);
+
+   if (!state)
+      return NULL;
+   state->screen = _screen;
+   return state;
+}
+
+static void
+dd_screen_vertex_state_destroy(struct pipe_screen *_screen,
+                               struct pipe_vertex_state *state)
+{
+   struct pipe_screen *screen = dd_screen(_screen)->screen;
+
+   screen->vertex_state_destroy(screen, state);
+}
+
+/********************************************************************
  * memobj
  */
 
@@ -414,12 +459,12 @@ dd_screen_memobj_destroy(struct pipe_screen *_screen,
  * screen
  */
 
-static void
-dd_screen_finalize_nir(struct pipe_screen *_screen, void *nir, bool optimize)
+static char *
+dd_screen_finalize_nir(struct pipe_screen *_screen, void *nir)
 {
    struct pipe_screen *screen = dd_screen(_screen)->screen;
 
-   screen->finalize_nir(screen, nir, optimize);
+   return screen->finalize_nir(screen, nir);
 }
 
 static void
@@ -609,6 +654,9 @@ ddebug_screen_create(struct pipe_screen *screen)
    SCR_INIT(get_driver_uuid);
    SCR_INIT(get_device_uuid);
    SCR_INIT(finalize_nir);
+   SCR_INIT(get_sparse_texture_virtual_page_size);
+   SCR_INIT(create_vertex_state);
+   SCR_INIT(vertex_state_destroy);
 
 #undef SCR_INIT
 

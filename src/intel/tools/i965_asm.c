@@ -101,16 +101,16 @@ print_instruction(FILE *output, bool compact, const brw_inst *instruction)
    }
 }
 
-static struct gen_device_info *
+static struct intel_device_info *
 i965_disasm_init(uint16_t pci_id)
 {
-   struct gen_device_info *devinfo;
+   struct intel_device_info *devinfo;
 
    devinfo = malloc(sizeof *devinfo);
    if (devinfo == NULL)
       return NULL;
 
-   if (!gen_get_device_info_from_pci_id(pci_id, devinfo)) {
+   if (!intel_get_device_info_from_pci_id(pci_id, devinfo)) {
       fprintf(stderr, "can't find device information: pci_id=0x%x\n",
               pci_id);
       free(devinfo);
@@ -123,7 +123,7 @@ i965_disasm_init(uint16_t pci_id)
 static bool
 i965_postprocess_labels()
 {
-   if (p->devinfo->gen < 6) {
+   if (p->devinfo->ver < 6) {
       return true;
    }
 
@@ -142,7 +142,7 @@ i965_postprocess_labels()
             int relative_offset = (tlabel->offset - ilabel->offset) / sizeof(brw_inst);
             relative_offset *= to_bytes_scale;
 
-            unsigned opcode = brw_inst_opcode(p->devinfo, inst);
+            unsigned opcode = brw_inst_opcode(p->isa, inst);
 
             if (ilabel->type == INSTR_LABEL_JIP) {
                switch (opcode) {
@@ -150,10 +150,10 @@ i965_postprocess_labels()
                case BRW_OPCODE_ELSE:
                case BRW_OPCODE_ENDIF:
                case BRW_OPCODE_WHILE:
-                  if (p->devinfo->gen >= 7) {
+                  if (p->devinfo->ver >= 7) {
                      brw_inst_set_jip(p->devinfo, inst, relative_offset);
-                  } else if (p->devinfo->gen == 6) {
-                     brw_inst_set_gen6_jump_count(p->devinfo, inst, relative_offset);
+                  } else if (p->devinfo->ver == 6) {
+                     brw_inst_set_gfx6_jump_count(p->devinfo, inst, relative_offset);
                   }
                   break;
                case BRW_OPCODE_BREAK:
@@ -169,11 +169,11 @@ i965_postprocess_labels()
                switch (opcode) {
                case BRW_OPCODE_IF:
                case BRW_OPCODE_ELSE:
-                  if (p->devinfo->gen > 7) {
+                  if (p->devinfo->ver > 7) {
                      brw_inst_set_uip(p->devinfo, inst, relative_offset);
-                  } else if (p->devinfo->gen == 7) {
+                  } else if (p->devinfo->ver == 7) {
                      brw_inst_set_uip(p->devinfo, inst, relative_offset);
-                  } else if (p->devinfo->gen == 6) {
+                  } else if (p->devinfo->ver == 6) {
                      // Nothing
                   }
                   break;
@@ -215,7 +215,7 @@ int main(int argc, char **argv)
    int offset = 0, err;
    int start_offset = 0;
    struct disasm_info *disasm_info;
-   struct gen_device_info *devinfo = NULL;
+   struct intel_device_info *devinfo = NULL;
    int result = EXIT_FAILURE;
    list_inithead(&instr_labels);
    list_inithead(&target_labels);
@@ -232,7 +232,7 @@ int main(int argc, char **argv)
    while ((c = getopt_long(argc, argv, ":t:g:o:h", i965_asm_opts, NULL)) != -1) {
       switch (c) {
       case 'g': {
-         const int id = gen_device_name_to_pci_device_id(optarg);
+         const int id = intel_device_name_to_pci_device_id(optarg);
          if (id < 0) {
             fprintf(stderr, "can't parse gen: '%s', expected 3 letter "
                             "platform name\n", optarg);
@@ -305,12 +305,15 @@ int main(int argc, char **argv)
    devinfo = i965_disasm_init(pci_id);
    if (!devinfo) {
       fprintf(stderr, "Unable to allocate memory for "
-                      "gen_device_info struct instance.\n");
+                      "intel_device_info struct instance.\n");
       goto end;
    }
 
+   struct brw_isa_info isa;
+   brw_init_isa_info(&isa, devinfo);
+
    p = rzalloc(NULL, struct brw_codegen);
-   brw_init_codegen(devinfo, p, p);
+   brw_init_codegen(&isa, p, p);
    p->automatic_exec_sizes = false;
 
    err = yyparse();
@@ -322,7 +325,7 @@ int main(int argc, char **argv)
 
    store = p->store;
 
-   disasm_info = disasm_initialize(p->devinfo, NULL);
+   disasm_info = disasm_initialize(p->isa, NULL);
    if (!disasm_info) {
       fprintf(stderr, "Unable to initialize disasm_info struct instance\n");
       goto end;
@@ -331,7 +334,7 @@ int main(int argc, char **argv)
    if (output_type == OPT_OUTPUT_C_LITERAL)
       fprintf(output, "{\n");
 
-   brw_validate_instructions(p->devinfo, p->store, 0,
+   brw_validate_instructions(p->isa, p->store, 0,
                              p->next_insn_offset, disasm_info);
 
    const int nr_insn = (p->next_insn_offset - start_offset) / 16;

@@ -185,7 +185,7 @@ nir_load_store_vectorize_test::get_resource(uint32_t binding, bool ssbo)
 
    nir_intrinsic_instr *res = nir_intrinsic_instr_create(
       b->shader, nir_intrinsic_vulkan_resource_index);
-   nir_ssa_dest_init(&res->instr, &res->dest, 1, 32, NULL);
+   nir_ssa_dest_init(&res->instr, &res->dest, 1, 32);
    res->num_components = 1;
    res->src[0] = nir_src_for_ssa(nir_imm_zero(b, 1, 32));
    nir_intrinsic_set_desc_type(
@@ -220,7 +220,7 @@ nir_load_store_vectorize_test::create_indirect_load(
       return NULL;
    }
    nir_intrinsic_instr *load = nir_intrinsic_instr_create(b->shader, intrinsic);
-   nir_ssa_dest_init(&load->instr, &load->dest, components, bit_size, NULL);
+   nir_ssa_dest_init(&load->instr, &load->dest, components, bit_size);
    load->num_components = components;
    if (res) {
       load->src[0] = nir_src_for_ssa(res);
@@ -230,8 +230,8 @@ nir_load_store_vectorize_test::create_indirect_load(
    }
    int byte_size = (bit_size == 1 ? 32 : bit_size) / 8;
 
+   nir_intrinsic_set_align(load, byte_size, 0);
    if (mode != nir_var_mem_push_const) {
-      nir_intrinsic_set_align(load, byte_size, 0);
       nir_intrinsic_set_access(load, (gl_access_qualifier)access);
    }
 
@@ -281,7 +281,7 @@ nir_load_store_vectorize_test::create_indirect_store(
       return;
    }
    nir_intrinsic_instr *store = nir_intrinsic_instr_create(b->shader, intrinsic);
-   nir_ssa_dest_init(&store->instr, &store->dest, components, bit_size, NULL);
+   nir_ssa_dest_init(&store->instr, &store->dest, components, bit_size);
    store->num_components = components;
    if (res) {
       store->src[0] = nir_src_for_ssa(value);
@@ -806,7 +806,7 @@ TEST_F(nir_load_store_vectorize_test, ubo_load_adjacent_memory_barrier)
 {
    create_load(nir_var_mem_ubo, 0, 0, 0x1);
 
-   nir_scoped_memory_barrier(b, NIR_SCOPE_DEVICE, NIR_MEMORY_ACQ_REL,
+   nir_scoped_memory_barrier(b, SCOPE_DEVICE, NIR_MEMORY_ACQ_REL,
                              nir_var_mem_ssbo);
 
    create_load(nir_var_mem_ubo, 0, 4, 0x2);
@@ -823,7 +823,7 @@ TEST_F(nir_load_store_vectorize_test, ssbo_load_adjacent_memory_barrier)
 {
    create_load(nir_var_mem_ssbo, 0, 0, 0x1);
 
-   nir_scoped_memory_barrier(b, NIR_SCOPE_DEVICE, NIR_MEMORY_ACQ_REL,
+   nir_scoped_memory_barrier(b, SCOPE_DEVICE, NIR_MEMORY_ACQ_REL,
                              nir_var_mem_ssbo);
 
    create_load(nir_var_mem_ssbo, 0, 4, 0x2);
@@ -836,13 +836,14 @@ TEST_F(nir_load_store_vectorize_test, ssbo_load_adjacent_memory_barrier)
    ASSERT_EQ(count_intrinsics(nir_intrinsic_load_ssbo), 2);
 }
 
-/* nir_intrinsic_control_barrier only syncs invocations in a workgroup, it
- * doesn't require that loads/stores complete.
+/* A control barrier may only sync invocations in a workgroup, it doesn't
+ * require that loads/stores complete.
  */
 TEST_F(nir_load_store_vectorize_test, ssbo_load_adjacent_barrier)
 {
    create_load(nir_var_mem_ssbo, 0, 0, 0x1);
-   nir_control_barrier(b);
+   nir_scoped_barrier(b, SCOPE_WORKGROUP, SCOPE_NONE,
+                      (nir_memory_semantics)0, (nir_variable_mode)0);
    create_load(nir_var_mem_ssbo, 0, 4, 0x2);
 
    nir_validate_shader(b->shader, NULL);
@@ -857,7 +858,7 @@ TEST_F(nir_load_store_vectorize_test, ssbo_load_adjacent_memory_barrier_shared)
 {
    create_load(nir_var_mem_ssbo, 0, 0, 0x1);
 
-   nir_scoped_memory_barrier(b, NIR_SCOPE_WORKGROUP, NIR_MEMORY_ACQ_REL,
+   nir_scoped_memory_barrier(b, SCOPE_WORKGROUP, NIR_MEMORY_ACQ_REL,
                              nir_var_mem_shared);
 
    create_load(nir_var_mem_ssbo, 0, 4, 0x2);
@@ -1222,7 +1223,7 @@ TEST_F(nir_load_store_vectorize_test, shared_load_distant_64bit)
 {
    nir_variable *var = nir_variable_create(b->shader, nir_var_mem_shared, glsl_array_type(glsl_uint_type(), 4, 0), "var");
    nir_deref_instr *deref = nir_build_deref_var(b, var);
-   nir_ssa_dest_init(&deref->instr, &deref->dest, 1, 64, NULL);
+   nir_ssa_dest_init(&deref->instr, &deref->dest, 1, 64);
 
    create_shared_load(nir_build_deref_array_imm(b, deref, 0x100000000), 0x1);
    create_shared_load(nir_build_deref_array_imm(b, deref, 0x200000001), 0x2);
@@ -1461,8 +1462,9 @@ TEST_F(nir_load_store_vectorize_test, shared_load_bool)
    ASSERT_EQ(deref->deref_type, nir_deref_type_var);
    ASSERT_EQ(deref->var, var);
 
-   ASSERT_TRUE(test_alu(loads[0x1]->src.ssa->parent_instr, nir_op_i2b1));
-   ASSERT_TRUE(test_alu(loads[0x2]->src.ssa->parent_instr, nir_op_i2b1));
+   /* The loaded value is converted to Boolean by (loaded != 0). */
+   ASSERT_TRUE(test_alu(loads[0x1]->src.ssa->parent_instr, nir_op_ine));
+   ASSERT_TRUE(test_alu(loads[0x2]->src.ssa->parent_instr, nir_op_ine));
    ASSERT_TRUE(test_alu_def(loads[0x1]->src.ssa->parent_instr, 0, &load->dest.ssa, 0));
    ASSERT_TRUE(test_alu_def(loads[0x2]->src.ssa->parent_instr, 0, &load->dest.ssa, 1));
 }
@@ -1500,7 +1502,8 @@ TEST_F(nir_load_store_vectorize_test, shared_load_bool_mixed)
    ASSERT_EQ(deref->deref_type, nir_deref_type_var);
    ASSERT_EQ(deref->var, var);
 
-   ASSERT_TRUE(test_alu(loads[0x1]->src.ssa->parent_instr, nir_op_i2b1));
+   /* The loaded value is converted to Boolean by (loaded != 0). */
+   ASSERT_TRUE(test_alu(loads[0x1]->src.ssa->parent_instr, nir_op_ine));
    ASSERT_TRUE(test_alu_def(loads[0x1]->src.ssa->parent_instr, 0, &load->dest.ssa, 0));
 
    EXPECT_INSTR_SWIZZLES(movs[0x2], load, "y");
@@ -1550,7 +1553,7 @@ TEST_F(nir_load_store_vectorize_test, push_const_load_separate_base)
    nir_validate_shader(b->shader, NULL);
    ASSERT_EQ(count_intrinsics(nir_intrinsic_load_push_constant), 2);
 
-   EXPECT_FALSE(run_vectorizer(nir_var_mem_push_const));
+   EXPECT_TRUE(run_vectorizer(nir_var_mem_push_const));
 
    ASSERT_EQ(count_intrinsics(nir_intrinsic_load_push_constant), 2);
 }
@@ -1563,7 +1566,7 @@ TEST_F(nir_load_store_vectorize_test, push_const_load_separate_direct_direct)
    nir_validate_shader(b->shader, NULL);
    ASSERT_EQ(count_intrinsics(nir_intrinsic_load_push_constant), 2);
 
-   EXPECT_FALSE(run_vectorizer(nir_var_mem_push_const));
+   EXPECT_TRUE(run_vectorizer(nir_var_mem_push_const));
 
    ASSERT_EQ(count_intrinsics(nir_intrinsic_load_push_constant), 2);
 }
@@ -1577,7 +1580,7 @@ TEST_F(nir_load_store_vectorize_test, push_const_load_separate_direct_indirect)
    nir_validate_shader(b->shader, NULL);
    ASSERT_EQ(count_intrinsics(nir_intrinsic_load_push_constant), 2);
 
-   EXPECT_FALSE(run_vectorizer(nir_var_mem_push_const));
+   EXPECT_TRUE(run_vectorizer(nir_var_mem_push_const));
 
    ASSERT_EQ(count_intrinsics(nir_intrinsic_load_push_constant), 2);
 }
@@ -1593,7 +1596,7 @@ TEST_F(nir_load_store_vectorize_test, push_const_load_separate_indirect_indirect
    nir_validate_shader(b->shader, NULL);
    ASSERT_EQ(count_intrinsics(nir_intrinsic_load_push_constant), 2);
 
-   EXPECT_FALSE(run_vectorizer(nir_var_mem_push_const));
+   EXPECT_TRUE(run_vectorizer(nir_var_mem_push_const));
 
    ASSERT_EQ(count_intrinsics(nir_intrinsic_load_push_constant), 2);
 }
@@ -1857,6 +1860,102 @@ TEST_F(nir_load_store_vectorize_test, ssbo_offset_overflow_robust)
    EXPECT_TRUE(run_vectorizer(nir_var_mem_ssbo, false, nir_var_mem_ssbo));
 
    ASSERT_EQ(count_intrinsics(nir_intrinsic_load_ssbo), 2);
+}
+
+TEST_F(nir_load_store_vectorize_test, ssbo_offset_overflow_robust_indirect_stride1)
+{
+   nir_ssa_def *offset = nir_load_local_invocation_index(b);
+   create_indirect_load(nir_var_mem_ssbo, 0, offset, 0x1);
+   create_indirect_load(nir_var_mem_ssbo, 0, nir_iadd_imm(b, offset, 4), 0x2);
+
+   nir_validate_shader(b->shader, NULL);
+   ASSERT_EQ(count_intrinsics(nir_intrinsic_load_ssbo), 2);
+
+   EXPECT_FALSE(run_vectorizer(nir_var_mem_ssbo, false, nir_var_mem_ssbo));
+
+   ASSERT_EQ(count_intrinsics(nir_intrinsic_load_ssbo), 2);
+}
+
+TEST_F(nir_load_store_vectorize_test, ssbo_offset_overflow_robust_indirect_stride8)
+{
+   nir_ssa_def *offset = nir_load_local_invocation_index(b);
+   offset = nir_imul_imm(b, offset, 8);
+   create_indirect_load(nir_var_mem_ssbo, 0, offset, 0x1);
+   create_indirect_load(nir_var_mem_ssbo, 0, nir_iadd_imm(b, offset, 4), 0x2);
+
+   nir_validate_shader(b->shader, NULL);
+   ASSERT_EQ(count_intrinsics(nir_intrinsic_load_ssbo), 2);
+
+   EXPECT_TRUE(run_vectorizer(nir_var_mem_ssbo, false, nir_var_mem_ssbo));
+
+   ASSERT_EQ(count_intrinsics(nir_intrinsic_load_ssbo), 1);
+}
+
+TEST_F(nir_load_store_vectorize_test, ssbo_offset_overflow_robust_indirect_stride12)
+{
+   nir_ssa_def *offset = nir_load_local_invocation_index(b);
+   offset = nir_imul_imm(b, offset, 12);
+   create_indirect_load(nir_var_mem_ssbo, 0, offset, 0x1);
+   nir_ssa_def *offset_4 = nir_iadd_imm(b, offset, 4);
+   create_indirect_load(nir_var_mem_ssbo, 0, offset_4, 0x2);
+   create_indirect_load(nir_var_mem_ssbo, 0, nir_iadd_imm(b, offset, 8), 0x3);
+
+   nir_validate_shader(b->shader, NULL);
+   ASSERT_EQ(count_intrinsics(nir_intrinsic_load_ssbo), 3);
+
+   EXPECT_TRUE(run_vectorizer(nir_var_mem_ssbo, false, nir_var_mem_ssbo));
+
+   ASSERT_EQ(count_intrinsics(nir_intrinsic_load_ssbo), 2);
+
+   nir_intrinsic_instr *load = get_intrinsic(nir_intrinsic_load_ssbo, 0);
+   ASSERT_EQ(load->dest.ssa.bit_size, 32);
+   ASSERT_EQ(load->dest.ssa.num_components, 1);
+   ASSERT_EQ(load->src[1].ssa, offset);
+   EXPECT_INSTR_SWIZZLES(movs[0x1], load, "x");
+
+   load = get_intrinsic(nir_intrinsic_load_ssbo, 1);
+   ASSERT_EQ(load->dest.ssa.bit_size, 32);
+   ASSERT_EQ(load->dest.ssa.num_components, 2);
+   ASSERT_EQ(load->src[1].ssa, offset_4);
+   EXPECT_INSTR_SWIZZLES(movs[0x2], load, "x");
+   EXPECT_INSTR_SWIZZLES(movs[0x3], load, "y");
+}
+
+TEST_F(nir_load_store_vectorize_test, ssbo_offset_overflow_robust_indirect_stride16)
+{
+   nir_ssa_def *offset = nir_load_local_invocation_index(b);
+   offset = nir_imul_imm(b, offset, 16);
+   create_indirect_load(nir_var_mem_ssbo, 0, offset, 0x1);
+   create_indirect_load(nir_var_mem_ssbo, 0, nir_iadd_imm(b, offset, 4), 0x2);
+   create_indirect_load(nir_var_mem_ssbo, 0, nir_iadd_imm(b, offset, 8), 0x3);
+   create_indirect_load(nir_var_mem_ssbo, 0, nir_iadd_imm(b, offset, 12), 0x4);
+
+   nir_validate_shader(b->shader, NULL);
+   ASSERT_EQ(count_intrinsics(nir_intrinsic_load_ssbo), 4);
+
+   EXPECT_TRUE(run_vectorizer(nir_var_mem_ssbo, false, nir_var_mem_ssbo));
+
+   ASSERT_EQ(count_intrinsics(nir_intrinsic_load_ssbo), 1);
+}
+
+TEST_F(nir_load_store_vectorize_test, shared_offset_overflow_robust_indirect_stride12)
+{
+   nir_variable *var = nir_variable_create(b->shader, nir_var_mem_shared,
+                                           glsl_array_type(glsl_uint_type(), 4, 0), "var");
+   nir_deref_instr *deref = nir_build_deref_var(b, var);
+
+   nir_ssa_def *index = nir_load_local_invocation_index(b);
+   index = nir_imul_imm(b, index, 3);
+   create_shared_load(nir_build_deref_array(b, deref, index), 0x1);
+   create_shared_load(nir_build_deref_array(b, deref, nir_iadd_imm(b, index, 1)), 0x2);
+   create_shared_load(nir_build_deref_array(b, deref, nir_iadd_imm(b, index, 2)), 0x3);
+
+   nir_validate_shader(b->shader, NULL);
+   ASSERT_EQ(count_intrinsics(nir_intrinsic_load_deref), 3);
+
+   EXPECT_FALSE(run_vectorizer(nir_var_mem_shared, false, nir_var_mem_shared));
+
+   ASSERT_EQ(count_intrinsics(nir_intrinsic_load_deref), 3);
 }
 
 TEST_F(nir_load_store_vectorize_test, ubo_alignment_16_4)

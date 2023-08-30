@@ -286,7 +286,6 @@ enum quniform_contents {
 
         QUNIFORM_STENCIL,
 
-        QUNIFORM_ALPHA_REF,
         QUNIFORM_SAMPLE_MASK,
 
         /* Placeholder uniform that will be updated by the kernel when used by
@@ -331,12 +330,10 @@ struct vc4_fs_key {
         bool is_points;
         bool is_lines;
         bool point_coord_upper_left;
-        bool light_twoside;
         bool msaa;
         bool sample_coverage;
         bool sample_alpha_to_coverage;
         bool sample_alpha_to_one;
-        uint8_t alpha_test_func;
         uint8_t logicop_func;
         uint32_t point_sprite_mask;
         uint32_t ubo_1_size;
@@ -351,10 +348,9 @@ struct vc4_vs_key {
         enum pipe_format attr_formats[8];
         bool is_coord;
         bool per_vertex_point_size;
-        bool clamp_color;
 };
 
-/** A basic block of QIR intructions. */
+/** A basic block of QIR instructions. */
 struct qblock {
         struct list_head link;
 
@@ -468,6 +464,7 @@ struct vc4_compile {
         struct qreg undef;
         enum qstage stage;
         uint32_t num_temps;
+        uint32_t max_reg_pressure;
 
         struct list_head blocks;
         int next_block_index;
@@ -770,14 +767,6 @@ qir_PACK_8888_F(struct vc4_compile *c, struct qreg val)
         struct qreg dest = qir_MMOV(c, val);
         c->defs[dest.index]->dst.pack = QPU_PACK_MUL_8888;
         return dest;
-}
-
-static inline struct qreg
-qir_POW(struct vc4_compile *c, struct qreg x, struct qreg y)
-{
-        return qir_EXP2(c, qir_FMUL(c,
-                                    y,
-                                    qir_LOG2(c, x)));
 }
 
 static inline void

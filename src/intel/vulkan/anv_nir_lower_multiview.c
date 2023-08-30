@@ -23,7 +23,7 @@
 
 #include "anv_nir.h"
 #include "nir/nir_builder.h"
-#include "util/debug.h"
+#include "util/u_debug.h"
 
 /**
  * This file implements the lowering required for VK_KHR_multiview.
@@ -71,6 +71,8 @@ build_instance_id(struct lower_multiview_state *state)
 static nir_ssa_def *
 build_view_index(struct lower_multiview_state *state)
 {
+   assert(state->builder.shader->info.stage != MESA_SHADER_FRAGMENT);
+
    if (state->view_index == NULL) {
       nir_builder *b = &state->builder;
 
@@ -89,8 +91,8 @@ build_view_index(struct lower_multiview_state *state)
           * that to an actual view id.
           */
          nir_ssa_def *compacted =
-            nir_umod(b, nir_load_instance_id(b),
-                        nir_imm_int(b, util_bitcount(state->view_mask)));
+            nir_umod_imm(b, nir_load_instance_id(b),
+                            util_bitcount(state->view_mask));
 
          if (util_is_power_of_two_or_zero(state->view_mask + 1)) {
             /* If we have a full view mask, then compacted is what we want */
@@ -101,8 +103,8 @@ build_view_index(struct lower_multiview_state *state)
              * 16 nibbles, each of which is a value from 0 to 15.
              */
             uint64_t remap = 0;
-            uint32_t bit, i = 0;
-            for_each_bit(bit, state->view_mask) {
+            uint32_t i = 0;
+            u_foreach_bit(bit, state->view_mask) {
                assert(bit < 16);
                remap |= (uint64_t)bit << (i++ * 4);
             }
@@ -121,7 +123,7 @@ build_view_index(struct lower_multiview_state *state)
                nir_ssa_def *shifted_high =
                   nir_ushr(b, nir_imm_int(b, remap >> 32),
                               nir_isub(b, shift, nir_imm_int(b, 32)));
-               shifted = nir_bcsel(b, nir_ilt(b, shift, nir_imm_int(b, 32)),
+               shifted = nir_bcsel(b, nir_ilt_imm(b, shift, 32),
                                       shifted_low, shifted_high);
             }
             state->view_index = nir_iand(b, shifted, nir_imm_int(b, 0xf));
@@ -150,16 +152,45 @@ build_view_index(struct lower_multiview_state *state)
    return state->view_index;
 }
 
+static bool
+is_load_view_index(const nir_instr *instr, const void *data)
+{
+   return instr->type == nir_instr_type_intrinsic &&
+          nir_instr_as_intrinsic(instr)->intrinsic == nir_intrinsic_load_view_index;
+}
+
+static nir_ssa_def *
+replace_load_view_index_with_zero(struct nir_builder *b,
+                                  nir_instr *instr, void *data)
+{
+   assert(is_load_view_index(instr, data));
+   return nir_imm_zero(b, 1, 32);
+}
+
+static nir_ssa_def *
+replace_load_view_index_with_layer_id(struct nir_builder *b,
+                                      nir_instr *instr, void *data)
+{
+   assert(is_load_view_index(instr, data));
+   return nir_load_layer_id(b);
+}
+
 bool
-anv_nir_lower_multiview(nir_shader *shader,
-                        struct anv_graphics_pipeline *pipeline)
+anv_nir_lower_multiview(nir_shader *shader, uint32_t view_mask,
+                        bool use_primitive_replication)
 {
    assert(shader->info.stage != MESA_SHADER_COMPUTE);
-   uint32_t view_mask = pipeline->subpass->view_mask;
 
-   /* If multiview isn't enabled, we have nothing to do. */
-   if (view_mask == 0)
-      return false;
+   /* If multiview isn't enabled, just lower the ViewIndex builtin to zero. */
+   if (view_mask == 0) {
+      return nir_shader_lower_instructions(shader, is_load_view_index,
+                                           replace_load_view_index_with_zero, NULL);
+   }
+
+   if (shader->info.stage == MESA_SHADER_FRAGMENT) {
+      return nir_shader_lower_instructions(shader, is_load_view_index,
+                                           replace_load_view_index_with_layer_id, NULL);
+   }
 
    /* This pass assumes a single entrypoint */
    nir_function_impl *entrypoint = nir_shader_get_entrypoint(shader);
@@ -169,11 +200,8 @@ anv_nir_lower_multiview(nir_shader *shader,
     * view, then it is possible to use the feature instead of instancing to
     * implement multiview.
     */
-   if (pipeline->use_primitive_replication) {
-      if (shader->info.stage == MESA_SHADER_FRAGMENT)
-         return false;
-
-      bool progress = nir_lower_multiview(shader, pipeline->subpass->view_mask);
+   if (use_primitive_replication) {
+      bool progress = nir_lower_multiview(shader, view_mask);
 
       if (progress) {
          nir_builder b;
@@ -199,7 +227,6 @@ anv_nir_lower_multiview(nir_shader *shader,
 
    nir_builder_init(&state.builder, entrypoint);
 
-   bool progress = false;
    nir_foreach_block(block, entrypoint) {
       nir_foreach_instr_safe(instr, block) {
          if (instr->type != nir_instr_type_intrinsic)
@@ -221,10 +248,9 @@ anv_nir_lower_multiview(nir_shader *shader,
             value = build_view_index(&state);
          }
 
-         nir_ssa_def_rewrite_uses(&load->dest.ssa, nir_src_for_ssa(value));
+         nir_ssa_def_rewrite_uses(&load->dest.ssa, value);
 
          nir_instr_remove(&load->instr);
-         progress = true;
       }
    }
 
@@ -232,46 +258,42 @@ anv_nir_lower_multiview(nir_shader *shader,
     * available in the VS.  If it's not a fragment shader, we need to pass
     * the view index on to the next stage.
     */
-   if (shader->info.stage != MESA_SHADER_FRAGMENT) {
-      nir_ssa_def *view_index = build_view_index(&state);
+   nir_ssa_def *view_index = build_view_index(&state);
 
-      nir_builder *b = &state.builder;
+   nir_builder *b = &state.builder;
 
-      assert(view_index->parent_instr->block == nir_start_block(entrypoint));
-      b->cursor = nir_after_instr(view_index->parent_instr);
+   assert(view_index->parent_instr->block == nir_start_block(entrypoint));
+   b->cursor = nir_after_instr(view_index->parent_instr);
 
-      /* Unless there is only one possible view index (that would be set
-       * directly), pass it to the next stage. */
-      if (util_bitcount(state.view_mask) != 1) {
-         nir_variable *view_index_out =
-            nir_variable_create(shader, nir_var_shader_out,
-                                glsl_int_type(), "view index");
-         view_index_out->data.location = VARYING_SLOT_VIEW_INDEX;
-         nir_store_var(b, view_index_out, view_index, 0x1);
-      }
-
-      nir_variable *layer_id_out =
+   /* Unless there is only one possible view index (that would be set
+    * directly), pass it to the next stage. */
+   if (util_bitcount(state.view_mask) != 1) {
+      nir_variable *view_index_out =
          nir_variable_create(shader, nir_var_shader_out,
-                             glsl_int_type(), "layer ID");
-      layer_id_out->data.location = VARYING_SLOT_LAYER;
-      nir_store_var(b, layer_id_out, view_index, 0x1);
-
-      progress = true;
+                             glsl_int_type(), "view index");
+      view_index_out->data.location = VARYING_SLOT_VIEW_INDEX;
+      nir_store_var(b, view_index_out, view_index, 0x1);
    }
 
-   if (progress) {
-      nir_metadata_preserve(entrypoint, nir_metadata_block_index |
-                                        nir_metadata_dominance);
-   }
+   nir_variable *layer_id_out =
+      nir_variable_create(shader, nir_var_shader_out,
+                          glsl_int_type(), "layer ID");
+   layer_id_out->data.location = VARYING_SLOT_LAYER;
+   nir_store_var(b, layer_id_out, view_index, 0x1);
 
-   return progress;
+   nir_metadata_preserve(entrypoint, nir_metadata_block_index |
+                                     nir_metadata_dominance);
+
+   return true;
 }
 
 bool
-anv_check_for_primitive_replication(nir_shader **shaders,
-                                    struct anv_graphics_pipeline *pipeline)
+anv_check_for_primitive_replication(struct anv_device *device,
+                                    VkShaderStageFlags stages,
+                                    nir_shader **shaders,
+                                    uint32_t view_mask)
 {
-   assert(pipeline->base.device->info.gen >= 12);
+   assert(device->info->ver >= 12);
 
    static int primitive_replication_max_views = -1;
    if (primitive_replication_max_views < 0) {
@@ -283,7 +305,7 @@ anv_check_for_primitive_replication(nir_shader **shaders,
 
       primitive_replication_max_views =
          MIN2(MAX_VIEWS_FOR_PRIMITIVE_REPLICATION,
-              env_var_as_unsigned("ANV_PRIMITIVE_REPLICATION_MAX_VIEWS",
+              debug_get_num_option("ANV_PRIMITIVE_REPLICATION_MAX_VIEWS",
                                   default_max_views));
    }
 
@@ -291,18 +313,15 @@ anv_check_for_primitive_replication(nir_shader **shaders,
     * later than Vertex.  In that case only the last stage can refer to
     * gl_ViewIndex.
     */
-   if (pipeline->active_stages != (VK_SHADER_STAGE_VERTEX_BIT |
-                                   VK_SHADER_STAGE_FRAGMENT_BIT)) {
+   if (stages & ~(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT))
       return false;
-   }
 
-   uint32_t view_mask = pipeline->subpass->view_mask;
+   /* It's possible we have no vertex shader yet (with pipeline libraries) */
+   if (!(stages & VK_SHADER_STAGE_VERTEX_BIT))
+      return false;
+
    int view_count = util_bitcount(view_mask);
    if (view_count == 1 || view_count > primitive_replication_max_views)
-      return false;
-
-   /* We can't access the view index in the fragment shader. */
-   if (nir_shader_uses_view_index(shaders[MESA_SHADER_FRAGMENT]))
       return false;
 
    return nir_can_lower_multiview(shaders[MESA_SHADER_VERTEX]);

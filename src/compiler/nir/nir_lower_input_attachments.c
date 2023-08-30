@@ -25,19 +25,34 @@
 #include "nir_builder.h"
 
 static nir_ssa_def *
-load_frag_coord(const nir_input_attachment_options *options, nir_builder *b)
+load_frag_coord(nir_builder *b, nir_deref_instr *deref,
+                const nir_input_attachment_options *options)
 {
-   if (options->use_fragcoord_sysval)
-      return nir_load_frag_coord(b);
-
-   nir_variable *pos =
-      nir_find_variable_with_location(b->shader, nir_var_shader_in,
-                                      VARYING_SLOT_POS);
-   if (pos == NULL) {
-      pos = nir_variable_create(b->shader, nir_var_shader_in,
-                                glsl_vec4_type(), NULL);
-      pos->data.location = VARYING_SLOT_POS;
+   if (options->use_fragcoord_sysval) {
+      nir_ssa_def *frag_coord = nir_load_frag_coord(b);
+      if (options->unscaled_input_attachment_ir3) {
+         nir_variable *var = nir_deref_instr_get_variable(deref);
+         unsigned base = var->data.index;
+         nir_ssa_def *unscaled_frag_coord = nir_load_frag_coord_unscaled_ir3(b);
+         if (deref->deref_type == nir_deref_type_array) {
+            nir_ssa_def *unscaled =
+               nir_i2b(b, nir_iand(b, nir_ishr(b,
+                                               nir_imm_int(b, options->unscaled_input_attachment_ir3 >> base),
+                                            deref->arr.index.ssa),
+                                nir_imm_int(b, 1)));
+            frag_coord = nir_bcsel(b, unscaled, unscaled_frag_coord, frag_coord);
+         } else {
+            assert(deref->deref_type == nir_deref_type_var);
+            bool unscaled = (options->unscaled_input_attachment_ir3 >> base) & 1;
+            frag_coord = unscaled ? unscaled_frag_coord : frag_coord;
+         }
+      }
+      return frag_coord;
    }
+
+   nir_variable *pos = nir_get_variable_with_location(b->shader, nir_var_shader_in,
+                                                      VARYING_SLOT_POS, glsl_vec4_type());
+
    /**
     * From Vulkan spec:
     *   "The OriginLowerLeft execution mode must not be used; fragment entry
@@ -51,7 +66,7 @@ load_frag_coord(const nir_input_attachment_options *options, nir_builder *b)
 }
 
 static nir_ssa_def *
-load_layer_id(const nir_input_attachment_options *options, nir_builder *b)
+load_layer_id(nir_builder *b, const nir_input_attachment_options *options)
 {
    if (options->use_layer_id_sysval) {
       if (options->use_view_id_for_layer)
@@ -62,22 +77,15 @@ load_layer_id(const nir_input_attachment_options *options, nir_builder *b)
 
    gl_varying_slot slot = options->use_view_id_for_layer ?
       VARYING_SLOT_VIEW_INDEX : VARYING_SLOT_LAYER;
-   nir_variable *layer_id =
-      nir_find_variable_with_location(b->shader, nir_var_shader_in, slot);
-
-   if (layer_id == NULL) {
-      layer_id = nir_variable_create(b->shader, nir_var_shader_in,
-                                     glsl_int_type(), NULL);
-      layer_id->data.location = slot;
-      layer_id->data.interpolation = INTERP_MODE_FLAT;
-      layer_id->data.driver_location = b->shader->num_inputs++;
-   }
+   nir_variable *layer_id = nir_get_variable_with_location(b->shader, nir_var_shader_in,
+                                                           slot, glsl_int_type());
+   layer_id->data.interpolation = INTERP_MODE_FLAT;
 
    return nir_load_var(b, layer_id);
 }
 
 static bool
-try_lower_input_load(nir_function_impl *impl, nir_intrinsic_instr *load,
+try_lower_input_load(nir_builder *b, nir_intrinsic_instr *load,
                      const nir_input_attachment_options *options)
 {
    nir_deref_instr *deref = nir_src_as_deref(load->src[0]);
@@ -90,37 +98,24 @@ try_lower_input_load(nir_function_impl *impl, nir_intrinsic_instr *load,
 
    const bool multisampled = (image_dim == GLSL_SAMPLER_DIM_SUBPASS_MS);
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
-   b.cursor = nir_instr_remove(&load->instr);
+   b->cursor = nir_instr_remove(&load->instr);
 
-   nir_ssa_def *frag_coord = load_frag_coord(options, &b);
-   frag_coord = nir_f2i32(&b, frag_coord);
-   nir_ssa_def *offset = nir_ssa_for_src(&b, load->src[1], 2);
-   nir_ssa_def *pos = nir_iadd(&b, frag_coord, offset);
+   nir_ssa_def *frag_coord = load_frag_coord(b, deref, options);
+   frag_coord = nir_f2i32(b, frag_coord);
+   nir_ssa_def *offset = nir_ssa_for_src(b, load->src[1], 2);
+   nir_ssa_def *pos = nir_iadd(b, frag_coord, offset);
 
-   nir_ssa_def *layer = load_layer_id(options, &b);
+   nir_ssa_def *layer = load_layer_id(b, options);
    nir_ssa_def *coord =
-      nir_vec3(&b, nir_channel(&b, pos, 0), nir_channel(&b, pos, 1), layer);
+      nir_vec3(b, nir_channel(b, pos, 0), nir_channel(b, pos, 1), layer);
 
-   nir_tex_instr *tex = nir_tex_instr_create(b.shader, 3 + multisampled);
+   nir_tex_instr *tex = nir_tex_instr_create(b->shader, 3 + multisampled);
 
    tex->op = nir_texop_txf;
    tex->sampler_dim = image_dim;
 
-   switch (glsl_get_sampler_result_type(deref->type)) {
-   case GLSL_TYPE_FLOAT:
-      tex->dest_type = nir_type_float;
-      break;
-   case GLSL_TYPE_INT:
-      tex->dest_type = nir_type_int;
-      break;
-   case GLSL_TYPE_UINT:
-      tex->dest_type = nir_type_uint;
-      break;
-   default:
-      unreachable("Invalid image type");
-   }
+   tex->dest_type =
+      nir_get_nir_type_for_glsl_base_type(glsl_get_sampler_result_type(deref->type));
    tex->is_array = true;
    tex->is_shadow = false;
    tex->is_sparse = load->intrinsic == nir_intrinsic_image_deref_sparse_load;
@@ -128,15 +123,12 @@ try_lower_input_load(nir_function_impl *impl, nir_intrinsic_instr *load,
    tex->texture_index = 0;
    tex->sampler_index = 0;
 
-   tex->src[0].src_type = nir_tex_src_texture_deref;
-   tex->src[0].src = nir_src_for_ssa(&deref->dest.ssa);
-
-   tex->src[1].src_type = nir_tex_src_coord;
-   tex->src[1].src = nir_src_for_ssa(coord);
+   tex->src[0] = nir_tex_src_for_ssa(nir_tex_src_texture_deref,
+                                     &deref->dest.ssa);
+   tex->src[1] = nir_tex_src_for_ssa(nir_tex_src_coord, coord);
    tex->coord_components = 3;
 
-   tex->src[2].src_type = nir_tex_src_lod;
-   tex->src[2].src = nir_src_for_ssa(nir_imm_int(&b, 0));
+   tex->src[2] = nir_tex_src_for_ssa(nir_tex_src_lod, nir_imm_int(b, 0));
 
    if (image_dim == GLSL_SAMPLER_DIM_SUBPASS_MS) {
       tex->op = nir_texop_txf_ms;
@@ -146,26 +138,27 @@ try_lower_input_load(nir_function_impl *impl, nir_intrinsic_instr *load,
 
    tex->texture_non_uniform = nir_intrinsic_access(load) & ACCESS_NON_UNIFORM;
 
-   nir_ssa_dest_init(&tex->instr, &tex->dest, nir_tex_instr_dest_size(tex), 32, NULL);
-   nir_builder_instr_insert(&b, &tex->instr);
+   nir_ssa_dest_init(&tex->instr, &tex->dest, nir_tex_instr_dest_size(tex),
+                     32);
+   nir_builder_instr_insert(b, &tex->instr);
 
    if (tex->is_sparse) {
       unsigned load_result_size = load->dest.ssa.num_components - 1;
-      unsigned load_result_mask = BITFIELD_MASK(load_result_size);
+      nir_component_mask_t load_result_mask = nir_component_mask(load_result_size);
       nir_ssa_def *res = nir_channels(
-         &b, &tex->dest.ssa, load_result_mask | 0x10);
+         b, &tex->dest.ssa, load_result_mask | 0x10);
 
-      nir_ssa_def_rewrite_uses(&load->dest.ssa, nir_src_for_ssa(res));
+      nir_ssa_def_rewrite_uses(&load->dest.ssa, res);
    } else {
       nir_ssa_def_rewrite_uses(&load->dest.ssa,
-                               nir_src_for_ssa(&tex->dest.ssa));
+                               &tex->dest.ssa);
    }
 
    return true;
 }
 
 static bool
-try_lower_input_texop(nir_function_impl *impl, nir_tex_instr *tex,
+try_lower_input_texop(nir_builder *b, nir_tex_instr *tex,
                       const nir_input_attachment_options *options)
 {
    nir_deref_instr *deref = nir_src_as_deref(tex->src[0].src);
@@ -173,16 +166,14 @@ try_lower_input_texop(nir_function_impl *impl, nir_tex_instr *tex,
    if (glsl_get_sampler_dim(deref->type) != GLSL_SAMPLER_DIM_SUBPASS_MS)
       return false;
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
-   b.cursor = nir_before_instr(&tex->instr);
+   b->cursor = nir_before_instr(&tex->instr);
 
-   nir_ssa_def *frag_coord = load_frag_coord(options, &b);
-   frag_coord = nir_f2i32(&b, frag_coord);
+   nir_ssa_def *frag_coord = load_frag_coord(b, deref, options);
+   frag_coord = nir_f2i32(b, frag_coord);
 
-   nir_ssa_def *layer = load_layer_id(options, &b);
-   nir_ssa_def *coord = nir_vec3(&b, nir_channel(&b, frag_coord, 0),
-                                     nir_channel(&b, frag_coord, 1), layer);
+   nir_ssa_def *layer = load_layer_id(b, options);
+   nir_ssa_def *coord = nir_vec3(b, nir_channel(b, frag_coord, 0),
+                                    nir_channel(b, frag_coord, 1), layer);
 
    tex->coord_components = 3;
 
@@ -191,46 +182,44 @@ try_lower_input_texop(nir_function_impl *impl, nir_tex_instr *tex,
    return true;
 }
 
+static bool
+lower_input_attachments_instr(nir_builder *b, nir_instr *instr, void *_data)
+{
+   const nir_input_attachment_options *options = _data;
+
+   switch (instr->type) {
+   case nir_instr_type_tex: {
+      nir_tex_instr *tex = nir_instr_as_tex(instr);
+
+      if (tex->op == nir_texop_fragment_mask_fetch_amd ||
+          tex->op == nir_texop_fragment_fetch_amd)
+         return try_lower_input_texop(b, tex, options);
+
+      return false;
+   }
+   case nir_instr_type_intrinsic: {
+      nir_intrinsic_instr *load = nir_instr_as_intrinsic(instr);
+
+      if (load->intrinsic == nir_intrinsic_image_deref_load ||
+          load->intrinsic == nir_intrinsic_image_deref_sparse_load)
+         return try_lower_input_load(b, load, options);
+
+      return false;
+   }
+
+   default:
+      return false;
+   }
+}
+
 bool
 nir_lower_input_attachments(nir_shader *shader,
                             const nir_input_attachment_options *options)
 {
    assert(shader->info.stage == MESA_SHADER_FRAGMENT);
-   bool progress = false;
 
-   nir_foreach_function(function, shader) {
-      if (!function->impl)
-         continue;
-
-      nir_foreach_block(block, function->impl) {
-         nir_foreach_instr_safe(instr, block) {
-            switch (instr->type) {
-            case nir_instr_type_tex: {
-               nir_tex_instr *tex = nir_instr_as_tex(instr);
-
-               if (tex->op == nir_texop_fragment_mask_fetch ||
-                   tex->op == nir_texop_fragment_fetch) {
-                  progress |= try_lower_input_texop(function->impl, tex,
-                                                    options);
-               }
-               break;
-            }
-            case nir_instr_type_intrinsic: {
-               nir_intrinsic_instr *load = nir_instr_as_intrinsic(instr);
-
-               if (load->intrinsic == nir_intrinsic_image_deref_load ||
-                   load->intrinsic == nir_intrinsic_image_deref_sparse_load) {
-                  progress |= try_lower_input_load(function->impl, load,
-                                                   options);
-               }
-               break;
-            }
-            default:
-               break;
-            }
-         }
-      }
-   }
-
-   return progress;
+   return nir_shader_instructions_pass(shader, lower_input_attachments_instr,
+                                       nir_metadata_block_index |
+                                       nir_metadata_dominance,
+                                       (void *)options);
 }

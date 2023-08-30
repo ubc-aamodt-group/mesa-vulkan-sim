@@ -22,6 +22,7 @@
 
 #include "api/util.hpp"
 #include "core/program.hpp"
+#include "core/platform.hpp"
 #include "spirv/invocation.hpp"
 #include "util/u_debug.h"
 
@@ -43,7 +44,7 @@ namespace {
    class build_notifier {
    public:
       build_notifier(cl_program prog,
-                     void (*notifer)(cl_program, void *), void *data) :
+                     void (CL_CALLBACK * notifer)(cl_program, void *), void *data) :
                      prog_(prog), notifer(notifer), data_(data) { }
 
       ~build_notifier() {
@@ -53,14 +54,14 @@ namespace {
 
    private:
       cl_program prog_;
-      void (*notifer)(cl_program, void *);
+      void (CL_CALLBACK * notifer)(cl_program, void *);
       void *data_;
    };
 
    void
    validate_build_common(const program &prog, cl_uint num_devs,
                          const cl_device_id *d_devs,
-                         void (*pfn_notify)(cl_program, void *),
+                         void (CL_CALLBACK * pfn_notify)(cl_program, void *),
                          void *user_data) {
       if (!pfn_notify && user_data)
          throw error(CL_INVALID_VALUE);
@@ -142,8 +143,8 @@ clCreateProgramWithBinary(cl_context d_ctx, cl_uint n,
       throw error(CL_INVALID_DEVICE);
 
    // Deserialize the provided binaries,
-   std::vector<std::pair<cl_int, module>> result = map(
-      [](const unsigned char *p, size_t l) -> std::pair<cl_int, module> {
+   std::vector<std::pair<cl_int, binary>> result = map(
+      [](const unsigned char *p, size_t l) -> std::pair<cl_int, binary> {
          if (!p || !l)
             return { CL_INVALID_VALUE, {} };
 
@@ -151,9 +152,9 @@ clCreateProgramWithBinary(cl_context d_ctx, cl_uint n,
             std::stringbuf bin( std::string{ (char*)p, l } );
             std::istream s(&bin);
 
-            return { CL_SUCCESS, module::deserialize(s) };
+            return { CL_SUCCESS, binary::deserialize(s) };
 
-         } catch (std::istream::failure &e) {
+         } catch (std::istream::failure &) {
             return { CL_INVALID_BINARY, {} };
          }
       },
@@ -266,7 +267,7 @@ clReleaseProgram(cl_program d_prog) try {
 CLOVER_API cl_int
 clBuildProgram(cl_program d_prog, cl_uint num_devs,
                const cl_device_id *d_devs, const char *p_opts,
-               void (*pfn_notify)(cl_program, void *),
+               void (CL_CALLBACK * pfn_notify)(cl_program, void *),
                void *user_data) try {
    auto &prog = obj(d_prog);
    auto devs =
@@ -300,7 +301,7 @@ clCompileProgram(cl_program d_prog, cl_uint num_devs,
                  const cl_device_id *d_devs, const char *p_opts,
                  cl_uint num_headers, const cl_program *d_header_progs,
                  const char **header_names,
-                 void (*pfn_notify)(cl_program, void *),
+                 void (CL_CALLBACK * pfn_notify)(cl_program, void *),
                  void *user_data) try {
    auto &prog = obj(d_prog);
    auto devs =
@@ -332,10 +333,10 @@ clCompileProgram(cl_program d_prog, cl_uint num_devs,
    prog.compile(devs, opts, headers);
    return CL_SUCCESS;
 
-} catch (invalid_build_options_error &e) {
+} catch (invalid_build_options_error &) {
    return CL_INVALID_COMPILER_OPTIONS;
 
-} catch (build_error &e) {
+} catch (build_error &) {
    return CL_COMPILE_PROGRAM_FAILURE;
 
 } catch (error &e) {
@@ -425,7 +426,7 @@ namespace {
 CLOVER_API cl_program
 clLinkProgram(cl_context d_ctx, cl_uint num_devs, const cl_device_id *d_devs,
               const char *p_opts, cl_uint num_progs, const cl_program *d_progs,
-              void (*pfn_notify) (cl_program, void *), void *user_data,
+              void (CL_CALLBACK * pfn_notify) (cl_program, void *), void *user_data,
               cl_int *r_errcode) try {
    auto &ctx = obj(d_ctx);
    const auto opts = build_options(p_opts, "CLOVER_EXTRA_LINK_OPTIONS");
@@ -445,13 +446,13 @@ clLinkProgram(cl_context d_ctx, cl_uint num_devs, const cl_device_id *d_devs,
       prog().link(devs, opts, progs);
       ret_error(r_errcode, CL_SUCCESS);
 
-   } catch (build_error &e) {
+   } catch (build_error &) {
       ret_error(r_errcode, CL_LINK_PROGRAM_FAILURE);
    }
 
    return r_prog;
 
-} catch (invalid_build_options_error &e) {
+} catch (invalid_build_options_error &) {
    ret_error(r_errcode, CL_INVALID_LINKER_OPTIONS);
    return NULL;
 
@@ -466,8 +467,11 @@ clUnloadCompiler() {
 }
 
 CLOVER_API cl_int
-clUnloadPlatformCompiler(cl_platform_id d_platform) {
+clUnloadPlatformCompiler(cl_platform_id d_platform) try {
+   find_platform(d_platform);
    return CL_SUCCESS;
+} catch (error &e) {
+   return e.get();
 }
 
 CLOVER_API cl_int
@@ -503,7 +507,7 @@ clGetProgramInfo(cl_program d_prog, cl_program_info param,
 
    case CL_PROGRAM_BINARY_SIZES:
       buf.as_vector<size_t>() = map([&](const device &dev) {
-            return prog.build(dev).binary.size();
+            return prog.build(dev).bin.size();
          },
          prog.devices());
       break;
@@ -512,7 +516,7 @@ clGetProgramInfo(cl_program d_prog, cl_program_info param,
       buf.as_matrix<unsigned char>() = map([&](const device &dev) {
             std::stringbuf bin;
             std::ostream s(&bin);
-            prog.build(dev).binary.serialize(s);
+            prog.build(dev).bin.serialize(s);
             return bin.str();
          },
          prog.devices());
@@ -523,7 +527,7 @@ clGetProgramInfo(cl_program d_prog, cl_program_info param,
       break;
 
    case CL_PROGRAM_KERNEL_NAMES:
-      buf.as_string() = fold([](const std::string &a, const module::symbol &s) {
+      buf.as_string() = fold([](const std::string &a, const binary::symbol &s) {
             return ((a.empty() ? "" : a + ";") + s.name);
          }, std::string(), prog.symbols());
       break;
@@ -534,8 +538,8 @@ clGetProgramInfo(cl_program d_prog, cl_program_info param,
       break;
 
    case CL_PROGRAM_IL:
-      if (prog.il_type() != program::il_type::none)
-         buf.as_string() = prog.source();
+      if (prog.il_type() == program::il_type::spirv)
+         buf.as_vector<char>() = prog.source();
       else if (r_size)
          *r_size = 0u;
       break;

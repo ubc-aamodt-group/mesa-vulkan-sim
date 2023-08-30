@@ -369,7 +369,7 @@ setup_sort_vertices(struct setup_context *setup,
 
       /*
       debug_printf("%s one-over-area %f  area %f  det %f\n",
-                   __FUNCTION__, setup->oneoverarea, area, det );
+                   __func__, setup->oneoverarea, area, det );
       */
       if (util_is_inf_or_nan(setup->oneoverarea))
          return FALSE;
@@ -392,52 +392,6 @@ setup_sort_vertices(struct setup_context *setup,
    }
 
    return TRUE;
-}
-
-
-/* Apply cylindrical wrapping to v0, v1, v2 coordinates, if enabled.
- * Input coordinates must be in [0, 1] range, otherwise results are undefined.
- * Some combinations of coordinates produce invalid results,
- * but this behaviour is acceptable.
- */
-static void
-tri_apply_cylindrical_wrap(float v0,
-                           float v1,
-                           float v2,
-                           uint cylindrical_wrap,
-                           float output[3])
-{
-   if (cylindrical_wrap) {
-      float delta;
-
-      delta = v1 - v0;
-      if (delta > 0.5f) {
-         v0 += 1.0f;
-      }
-      else if (delta < -0.5f) {
-         v1 += 1.0f;
-      }
-
-      delta = v2 - v1;
-      if (delta > 0.5f) {
-         v1 += 1.0f;
-      }
-      else if (delta < -0.5f) {
-         v2 += 1.0f;
-      }
-
-      delta = v0 - v2;
-      if (delta > 0.5f) {
-         v2 += 1.0f;
-      }
-      else if (delta < -0.5f) {
-         v0 += 1.0f;
-      }
-   }
-
-   output[0] = v0;
-   output[1] = v1;
-   output[2] = v2;
 }
 
 
@@ -620,21 +574,17 @@ setup_tri_coefficients(struct setup_context *setup)
          break;
       case SP_INTERP_LINEAR:
          for (j = 0; j < TGSI_NUM_CHANNELS; j++) {
-            tri_apply_cylindrical_wrap(setup->vmin[vertSlot][j],
-                                       setup->vmid[vertSlot][j],
-                                       setup->vmax[vertSlot][j],
-                                       fsInfo->input_cylindrical_wrap[fragSlot] & (1 << j),
-                                       v);
+            v[0] = setup->vmin[vertSlot][j];
+            v[1] = setup->vmid[vertSlot][j];
+            v[2] = setup->vmax[vertSlot][j];
             tri_linear_coeff(setup, &setup->coef[fragSlot], j, v);
          }
          break;
       case SP_INTERP_PERSPECTIVE:
          for (j = 0; j < TGSI_NUM_CHANNELS; j++) {
-            tri_apply_cylindrical_wrap(setup->vmin[vertSlot][j],
-                                       setup->vmid[vertSlot][j],
-                                       setup->vmax[vertSlot][j],
-                                       fsInfo->input_cylindrical_wrap[fragSlot] & (1 << j),
-                                       v);
+            v[0] = setup->vmin[vertSlot][j];
+            v[1] = setup->vmid[vertSlot][j];
+            v[2] = setup->vmax[vertSlot][j];
             tri_persp_coeff(setup, &setup->coef[fragSlot], j, v);
          }
          break;
@@ -727,7 +677,7 @@ subtriangle(struct setup_context *setup,
    finish_y -= sy;
 
    /*
-   debug_printf("%s %d %d\n", __FUNCTION__, start_y, finish_y);
+   debug_printf("%s %d %d\n", __func__, start_y, finish_y);
    */
 
    for (y = start_y; y < finish_y; y++) {
@@ -815,7 +765,7 @@ sp_setup_tri(struct setup_context *setup,
    
    det = calc_det(v0, v1, v2);
    /*
-   debug_printf("%s\n", __FUNCTION__ );
+   debug_printf("%s\n", __func__ );
    */
 
 #if DEBUG_FRAGS
@@ -829,7 +779,7 @@ sp_setup_tri(struct setup_context *setup,
    setup_tri_coefficients( setup );
    setup_tri_edges( setup );
 
-   assert(setup->softpipe->reduced_prim == PIPE_PRIM_TRIANGLES);
+   assert(setup->softpipe->reduced_prim == MESA_PRIM_TRIANGLES);
 
    setup->span.y = 0;
    setup->span.right[0] = 0;
@@ -873,32 +823,6 @@ sp_setup_tri(struct setup_context *setup,
           setup->numFragsEmitted,
           setup->numFragsWritten);
 #endif
-}
-
-
-/* Apply cylindrical wrapping to v0, v1 coordinates, if enabled.
- * Input coordinates must be in [0, 1] range, otherwise results are undefined.
- */
-static void
-line_apply_cylindrical_wrap(float v0,
-                            float v1,
-                            uint cylindrical_wrap,
-                            float output[2])
-{
-   if (cylindrical_wrap) {
-      float delta;
-
-      delta = v1 - v0;
-      if (delta > 0.5f) {
-         v0 += 1.0f;
-      }
-      else if (delta < -0.5f) {
-         v1 += 1.0f;
-      }
-   }
-
-   output[0] = v0;
-   output[1] = v1;
 }
 
 
@@ -1006,19 +930,15 @@ setup_line_coefficients(struct setup_context *setup,
          break;
       case SP_INTERP_LINEAR:
          for (j = 0; j < TGSI_NUM_CHANNELS; j++) {
-            line_apply_cylindrical_wrap(setup->vmin[vertSlot][j],
-                                        setup->vmax[vertSlot][j],
-                                        fsInfo->input_cylindrical_wrap[fragSlot] & (1 << j),
-                                        v);
+            v[0] = setup->vmin[vertSlot][j];
+            v[1] = setup->vmax[vertSlot][j];
             line_linear_coeff(setup, &setup->coef[fragSlot], j, v);
          }
          break;
       case SP_INTERP_PERSPECTIVE:
          for (j = 0; j < TGSI_NUM_CHANNELS; j++) {
-            line_apply_cylindrical_wrap(setup->vmin[vertSlot][j],
-                                        setup->vmax[vertSlot][j],
-                                        fsInfo->input_cylindrical_wrap[fragSlot] & (1 << j),
-                                        v);
+            v[0] = setup->vmin[vertSlot][j];
+            v[1] = setup->vmax[vertSlot][j];
             line_persp_coeff(setup, &setup->coef[fragSlot], j, v);
          }
          break;
@@ -1128,7 +1048,7 @@ sp_setup_line(struct setup_context *setup,
 
    assert(dx >= 0);
    assert(dy >= 0);
-   assert(setup->softpipe->reduced_prim == PIPE_PRIM_LINES);
+   assert(setup->softpipe->reduced_prim == MESA_PRIM_LINES);
 
    setup->quad[0].input.x0 = setup->quad[0].input.y0 = -1;
    setup->quad[0].inout.mask = 0x0;
@@ -1247,7 +1167,7 @@ sp_setup_point(struct setup_context *setup,
        setup->softpipe->rasterizer->rasterizer_discard)
       return;
 
-   assert(setup->softpipe->reduced_prim == PIPE_PRIM_POINTS);
+   assert(setup->softpipe->reduced_prim == MESA_PRIM_POINTS);
 
    if (setup->softpipe->layer_slot > 0) {
       layer = *(unsigned *)v0[setup->softpipe->layer_slot];
@@ -1289,7 +1209,7 @@ sp_setup_point(struct setup_context *setup,
 
       switch (sinfo->attrib[fragSlot].interp) {
       case SP_INTERP_CONSTANT:
-         /* fall-through */
+         FALLTHROUGH;
       case SP_INTERP_LINEAR:
          for (j = 0; j < TGSI_NUM_CHANNELS; j++)
             const_coeff(setup, &setup->coef[fragSlot], vertSlot, j);
@@ -1483,7 +1403,7 @@ sp_setup_prepare(struct setup_context *setup)
 
    sp->quad.first->begin( sp->quad.first );
 
-   if (sp->reduced_api_prim == PIPE_PRIM_TRIANGLES &&
+   if (sp->reduced_api_prim == MESA_PRIM_TRIANGLES &&
        sp->rasterizer->fill_front == PIPE_POLYGON_MODE_FILL &&
        sp->rasterizer->fill_back == PIPE_POLYGON_MODE_FILL) {
       /* we'll do culling */

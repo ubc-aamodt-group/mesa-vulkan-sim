@@ -21,7 +21,6 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE. */
 
 #include "util/u_memory.h"
-#include "util/simple_list.h"
 
 #include "r300_context.h"
 #include "r300_screen.h"
@@ -150,16 +149,16 @@ static bool r300_get_query_result(struct pipe_context* pipe,
 
     if (q->type == PIPE_QUERY_GPU_FINISHED) {
         if (wait) {
-            r300->rws->buffer_wait(q->buf, PIPE_TIMEOUT_INFINITE,
+            r300->rws->buffer_wait(r300->rws, q->buf, OS_TIMEOUT_INFINITE,
                                    RADEON_USAGE_READWRITE);
             vresult->b = TRUE;
         } else {
-            vresult->b = r300->rws->buffer_wait(q->buf, 0, RADEON_USAGE_READWRITE);
+            vresult->b = r300->rws->buffer_wait(r300->rws, q->buf, 0, RADEON_USAGE_READWRITE);
         }
         return vresult->b;
     }
 
-    map = r300->rws->buffer_map(q->buf, &r300->cs,
+    map = r300->rws->buffer_map(r300->rws, q->buf, &r300->cs,
                                 PIPE_MAP_READ |
                                 (!wait ? PIPE_MAP_DONTBLOCK : 0));
     if (!map)

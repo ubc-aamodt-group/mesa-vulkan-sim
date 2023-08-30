@@ -24,10 +24,7 @@
 #ifndef D3D12_DESCRIPTOR_POOL_H
 #define D3D12_DESCRIPTOR_POOL_H
 
-#include "pipe/p_context.h"
-
-#define D3D12_IGNORE_SDK_LAYERS
-#include <directx/d3d12.h>
+#include "d3d12_common.h"
 
 struct d3d12_descriptor_pool;
 struct d3d12_descriptor_heap;
@@ -50,7 +47,7 @@ d3d12_descriptor_handle_free(struct d3d12_descriptor_handle *handle);
 /* Offline Descriptor Pool */
 
 struct d3d12_descriptor_pool*
-d3d12_descriptor_pool_new(struct pipe_context *pctx,
+d3d12_descriptor_pool_new(struct d3d12_screen *screen,
                           D3D12_DESCRIPTOR_HEAP_TYPE type,
                           uint32_t num_descriptors);
 

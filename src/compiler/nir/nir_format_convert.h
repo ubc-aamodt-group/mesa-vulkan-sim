@@ -26,7 +26,7 @@
 #include "util/format_rgb9e5.h"
 
 static inline nir_ssa_def *
-nir_shift(nir_builder *b, nir_ssa_def *value, int left_shift)
+nir_shift_imm(nir_builder *b, nir_ssa_def *value, int left_shift)
 {
    if (left_shift > 0)
       return nir_ishl(b, value, nir_imm_int(b, left_shift));
@@ -37,10 +37,19 @@ nir_shift(nir_builder *b, nir_ssa_def *value, int left_shift)
 }
 
 static inline nir_ssa_def *
+nir_shift(nir_builder *b, nir_ssa_def *value, nir_ssa_def *left_shift)
+{
+   return nir_bcsel(b,
+                    nir_ige_imm(b, left_shift, 0),
+                    nir_ishl(b, value, left_shift),
+                    nir_ushr(b, value, nir_ineg(b, left_shift)));
+}
+
+static inline nir_ssa_def *
 nir_mask_shift(struct nir_builder *b, nir_ssa_def *src,
                uint32_t mask, int left_shift)
 {
-   return nir_shift(b, nir_iand(b, src, nir_imm_int(b, mask)), left_shift);
+   return nir_shift_imm(b, nir_iand(b, src, nir_imm_int(b, mask)), left_shift);
 }
 
 static inline nir_ssa_def *
@@ -135,12 +144,25 @@ nir_format_pack_uint_unmasked(nir_builder *b, nir_ssa_def *color,
    nir_ssa_def *packed = nir_imm_int(b, 0);
    unsigned offset = 0;
    for (unsigned i = 0; i < num_components; i++) {
-      packed = nir_ior(b, packed, nir_shift(b, nir_channel(b, color, i),
+      packed = nir_ior(b, packed, nir_shift_imm(b, nir_channel(b, color, i),
                                                offset));
       offset += bits[i];
    }
    assert(offset <= packed->bit_size);
 
+   return packed;
+}
+
+static inline nir_ssa_def *
+nir_format_pack_uint_unmasked_ssa(nir_builder *b, nir_ssa_def *color,
+                                  nir_ssa_def *bits)
+{
+   nir_ssa_def *packed = nir_imm_int(b, 0);
+   nir_ssa_def *offset = nir_imm_int(b, 0);
+   for (unsigned i = 0; i < bits->num_components; i++) {
+      packed = nir_ior(b, packed, nir_ishl(b, nir_channel(b, color, i), offset));
+      offset = nir_iadd(b, offset, nir_channel(b, bits, i));
+   }
    return packed;
 }
 
@@ -279,26 +301,26 @@ nir_format_float_to_half(nir_builder *b, nir_ssa_def *f)
 static inline nir_ssa_def *
 nir_format_linear_to_srgb(nir_builder *b, nir_ssa_def *c)
 {
-   nir_ssa_def *linear = nir_fmul(b, c, nir_imm_float(b, 12.92f));
+   nir_ssa_def *linear = nir_fmul_imm(b, c, 12.92f);
    nir_ssa_def *curved =
-      nir_fsub(b, nir_fmul(b, nir_imm_float(b, 1.055f),
-                              nir_fpow(b, c, nir_imm_float(b, 1.0 / 2.4))),
-                  nir_imm_float(b, 0.055f));
+      nir_fadd_imm(b, nir_fmul_imm(b, nir_fpow(b, c, nir_imm_float(b, 1.0 / 2.4)),
+                                      1.055f),
+                      -0.055f);
 
-   return nir_fsat(b, nir_bcsel(b, nir_flt(b, c, nir_imm_float(b, 0.0031308f)),
+   return nir_fsat(b, nir_bcsel(b, nir_flt_imm(b, c, 0.0031308f),
                                    linear, curved));
 }
 
 static inline nir_ssa_def *
 nir_format_srgb_to_linear(nir_builder *b, nir_ssa_def *c)
 {
-   nir_ssa_def *linear = nir_fdiv(b, c, nir_imm_float(b, 12.92f));
+   nir_ssa_def *linear = nir_fdiv_imm(b, c, 12.92f);
    nir_ssa_def *curved =
-      nir_fpow(b, nir_fdiv(b, nir_fadd(b, c, nir_imm_float(b, 0.055f)),
-                              nir_imm_float(b, 1.055f)),
+      nir_fpow(b, nir_fmul_imm(b, nir_fadd_imm(b, c, 0.055f),
+                                  1.0 / 1.055f),
                   nir_imm_float(b, 2.4f));
 
-   return nir_fsat(b, nir_bcsel(b, nir_fge(b, nir_imm_float(b, 0.04045f), c),
+   return nir_fsat(b, nir_bcsel(b, nir_fle_imm(b, c, 0.04045f),
                                    linear, curved));
 }
 
@@ -390,7 +412,7 @@ nir_format_pack_r9g9b9e5(nir_builder *b, nir_ssa_def *color)
    nir_ssa_def *clamped = nir_fmin(b, color, nir_imm_float(b, MAX_RGB9E5));
 
    /* Get rid of negatives and NaN */
-   clamped = nir_bcsel(b, nir_ult(b, nir_imm_int(b, 0x7f800000), color),
+   clamped = nir_bcsel(b, nir_ugt_imm(b, color, 0x7f800000),
                           nir_imm_float(b, 0), clamped);
 
    /* maxrgb.u = MAX3(rc.u, gc.u, bc.u); */

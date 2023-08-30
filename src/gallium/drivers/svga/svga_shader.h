@@ -1,5 +1,5 @@
 /**********************************************************
- * Copyright 2008-2012 VMware, Inc.  All rights reserved.
+ * Copyright 2008-2022 VMware, Inc.  All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
@@ -29,6 +29,8 @@
 #include "svga3d_reg.h"
 #include "svga_context.h"
 #include "svga_streamout.h"
+#include "compiler/shader_enums.h"
+#include "tgsi/tgsi_scan.h"
 
 
 /**
@@ -96,7 +98,7 @@ struct svga_compile_key
    struct {
       unsigned vertices_per_patch:8;
       unsigned vertices_out:8;
-      enum pipe_prim_type prim_mode:8;
+      enum mesa_prim prim_mode:8;
       enum pipe_tess_spacing spacing:3;
       unsigned vertices_order_cw:1;
       unsigned point_mode:1;
@@ -115,20 +117,24 @@ struct svga_compile_key
    /* compute shader */
    struct {
       unsigned grid_size[3];
+      unsigned mem_size;
    } cs;
 
    /* any shader type */
    int8_t generic_remap_table[MAX_GENERIC_VARYING];
    unsigned num_textures:8;
+   unsigned num_samplers:8;
    unsigned num_unnormalized_coords:8;
    unsigned clip_plane_enable:PIPE_MAX_CLIP_PLANES;
    unsigned last_vertex_stage:1;
    unsigned clamp_vertex_color:1;
+   unsigned sampler_state_mapping:1;    /* Set if use sampler state mapping */
    unsigned sprite_origin_lower_left:1;
    uint16_t sprite_coord_enable;
    struct {
       unsigned compare_mode:1;
       unsigned compare_func:3;
+      unsigned compare_in_shader:1;
       unsigned unnormalized:1;
       unsigned texel_bias:1;
       unsigned width_height_idx:5; /**< texture unit */
@@ -138,10 +144,28 @@ struct svga_compile_key
       unsigned swizzle_b:3;
       unsigned swizzle_a:3;
       unsigned num_samples:5;   /**< Up to 16 samples */
+      unsigned target:4;
+      unsigned sampler_return_type:4;
+      unsigned sampler_view:1;
+      unsigned sampler_index:5;
    } tex[PIPE_MAX_SAMPLERS];
-   /* Note: svga_compile_keys_equal() depends on the variable-size
-    * tex[] array being at the end of this structure.
-    */
+
+   unsigned uav_splice_index:4;      /* starting uav index */
+   unsigned srv_raw_buf_index:8;     /* start index for srv raw buffers */
+   unsigned image_size_used:1;
+
+   uint16_t raw_buffers;             /* bitmask of raw buffers */
+
+   struct {
+      enum tgsi_return_type return_type;
+      enum pipe_texture_target resource_target;
+      unsigned is_array:1;
+      unsigned is_single_layer:1;
+      unsigned uav_index;
+   } images[PIPE_MAX_SHADER_IMAGES];
+
+   uint32_t shader_buf_uav_index[PIPE_MAX_SHADER_BUFFERS];
+   uint32_t atomic_buf_uav_index[PIPE_MAX_HW_ATOMIC_BUFFERS];
 };
 
 /* A key for a variant of token string of a shader */
@@ -219,7 +243,8 @@ struct svga_fs_variant
    unsigned fs_shadow_compare_units;
 
    /** For FS-based polygon stipple */
-   unsigned pstipple_sampler_unit;
+   unsigned pstipple_sampler_unit:8;
+   unsigned pstipple_sampler_state_index:8;
 };
 
 
@@ -248,7 +273,7 @@ struct svga_tes_variant
 {
    struct svga_shader_variant base;
 
-   enum pipe_prim_type prim_mode:8;
+   enum mesa_prim prim_mode:8;
    enum pipe_tess_spacing spacing:3;
    unsigned vertices_order_cw:1;
    unsigned point_mode:1;
@@ -273,11 +298,70 @@ struct svga_cs_variant
 };
 
 
+struct svga_shader_info
+{
+   ubyte num_inputs;
+   ubyte num_outputs;
+
+   ubyte input_semantic_name[PIPE_MAX_SHADER_INPUTS];
+   ubyte input_semantic_index[PIPE_MAX_SHADER_INPUTS];
+   ubyte input_usage_mask[PIPE_MAX_SHADER_INPUTS];
+   ubyte output_semantic_name[PIPE_MAX_SHADER_OUTPUTS];
+   ubyte output_semantic_index[PIPE_MAX_SHADER_OUTPUTS];
+   ubyte output_usage_mask[PIPE_MAX_SHADER_OUTPUTS];
+
+   uint64_t generic_inputs_mask;
+   uint64_t generic_outputs_mask;
+
+   boolean writes_edgeflag;
+   boolean writes_layer;
+   boolean writes_position;
+   boolean writes_psize;
+   boolean writes_viewport_index;
+
+   boolean uses_grid_size;
+   boolean uses_const_buffers;
+   boolean uses_hw_atomic;
+   boolean uses_images;
+   boolean uses_image_size;
+   boolean uses_shader_buffers;
+
+   unsigned const_buffers_declared;  /* bitmask of declared const buffers */
+   unsigned constbuf0_num_uniforms;  /* number of uniforms in constbuf0 */
+
+   struct {
+      boolean color0_writes_all_cbufs;
+   } fs;
+
+  struct {
+      enum mesa_prim in_prim;
+      enum mesa_prim out_prim;
+   } gs;
+
+   struct {
+      unsigned vertices_out;        /* number of vertices in tcs patch */
+      boolean writes_tess_factor;
+   } tcs;
+
+   struct {
+      enum mesa_prim prim_mode;
+      boolean reads_control_point;
+      boolean reads_tess_factor;
+   } tes;
+};
+
+
 struct svga_shader
 {
+   enum pipe_shader_ir type;            /* IR type */
+   enum pipe_shader_type stage;         /* shader stage */
+
+   struct svga_shader_info info;        /* shader info */
+
+   /* TGSI */
    const struct tgsi_token *tokens;
    struct svga_token_key token_key;     /* token key for the token string */
-   struct tgsi_shader_info info;
+   struct tgsi_shader_info tgsi_info;
 
    /* List of shaders with tokens derived from the same token string */
    struct svga_shader *next;
@@ -287,6 +371,11 @@ struct svga_shader
 
    /** Head of linked list of compiled variants */
    struct svga_shader_variant *variants;
+
+   /* Get dummy shader variant */
+   struct svga_shader_variant *(*get_dummy_shader)(struct svga_context *,
+                                                   struct svga_shader *,
+                                                   const struct svga_compile_key *);
 
    unsigned id;  /**< for debugging only */
 };
@@ -357,6 +446,7 @@ struct svga_tes_shader
 struct svga_compute_shader
 {
    struct svga_shader base;
+   unsigned shared_mem_size;
 };
 
 
@@ -364,8 +454,7 @@ static inline boolean
 svga_compile_keys_equal(const struct svga_compile_key *a,
                         const struct svga_compile_key *b)
 {
-   unsigned key_size =
-      (const char *) &a->tex[a->num_textures] - (const char *) a;
+   unsigned key_size = sizeof(*a);
 
    return memcmp(a, b, key_size) == 0;
 }
@@ -398,6 +487,18 @@ svga_search_shader_key(const struct svga_shader *shader,
 struct svga_shader *
 svga_search_shader_token_key(struct svga_shader *shader,
                              const struct svga_token_key *key);
+
+struct svga_shader *
+svga_create_shader(struct pipe_context *pipe,
+                   const struct pipe_shader_state *templ,
+                   enum pipe_shader_type stage,
+                   unsigned len);
+
+enum pipe_error
+svga_compile_shader(struct svga_context *svga,
+                    struct svga_shader *shader,
+                    const struct svga_compile_key *key,
+                    struct svga_shader_variant **out_variant);
 
 enum pipe_error
 svga_define_shader(struct svga_context *svga,
@@ -515,5 +616,20 @@ svga_is_using_flat_shading(const struct svga_context *svga)
          svga_fs_variant(svga->state.hw_draw.fs)->uses_flat_interp : FALSE;
 }
 
+struct svga_shader_variant *
+svga_get_compiled_dummy_vertex_shader(struct svga_context *svga,
+                                      struct svga_shader *shader,
+                                      const struct svga_compile_key *key);
+
+
+struct svga_shader_variant *
+svga_get_compiled_dummy_fragment_shader(struct svga_context *svga,
+                                        struct svga_shader *shader,
+                                        const struct svga_compile_key *key);
+
+struct svga_shader_variant *
+svga_get_compiled_dummy_geometry_shader(struct svga_context *svga,
+                                        struct svga_shader *shader,
+                                        const struct svga_compile_key *key);
 
 #endif /* SVGA_SHADER_H */

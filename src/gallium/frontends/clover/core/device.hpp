@@ -28,7 +28,7 @@
 
 #include "core/object.hpp"
 #include "core/format.hpp"
-#include "core/module.hpp"
+#include "core/binary.hpp"
 #include "util/lazy.hpp"
 #include "pipe-loader/pipe_loader.h"
 
@@ -57,8 +57,10 @@ namespace clover {
       size_t max_images_read() const;
       size_t max_images_write() const;
       size_t max_image_buffer_size() const;
-      cl_uint max_image_levels_2d() const;
-      cl_uint max_image_levels_3d() const;
+      // Use for 1D and 2D images.
+      cl_uint max_image_size() const;
+      // Use for 3D images.
+      cl_uint max_image_size_3d() const;
       size_t max_image_array_number() const;
       cl_uint max_samplers() const;
       cl_ulong max_mem_global() const;
@@ -93,7 +95,7 @@ namespace clover {
       bool supports_ir(enum pipe_shader_ir ir) const;
       std::string supported_extensions_as_string() const;
       cl_version device_version() const;
-      cl_version device_clc_version() const;
+      cl_version device_clc_version(bool api = false) const;
       std::vector<cl_name_version> opencl_c_all_versions() const;
       std::vector<cl_name_version> supported_extensions() const;
       std::vector<cl_name_version> supported_il_versions() const;
@@ -104,7 +106,7 @@ namespace clover {
       friend class root_resource;
       friend class hard_event;
       friend std::set<cl_image_format>
-      supported_formats(const context &, cl_mem_object_type);
+      supported_formats(const context &, cl_mem_object_type, cl_mem_flags flags);
       const void *get_compiler_options(enum pipe_shader_ir ir) const;
 
       clover::platform &platform;

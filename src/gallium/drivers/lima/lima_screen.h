@@ -29,7 +29,8 @@
 
 #include "util/slab.h"
 #include "util/list.h"
-#include "os/os_thread.h"
+#include "util/disk_cache.h"
+#include "util/u_thread.h"
 
 #include "pipe/p_screen.h"
 
@@ -42,6 +43,9 @@
 #define LIMA_DEBUG_NO_TILING      (1 << 6)
 #define LIMA_DEBUG_NO_GROW_HEAP   (1 << 7)
 #define LIMA_DEBUG_SINGLE_JOB     (1 << 8)
+#define LIMA_DEBUG_PRECOMPILE     (1 << 9)
+#define LIMA_DEBUG_DISK_CACHE     (1 << 10)
+#define LIMA_DEBUG_NO_BLIT        (1 << 11)
 
 extern uint32_t lima_debug;
 extern int lima_ctx_num_plb;
@@ -59,9 +63,6 @@ struct ra_regs;
 struct lima_screen {
    struct pipe_screen base;
    struct renderonly *ro;
-
-   int refcnt;
-   void *winsys_priv;
 
    int fd;
    int gpu_type;
@@ -89,6 +90,8 @@ struct lima_screen {
    #define pp_buffer_size            0x1000
 
    bool has_growable_heap_buffer;
+
+   struct disk_cache *disk_cache;
 };
 
 static inline struct lima_screen *
@@ -98,6 +101,7 @@ lima_screen(struct pipe_screen *pscreen)
 }
 
 struct pipe_screen *
-lima_screen_create(int fd, struct renderonly *ro);
+lima_screen_create(int fd, const struct pipe_screen_config *config,
+                   struct renderonly *ro);
 
 #endif

@@ -31,12 +31,11 @@
 
 #include <stdio.h>
 #include <stddef.h>
-#include "main/glheader.h"
+#include "util/glheader.h"
 #include "main/context.h"
 #include "main/blend.h"
 
 #include "main/macros.h"
-#include "main/mtypes.h"
 #include "main/fbobject.h"
 #include "prog_statevars.h"
 #include "prog_parameter.h"
@@ -129,6 +128,16 @@ fetch_state(struct gl_context *ctx, const gl_state_index16 state[],
              state[2] * sizeof(float));
       return;
    }
+   case STATE_LIGHT_ATTENUATION_ARRAY: {
+      const unsigned first = state[1];
+      const unsigned num_lights = state[2];
+      for (unsigned i = 0; i < num_lights; i++) {
+         COPY_4V(value,
+                 &ctx->Light.LightSource[first + i].ConstantAttenuation);
+         value += 4;
+      }
+      return;
+   }
    case STATE_LIGHTMODEL_AMBIENT:
       COPY_4V(value, ctx->Light.Model.Ambient);
       return;
@@ -178,6 +187,84 @@ fetch_state(struct gl_context *ctx, const gl_state_index16 state[],
          value[3] = ctx->Light.Material.Attrib[index][3];
          return;
       }
+   case STATE_LIGHTPROD_ARRAY_FRONT: {
+      const unsigned first_light = state[1];
+      const unsigned num_lights = state[2];
+
+      for (unsigned i = 0; i < num_lights; i++) {
+         unsigned light = first_light + i;
+
+         for (unsigned attrib = MAT_ATTRIB_FRONT_AMBIENT;
+              attrib <= MAT_ATTRIB_FRONT_SPECULAR; attrib += 2) {
+            for (int chan = 0; chan < 3; chan++) {
+               /* We want offset to access out of bounds into the following
+                * Diffuse and Specular fields. This is guaranteed to work
+                * because STATE_LIGHT and STATE_LIGHT_ATTRIBS also rely
+                * on this memory layout.
+                */
+               unsigned offset = (attrib / 2) * 4 + chan;
+               *value++ =
+                  (&ctx->Light.LightSource[light].Ambient[0])[offset] *
+                  ctx->Light.Material.Attrib[attrib][chan];
+            }
+            /* [3] = material alpha */
+            *value++ = ctx->Light.Material.Attrib[attrib][3];
+         }
+      }
+      return;
+   }
+   case STATE_LIGHTPROD_ARRAY_BACK: {
+      const unsigned first_light = state[1];
+      const unsigned num_lights = state[2];
+
+      for (unsigned i = 0; i < num_lights; i++) {
+         unsigned light = first_light + i;
+
+         for (unsigned attrib = MAT_ATTRIB_BACK_AMBIENT;
+              attrib <= MAT_ATTRIB_BACK_SPECULAR; attrib += 2) {
+            for (int chan = 0; chan < 3; chan++) {
+               /* We want offset to access out of bounds into the following
+                * Diffuse and Specular fields. This is guaranteed to work
+                * because STATE_LIGHT and STATE_LIGHT_ATTRIBS also rely
+                * on this memory layout.
+                */
+               unsigned offset = (attrib / 2) * 4 + chan;
+               *value++ =
+                  (&ctx->Light.LightSource[light].Ambient[0])[offset] *
+                  ctx->Light.Material.Attrib[attrib][chan];
+            }
+            /* [3] = material alpha */
+            *value++ = ctx->Light.Material.Attrib[attrib][3];
+         }
+      }
+      return;
+   }
+   case STATE_LIGHTPROD_ARRAY_TWOSIDE: {
+      const unsigned first_light = state[1];
+      const unsigned num_lights = state[2];
+
+      for (unsigned i = 0; i < num_lights; i++) {
+         unsigned light = first_light + i;
+
+         for (unsigned attrib = MAT_ATTRIB_FRONT_AMBIENT;
+              attrib <= MAT_ATTRIB_BACK_SPECULAR; attrib++) {
+            for (int chan = 0; chan < 3; chan++) {
+               /* We want offset to access out of bounds into the following
+                * Diffuse and Specular fields. This is guaranteed to work
+                * because STATE_LIGHT and STATE_LIGHT_ATTRIBS also rely
+                * on this memory layout.
+                */
+               unsigned offset = (attrib / 2) * 4 + chan;
+               *value++ =
+                  (&ctx->Light.LightSource[light].Ambient[0])[offset] *
+                  ctx->Light.Material.Attrib[attrib][chan];
+            }
+            /* [3] = material alpha */
+            *value++ = ctx->Light.Material.Attrib[attrib][3];
+         }
+      }
+      return;
+   }
    case STATE_TEXGEN:
       {
          /* state[1] is the texture unit */
@@ -275,7 +362,8 @@ fetch_state(struct gl_context *ctx, const gl_state_index16 state[],
       return;
    }
    case STATE_PROJECTION_MATRIX_INVERSE: {
-      const GLmatrix *matrix = ctx->ProjectionMatrixStack.Top;
+      GLmatrix *matrix = ctx->ProjectionMatrixStack.Top;
+      _math_matrix_analyse(matrix); /* make sure the inverse is up to date */
       copy_matrix(value, matrix->inv, state[2], state[3]);
       return;
    }
@@ -285,7 +373,8 @@ fetch_state(struct gl_context *ctx, const gl_state_index16 state[],
       return;
    }
    case STATE_PROJECTION_MATRIX_INVTRANS: {
-      const GLmatrix *matrix = ctx->ProjectionMatrixStack.Top;
+      GLmatrix *matrix = ctx->ProjectionMatrixStack.Top;
+      _math_matrix_analyse(matrix); /* make sure the inverse is up to date */
       copy_matrix_transposed(value, matrix->inv, state[2], state[3]);
       return;
    }
@@ -295,7 +384,8 @@ fetch_state(struct gl_context *ctx, const gl_state_index16 state[],
       return;
    }
    case STATE_MVP_MATRIX_INVERSE: {
-      const GLmatrix *matrix = &ctx->_ModelProjectMatrix;
+      GLmatrix *matrix = &ctx->_ModelProjectMatrix;
+      _math_matrix_analyse(matrix); /* make sure the inverse is up to date */
       copy_matrix(value, matrix->inv, state[2], state[3]);
       return;
    }
@@ -305,7 +395,8 @@ fetch_state(struct gl_context *ctx, const gl_state_index16 state[],
       return;
    }
    case STATE_MVP_MATRIX_INVTRANS: {
-      const GLmatrix *matrix = &ctx->_ModelProjectMatrix;
+      GLmatrix *matrix = &ctx->_ModelProjectMatrix;
+      _math_matrix_analyse(matrix); /* make sure the inverse is up to date */
       copy_matrix_transposed(value, matrix->inv, state[2], state[3]);
       return;
    }
@@ -561,6 +652,16 @@ fetch_state(struct gl_context *ctx, const gl_state_index16 state[],
       }
       return;
 
+   case STATE_LIGHT_POSITION_ARRAY: {
+      const unsigned first = state[1];
+      const unsigned num_lights = state[2];
+      for (unsigned i = 0; i < num_lights; i++) {
+         COPY_4V(value, ctx->Light.Light[first + i]._Position);
+         value += 4;
+      }
+      return;
+   }
+
    case STATE_LIGHT_POSITION_NORMALIZED:
       {
          const GLuint ln = (GLuint) state[1];
@@ -570,6 +671,19 @@ fetch_state(struct gl_context *ctx, const gl_state_index16 state[],
          COPY_4V(value, p);
       }
       return;
+
+   case STATE_LIGHT_POSITION_NORMALIZED_ARRAY: {
+      const unsigned first = state[1];
+      const unsigned num_lights = state[2];
+      for (unsigned i = 0; i < num_lights; i++) {
+         float p[4];
+         COPY_4V(p, ctx->Light.Light[first + i]._Position);
+         NORMALIZE_3FV(p);
+         COPY_4V(value, p);
+         value += 4;
+      }
+      return;
+   }
 
    case STATE_LIGHT_HALF_VECTOR:
       {
@@ -665,6 +779,13 @@ fetch_state(struct gl_context *ctx, const gl_state_index16 state[],
          COPY_4V(value, ctx->Transform._ClipUserPlane[plane]);
       }
       return;
+
+   case STATE_ATOMIC_COUNTER_OFFSET:
+      {
+         const GLuint counter = (GLuint) state[1];
+         val[0].i = ctx->AtomicBufferBindings[counter].Offset % ctx->Const.ShaderStorageBufferOffsetAlignment;
+      }
+      return;
    }
 }
 
@@ -690,19 +811,26 @@ _mesa_program_state_flags(const gl_state_index16 state[STATE_LENGTH])
 {
    switch (state[0]) {
    case STATE_MATERIAL:
+      return _NEW_MATERIAL;
+
    case STATE_LIGHTPROD:
+   case STATE_LIGHTPROD_ARRAY_FRONT:
+   case STATE_LIGHTPROD_ARRAY_BACK:
+   case STATE_LIGHTPROD_ARRAY_TWOSIDE:
    case STATE_LIGHTMODEL_SCENECOLOR:
-      /* these can be effected by glColor when colormaterial mode is used */
-      return _NEW_LIGHT | _NEW_CURRENT_ATTRIB;
+      return _NEW_LIGHT_CONSTANTS | _NEW_MATERIAL;
 
    case STATE_LIGHT:
    case STATE_LIGHT_ARRAY:
+   case STATE_LIGHT_ATTENUATION_ARRAY:
    case STATE_LIGHTMODEL_AMBIENT:
    case STATE_LIGHT_SPOT_DIR_NORMALIZED:
    case STATE_LIGHT_POSITION:
+   case STATE_LIGHT_POSITION_ARRAY:
    case STATE_LIGHT_POSITION_NORMALIZED:
+   case STATE_LIGHT_POSITION_NORMALIZED_ARRAY:
    case STATE_LIGHT_HALF_VECTOR:
-      return _NEW_LIGHT;
+      return _NEW_LIGHT_CONSTANTS;
 
    case STATE_TEXGEN:
       return _NEW_TEXTURE_STATE;
@@ -775,7 +903,7 @@ _mesa_program_state_flags(const gl_state_index16 state[STATE_LENGTH])
    case STATE_CURRENT_ATTRIB:
       return _NEW_CURRENT_ATTRIB;
    case STATE_CURRENT_ATTRIB_MAYBE_VP_CLAMPED:
-      return _NEW_CURRENT_ATTRIB | _NEW_LIGHT | _NEW_BUFFERS;
+      return _NEW_CURRENT_ATTRIB | _NEW_LIGHT_STATE | _NEW_BUFFERS;
 
    case STATE_POINT_SIZE_CLAMPED:
       return _NEW_POINT | _NEW_MULTISAMPLE;
@@ -791,6 +919,12 @@ _mesa_program_state_flags(const gl_state_index16 state[STATE_LENGTH])
    case STATE_CLIP_INTERNAL:
       return _NEW_TRANSFORM | _NEW_PROJECTION;
 
+   /* Needs to return any nonzero value to trigger constant updating */
+   case STATE_ATOMIC_COUNTER_OFFSET:
+      return _NEW_PROGRAM_CONSTANTS;
+
+   case STATE_TCS_PATCH_VERTICES_IN:
+   case STATE_TES_PATCH_VERTICES_IN:
    case STATE_INTERNAL_DRIVER:
       return 0; /* internal driver state */
 
@@ -831,6 +965,9 @@ append_token(char *dst, gl_state_index k)
    case STATE_LIGHT_ARRAY:
       append(dst, "light.array");
       break;
+   case STATE_LIGHT_ATTENUATION_ARRAY:
+      append(dst, "light.attenuation");
+      break;
    case STATE_LIGHTMODEL_AMBIENT:
       append(dst, "lightmodel.ambient");
       break;
@@ -838,6 +975,15 @@ append_token(char *dst, gl_state_index k)
       break;
    case STATE_LIGHTPROD:
       append(dst, "lightprod");
+      break;
+   case STATE_LIGHTPROD_ARRAY_FRONT:
+      append(dst, "lightprod.array.front");
+      break;
+   case STATE_LIGHTPROD_ARRAY_BACK:
+      append(dst, "lightprod.array.back");
+      break;
+   case STATE_LIGHTPROD_ARRAY_TWOSIDE:
+      append(dst, "lightprod.array.twoside");
       break;
    case STATE_TEXGEN:
       append(dst, "texgen");
@@ -1019,10 +1165,16 @@ append_token(char *dst, gl_state_index k)
       append(dst, "lightSpotDirNormalized");
       break;
    case STATE_LIGHT_POSITION:
-      append(dst, "lightPosition");
+      append(dst, "light.position");
+      break;
+   case STATE_LIGHT_POSITION_ARRAY:
+      append(dst, "light.position.array");
       break;
    case STATE_LIGHT_POSITION_NORMALIZED:
       append(dst, "light.position.normalized");
+      break;
+   case STATE_LIGHT_POSITION_NORMALIZED_ARRAY:
+      append(dst, "light.position.normalized.array");
       break;
    case STATE_LIGHT_HALF_VECTOR:
       append(dst, "lightHalfVector");
@@ -1050,6 +1202,9 @@ append_token(char *dst, gl_state_index k)
       break;
    case STATE_CLIP_INTERNAL:
       append(dst, "clipInternal");
+      break;
+   case STATE_ATOMIC_COUNTER_OFFSET:
+      append(dst, "counterOffset");
       break;
    default:
       /* probably STATE_INTERNAL_DRIVER+i (driver private state) */
@@ -1151,10 +1306,16 @@ _mesa_program_state_string(const gl_state_index16 state[STATE_LENGTH])
       }
       break;
    case STATE_LIGHT_ARRAY:
+   case STATE_LIGHT_ATTENUATION_ARRAY:
    case STATE_FRAGMENT_PROGRAM_ENV_ARRAY:
    case STATE_FRAGMENT_PROGRAM_LOCAL_ARRAY:
    case STATE_VERTEX_PROGRAM_ENV_ARRAY:
    case STATE_VERTEX_PROGRAM_LOCAL_ARRAY:
+   case STATE_LIGHTPROD_ARRAY_FRONT:
+   case STATE_LIGHTPROD_ARRAY_BACK:
+   case STATE_LIGHTPROD_ARRAY_TWOSIDE:
+   case STATE_LIGHT_POSITION_ARRAY:
+   case STATE_LIGHT_POSITION_NORMALIZED_ARRAY:
       sprintf(tmp, "[%d..%d]", state[1], state[1] + state[2] - 1);
       append(str, tmp);
       break;
@@ -1170,6 +1331,7 @@ _mesa_program_state_string(const gl_state_index16 state[STATE_LENGTH])
    case STATE_LIGHT_POSITION_NORMALIZED:
    case STATE_LIGHT_HALF_VECTOR:
    case STATE_CLIP_INTERNAL:
+   case STATE_ATOMIC_COUNTER_OFFSET:
       append_index(str, state[1], false);
       break;
    case STATE_POINT_SIZE:
@@ -1186,6 +1348,7 @@ _mesa_program_state_string(const gl_state_index16 state[STATE_LENGTH])
    case STATE_PT_BIAS:
    case STATE_FB_SIZE:
    case STATE_FB_WPOS_Y_TRANSFORM:
+   case STATE_FB_PNTC_Y_TRANSFORM:
    case STATE_TCS_PATCH_VERTICES_IN:
    case STATE_TES_PATCH_VERTICES_IN:
    case STATE_ADVANCED_BLENDING_MODE:
@@ -1195,7 +1358,7 @@ _mesa_program_state_string(const gl_state_index16 state[STATE_LENGTH])
       append(str, "not_state");
       break;
    default:
-      _mesa_problem(NULL, "Invalid state in _mesa_program_state_string");
+      _mesa_problem(NULL, "Invalid state in _mesa_program_state_string: %d", state[0]);
       break;
    }
 
@@ -1360,6 +1523,40 @@ _mesa_optimize_state_parameters(struct gl_constants *consts,
                list->Parameters[first_param].ValueOffset;
 
             param_diff = last_param - first_param;
+            break; /* all done */
+         }
+
+         /* We were not able to convert light attributes to STATE_LIGHT_ARRAY.
+          * Another occuring pattern is light attentuation vectors placed back
+          * to back. Find them.
+          */
+         if (list->Parameters[first_param].StateIndexes[2] == STATE_ATTENUATION) {
+            for (int i = first_param + 1; i < (int)list->NumParameters; i++) {
+               if (list->Parameters[i].StateIndexes[0] == STATE_LIGHT &&
+                   /* Consecutive light: */
+                   list->Parameters[i].StateIndexes[1] ==
+                   list->Parameters[i - 1].StateIndexes[1] + 1 &&
+                   /* Same attribute: */
+                   list->Parameters[i].StateIndexes[2] ==
+                   list->Parameters[i - 1].StateIndexes[2]) {
+                  last_param = i;
+                  continue;
+               }
+               break; /* The adjacent state var is incompatible. */
+            }
+            if (last_param > first_param) {
+               param_diff = last_param - first_param;
+
+               /* Convert the state var to STATE_LIGHT_ATTENUATION_ARRAY. */
+               list->Parameters[first_param].StateIndexes[0] =
+                  STATE_LIGHT_ATTENUATION_ARRAY;
+               /* Keep the light index the same. */
+               /* Set the number of lights. */
+               unsigned size = param_diff + 1;
+               list->Parameters[first_param].StateIndexes[2] = size;
+               list->Parameters[first_param].Size = size * 4;
+               break; /* all done */
+            }
          }
          break;
 
@@ -1402,6 +1599,107 @@ _mesa_optimize_state_parameters(struct gl_constants *consts,
             list->Parameters[first_param].Size = size * 4;
          }
          break;
+
+      case STATE_LIGHTPROD: {
+         if (list->Parameters[first_param].Size != 4)
+            break;
+
+         gl_state_index16 state = STATE_NOT_STATE_VAR;
+         unsigned num_lights = 0;
+
+         for (unsigned state_iter = STATE_LIGHTPROD_ARRAY_FRONT;
+              state_iter <= STATE_LIGHTPROD_ARRAY_TWOSIDE; state_iter++) {
+            unsigned num_attribs, base_attrib, attrib_incr;
+
+            if (state_iter == STATE_LIGHTPROD_ARRAY_FRONT)  {
+               num_attribs = 3;
+               base_attrib = MAT_ATTRIB_FRONT_AMBIENT;
+               attrib_incr = 2;
+            } else if (state_iter == STATE_LIGHTPROD_ARRAY_BACK) {
+               num_attribs = 3;
+               base_attrib = MAT_ATTRIB_BACK_AMBIENT;
+               attrib_incr = 2;
+            } else if (state_iter == STATE_LIGHTPROD_ARRAY_TWOSIDE) {
+               num_attribs = 6;
+               base_attrib = MAT_ATTRIB_FRONT_AMBIENT;
+               attrib_incr = 1;
+            }
+
+            /* Find all attributes for one light. */
+            while (first_param + (num_lights + 1) * num_attribs <=
+                   list->NumParameters &&
+                   (state == STATE_NOT_STATE_VAR || state == state_iter)) {
+               unsigned i = 0, base = first_param + num_lights * num_attribs;
+
+               /* Consecutive light indices: */
+               if (list->Parameters[first_param].StateIndexes[1] + num_lights ==
+                   list->Parameters[base].StateIndexes[1]) {
+                  for (i = 0; i < num_attribs; i++) {
+                     if (list->Parameters[base + i].StateIndexes[0] ==
+                         STATE_LIGHTPROD &&
+                         list->Parameters[base + i].Size == 4 &&
+                         /* Equal light indices: */
+                         list->Parameters[base + i].StateIndexes[1] ==
+                         list->Parameters[base + 0].StateIndexes[1] &&
+                         /* Consecutive attributes: */
+                         list->Parameters[base + i].StateIndexes[2] ==
+                         base_attrib + i * attrib_incr)
+                        continue;
+                     break;
+                  }
+               }
+               if (i == num_attribs) {
+                  /* Accept all parameters for merging. */
+                  state = state_iter;
+                  last_param = base + num_attribs - 1;
+                  num_lights++;
+               } else {
+                  break;
+               }
+            }
+         }
+
+         if (last_param > first_param) {
+            param_diff = last_param - first_param;
+
+            list->Parameters[first_param].StateIndexes[0] = state;
+            list->Parameters[first_param].StateIndexes[2] = num_lights;
+            list->Parameters[first_param].Size = (param_diff + 1) * 4;
+         }
+         break;
+      }
+
+      case STATE_LIGHT_POSITION:
+      case STATE_LIGHT_POSITION_NORMALIZED:
+         if (list->Parameters[first_param].Size != 4)
+            break;
+
+         for (int i = first_param + 1; i < (int)list->NumParameters; i++) {
+            if (list->Parameters[i].StateIndexes[0] ==
+                list->Parameters[i - 1].StateIndexes[0] &&
+                /* Consecutive light: */
+                list->Parameters[i].StateIndexes[1] ==
+                list->Parameters[i - 1].StateIndexes[1] + 1) {
+               last_param = i;
+               continue;
+            }
+            break; /* The adjacent state var is incompatible. */
+         }
+         if (last_param > first_param) {
+            param_diff = last_param - first_param;
+
+            /* Convert the state var to STATE_LIGHT_POSITION_*ARRAY. */
+            STATIC_ASSERT(STATE_LIGHT_POSITION + 1 ==
+                          STATE_LIGHT_POSITION_ARRAY);
+            STATIC_ASSERT(STATE_LIGHT_POSITION_NORMALIZED + 1 ==
+                          STATE_LIGHT_POSITION_NORMALIZED_ARRAY);
+            list->Parameters[first_param].StateIndexes[0]++;
+            /* Keep the light index the same. */
+            unsigned size = param_diff + 1;
+            /* Set the number of lights. */
+            list->Parameters[first_param].StateIndexes[2] = size;
+            list->Parameters[first_param].Size = size * 4;
+         }
       }
 
       if (param_diff) {

@@ -43,6 +43,7 @@ struct virgl_hw_res {
 static struct virgl_hw_res *
 fake_resource_create(struct virgl_winsys *vws,
                      enum pipe_texture_target target,
+                     const void *map_front_private,
                      uint32_t format, uint32_t bind,
                      uint32_t width, uint32_t height,
                      uint32_t depth, uint32_t array_size,
@@ -184,10 +185,12 @@ TEST_P(VirglStagingMgrWithAlignment,
    release_resources(out_resource, num_resources);
 }
 
-INSTANTIATE_TEST_CASE_P(WithAlignment,
-                        VirglStagingMgrWithAlignment,
-                        ::testing::Values(1, 16),
-                        testing::PrintToStringParamName());
+INSTANTIATE_TEST_SUITE_P(
+   WithAlignment,
+   VirglStagingMgrWithAlignment,
+   ::testing::Values(1, 16),
+   testing::PrintToStringParamName()
+);
 
 TEST_F(VirglStagingMgr,
        non_fitting_allocation_reallocates_resource)
@@ -316,6 +319,7 @@ TEST_F(VirglStagingMgr, releases_resource_on_destruction)
 static struct virgl_hw_res *
 failing_resource_create(struct virgl_winsys *vws,
                         enum pipe_texture_target target,
+                        const void *map_front_private,
                         uint32_t format, uint32_t bind,
                         uint32_t width, uint32_t height,
                         uint32_t depth, uint32_t array_size,

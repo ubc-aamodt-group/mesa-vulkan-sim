@@ -54,7 +54,6 @@ extern "C" {
 typedef enum
 {
    PROGRAM_TEMPORARY,   /**< machine->Temporary[] */
-   PROGRAM_ARRAY,       /**< Arrays & Matrixes */
    PROGRAM_INPUT,       /**< machine->Inputs[] */
    PROGRAM_OUTPUT,      /**< machine->Outputs[] */
    PROGRAM_STATE_VAR,   /**< gl_program->Parameters[] */
@@ -62,14 +61,8 @@ typedef enum
    PROGRAM_UNIFORM,     /**< gl_program->Parameters[] */
    PROGRAM_WRITE_ONLY,  /**< A dummy, write-only register */
    PROGRAM_ADDRESS,     /**< machine->AddressReg */
-   PROGRAM_SAMPLER,     /**< for shader samplers, compile-time only */
    PROGRAM_SYSTEM_VALUE,/**< InstanceId, PrimitiveID, etc. */
    PROGRAM_UNDEFINED,   /**< Invalid/TBD value */
-   PROGRAM_IMMEDIATE,   /**< Immediate value, used by TGSI */
-   PROGRAM_BUFFER,      /**< for shader buffers, compile-time only */
-   PROGRAM_MEMORY,      /**< for shared, global and local memory */
-   PROGRAM_IMAGE,       /**< for shader images, compile-time only */
-   PROGRAM_HW_ATOMIC,   /**< for hw atomic counters, compile-time only */
    PROGRAM_FILE_MAX
 } gl_register_file;
 
@@ -185,12 +178,12 @@ _mesa_add_parameter(struct gl_program_parameter_list *paramList,
 
 extern GLint
 _mesa_add_typed_unnamed_constant(struct gl_program_parameter_list *paramList,
-                           const gl_constant_value values[4], GLuint size,
+                           const gl_constant_value *values, GLuint size,
                            GLenum datatype, GLuint *swizzleOut);
 
 static inline GLint
 _mesa_add_unnamed_constant(struct gl_program_parameter_list *paramList,
-                           const gl_constant_value values[4], GLuint size,
+                           const gl_constant_value *values, GLuint size,
                            GLuint *swizzleOut)
 {
    return _mesa_add_typed_unnamed_constant(paramList, values, size, GL_NONE,
@@ -204,7 +197,7 @@ _mesa_add_sized_state_reference(struct gl_program_parameter_list *paramList,
 
 extern GLint
 _mesa_add_state_reference(struct gl_program_parameter_list *paramList,
-                          const gl_state_index16 stateTokens[]);
+                          const gl_state_index16 stateTokens[STATE_LENGTH]);
 
 
 static inline GLint

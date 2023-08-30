@@ -113,7 +113,7 @@ dri2_drm_config_is_compatible(struct dri2_egl_display *dri2_dpy,
 
    for (i = 0; i < dri2_dpy->gbm_dri->num_visuals; i++) {
       visual = &dri2_dpy->gbm_dri->visual_table[i];
-      if (visual->gbm_format == surface->format)
+      if (visual->gbm_format == surface->v0.format)
          break;
    }
 
@@ -173,8 +173,8 @@ dri2_drm_create_window_surface(_EGLDisplay *disp, _EGLConfig *conf,
 
    surf = gbm_dri_surface(surface);
    dri2_surf->gbm_surf = surf;
-   dri2_surf->base.Width =  surf->base.width;
-   dri2_surf->base.Height = surf->base.height;
+   dri2_surf->base.Width =  surf->base.v0.width;
+   dri2_surf->base.Height = surf->base.v0.height;
    surf->dri_private = dri2_surf;
 
    if (!dri2_create_drawable(dri2_dpy, config, dri2_surf, dri2_surf->gbm_surf))
@@ -244,21 +244,21 @@ get_back_bo(struct dri2_egl_surface *dri2_surf)
    if (dri2_surf->back == NULL)
       return -1;
    if (dri2_surf->back->bo == NULL) {
-      if (surf->base.modifiers)
+      if (surf->base.v0.modifiers)
          dri2_surf->back->bo = gbm_bo_create_with_modifiers(&dri2_dpy->gbm_dri->base,
-                                                            surf->base.width,
-                                                            surf->base.height,
-                                                            surf->base.format,
-                                                            surf->base.modifiers,
-                                                            surf->base.count);
+                                                            surf->base.v0.width,
+                                                            surf->base.v0.height,
+                                                            surf->base.v0.format,
+                                                            surf->base.v0.modifiers,
+                                                            surf->base.v0.count);
       else {
-         unsigned flags = surf->base.flags;
+         unsigned flags = surf->base.v0.flags;
          if (dri2_surf->base.ProtectedContent)
             flags |= GBM_BO_USE_PROTECTED;
          dri2_surf->back->bo = gbm_bo_create(&dri2_dpy->gbm_dri->base,
-                                             surf->base.width,
-                                             surf->base.height,
-                                             surf->base.format,
+                                             surf->base.v0.width,
+                                             surf->base.v0.height,
+                                             surf->base.v0.format,
                                              flags);
       }
 
@@ -283,8 +283,10 @@ get_swrast_front_bo(struct dri2_egl_surface *dri2_surf)
 
    if (dri2_surf->current->bo == NULL)
       dri2_surf->current->bo = gbm_bo_create(&dri2_dpy->gbm_dri->base,
-                                             surf->base.width, surf->base.height,
-                                             surf->base.format, surf->base.flags);
+                                             surf->base.v0.width,
+                                             surf->base.v0.height,
+                                             surf->base.v0.format,
+                                             surf->base.v0.flags);
    if (dri2_surf->current->bo == NULL)
       return -1;
 
@@ -505,7 +507,7 @@ dri2_drm_authenticate(_EGLDisplay *disp, uint32_t id)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
 
-   return drmAuthMagic(dri2_dpy->fd, id);
+   return drmAuthMagic(dri2_dpy->fd_render_gpu, id);
 }
 
 static void
@@ -545,7 +547,7 @@ swrast_put_image2(__DRIdrawable *driDrawable,
    if (gbm_dri_bo_map_dumb(bo) == NULL)
       return;
 
-   internal_stride = bo->base.stride;
+   internal_stride = bo->base.v0.stride;
 
    dst = bo->map + x_bytes + (y * internal_stride);
    src = data;
@@ -587,7 +589,7 @@ swrast_get_image(__DRIdrawable *driDrawable,
    x_bytes = x * (bpp >> 3);
    width_bytes = width * (bpp >> 3);
 
-   internal_stride = bo->base.stride;
+   internal_stride = bo->base.v0.stride;
    stride = width_bytes;
 
    if (gbm_dri_bo_map_dumb(bo) == NULL)
@@ -689,7 +691,8 @@ dri2_initialize_drm(_EGLDisplay *disp)
    if (!dri2_dpy)
       return _eglError(EGL_BAD_ALLOC, "eglInitialize");
 
-   dri2_dpy->fd = -1;
+   dri2_dpy->fd_render_gpu = -1;
+   dri2_dpy->fd_display_gpu = -1;
    disp->DriverData = (void *) dri2_dpy;
 
    gbm = disp->PlatformDisplay;
@@ -697,20 +700,21 @@ dri2_initialize_drm(_EGLDisplay *disp)
       char buf[64];
       int n = snprintf(buf, sizeof(buf), DRM_DEV_NAME, DRM_DIR_NAME, 0);
       if (n != -1 && n < sizeof(buf))
-         dri2_dpy->fd = loader_open_device(buf);
-      gbm = gbm_create_device(dri2_dpy->fd);
+         dri2_dpy->fd_render_gpu = loader_open_device(buf);
+      gbm = gbm_create_device(dri2_dpy->fd_render_gpu);
       if (gbm == NULL) {
          err = "DRI2: failed to create gbm device";
          goto cleanup;
       }
       dri2_dpy->own_device = true;
    } else {
-      dri2_dpy->fd = os_dupfd_cloexec(gbm_device_get_fd(gbm));
-      if (dri2_dpy->fd < 0) {
+      dri2_dpy->fd_render_gpu = os_dupfd_cloexec(gbm_device_get_fd(gbm));
+      if (dri2_dpy->fd_render_gpu < 0) {
          err = "DRI2: failed to fcntl() existing gbm device";
          goto cleanup;
       }
    }
+   dri2_dpy->fd_display_gpu = dri2_dpy->fd_render_gpu;
    dri2_dpy->gbm_dri = gbm_dri_device(gbm);
 
    if (strcmp(gbm_device_get_backend_name(gbm), "drm") != 0) {
@@ -718,7 +722,7 @@ dri2_initialize_drm(_EGLDisplay *disp)
       goto cleanup;
    }
 
-   dev = _eglAddDevice(dri2_dpy->fd, disp->Options.ForceSoftware);
+   dev = _eglAddDevice(dri2_dpy->fd_render_gpu, dri2_dpy->gbm_dri->software);
    if (!dev) {
       err = "DRI2: failed to find EGLDevice";
       goto cleanup;
@@ -727,7 +731,7 @@ dri2_initialize_drm(_EGLDisplay *disp)
    disp->Device = dev;
 
    dri2_dpy->driver_name = strdup(dri2_dpy->gbm_dri->driver_name);
-   dri2_dpy->is_render_node = drmGetNodeTypeFromFd(dri2_dpy->fd) == DRM_NODE_RENDER;
+   dri2_dpy->is_render_node = drmGetNodeTypeFromFd(dri2_dpy->fd_render_gpu) == DRM_NODE_RENDER;
 
    /* render nodes cannot use Gem names, and thus do not support
     * the __DRI_DRI2_LOADER extension */
@@ -743,13 +747,16 @@ dri2_initialize_drm(_EGLDisplay *disp)
       }
    }
 
-   dri2_dpy->dri_screen = dri2_dpy->gbm_dri->screen;
+   dri2_dpy->dri_screen_render_gpu = dri2_dpy->gbm_dri->screen;
    dri2_dpy->core = dri2_dpy->gbm_dri->core;
    dri2_dpy->dri2 = dri2_dpy->gbm_dri->dri2;
    dri2_dpy->swrast = dri2_dpy->gbm_dri->swrast;
+   dri2_dpy->kopper = dri2_dpy->gbm_dri->kopper;
    dri2_dpy->driver_configs = dri2_dpy->gbm_dri->driver_configs;
 
    dri2_dpy->gbm_dri->lookup_image = dri2_lookup_egl_image;
+   dri2_dpy->gbm_dri->validate_image = dri2_validate_egl_image;
+   dri2_dpy->gbm_dri->lookup_image_validated = dri2_lookup_egl_image_validated;
    dri2_dpy->gbm_dri->lookup_user_data = disp;
 
    dri2_dpy->gbm_dri->get_buffers = dri2_drm_get_buffers;
@@ -759,9 +766,9 @@ dri2_initialize_drm(_EGLDisplay *disp)
    dri2_dpy->gbm_dri->swrast_put_image2 = swrast_put_image2;
    dri2_dpy->gbm_dri->swrast_get_image = swrast_get_image;
 
-   dri2_dpy->gbm_dri->base.surface_lock_front_buffer = lock_front_buffer;
-   dri2_dpy->gbm_dri->base.surface_release_buffer = release_buffer;
-   dri2_dpy->gbm_dri->base.surface_has_free_buffers = has_free_buffers;
+   dri2_dpy->gbm_dri->base.v0.surface_lock_front_buffer = lock_front_buffer;
+   dri2_dpy->gbm_dri->base.v0.surface_release_buffer = release_buffer;
+   dri2_dpy->gbm_dri->base.v0.surface_has_free_buffers = has_free_buffers;
 
    if (!dri2_setup_extensions(disp)) {
       err = "DRI2: failed to find required DRI extensions";
@@ -780,7 +787,7 @@ dri2_initialize_drm(_EGLDisplay *disp)
       disp->Extensions.EXT_buffer_age = EGL_TRUE;
 
 #ifdef HAVE_WAYLAND_PLATFORM
-   dri2_dpy->device_name = loader_get_device_name_for_fd(dri2_dpy->fd);
+   dri2_dpy->device_name = loader_get_device_name_for_fd(dri2_dpy->fd_render_gpu);
 #endif
    dri2_set_WL_bind_wayland_display(disp);
 

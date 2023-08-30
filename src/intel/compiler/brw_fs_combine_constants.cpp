@@ -46,44 +46,24 @@ static const bool debug = false;
  * replaced with a GRF source.
  */
 static bool
-could_coissue(const struct gen_device_info *devinfo, const fs_inst *inst)
+could_coissue(const struct intel_device_info *devinfo, const fs_inst *inst)
 {
-   if (devinfo->gen != 7)
+   assert(inst->opcode == BRW_OPCODE_MOV ||
+          inst->opcode == BRW_OPCODE_CMP ||
+          inst->opcode == BRW_OPCODE_ADD ||
+          inst->opcode == BRW_OPCODE_MUL);
+
+   if (devinfo->ver != 7)
       return false;
 
-   switch (inst->opcode) {
-   case BRW_OPCODE_MOV:
-   case BRW_OPCODE_CMP:
-   case BRW_OPCODE_ADD:
-   case BRW_OPCODE_MUL:
-      /* Only float instructions can coissue.  We don't have a great
-       * understanding of whether or not something like float(int(a) + int(b))
-       * would be considered float (based on the destination type) or integer
-       * (based on the source types), so we take the conservative choice of
-       * only promoting when both destination and source are float.
-       */
-      return inst->dst.type == BRW_REGISTER_TYPE_F &&
-             inst->src[0].type == BRW_REGISTER_TYPE_F;
-   default:
-      return false;
-   }
-}
-
-/**
- * Returns true for instructions that don't support immediate sources.
- */
-static bool
-must_promote_imm(const struct gen_device_info *devinfo, const fs_inst *inst)
-{
-   switch (inst->opcode) {
-   case SHADER_OPCODE_POW:
-      return devinfo->gen < 8;
-   case BRW_OPCODE_MAD:
-   case BRW_OPCODE_LRP:
-      return true;
-   default:
-      return false;
-   }
+   /* Only float instructions can coissue.  We don't have a great
+    * understanding of whether or not something like float(int(a) + int(b))
+    * would be considered float (based on the destination type) or integer
+    * (based on the source types), so we take the conservative choice of
+    * only promoting when both destination and source are float.
+    */
+   return inst->dst.type == BRW_REGISTER_TYPE_F &&
+          inst->src[0].type == BRW_REGISTER_TYPE_F;
 }
 
 /** A box for putting fs_regs in a linked list. */
@@ -211,7 +191,7 @@ compare(const void *_a, const void *_b)
 }
 
 static bool
-get_constant_value(const struct gen_device_info *devinfo,
+get_constant_value(const struct intel_device_info *devinfo,
                    const fs_inst *inst, uint32_t src_idx,
                    void *out, brw_reg_type *out_type)
 {
@@ -336,18 +316,150 @@ representable_as_hf(float f, uint16_t *hf)
 }
 
 static bool
-represent_src_as_imm(const struct gen_device_info *devinfo,
-                     fs_reg *src)
+representable_as_w(int d, int16_t *w)
 {
-   /* TODO : consider specific platforms also */
-   if (devinfo->gen == 12) {
-      uint16_t hf;
-      if (representable_as_hf(src->f, &hf)) {
-         *src = retype(brw_imm_uw(hf), BRW_REGISTER_TYPE_HF);
-         return true;
-      }
+   int res = ((d & 0xffff8000) + 0x8000) & 0xffff7fff;
+   if (!res) {
+      *w = d;
+      return true;
    }
+
    return false;
+}
+
+static bool
+representable_as_uw(unsigned ud, uint16_t *uw)
+{
+   if (!(ud & 0xffff0000)) {
+      *uw = ud;
+      return true;
+   }
+
+   return false;
+}
+
+static bool
+supports_src_as_imm(const struct intel_device_info *devinfo, const fs_inst *inst)
+{
+   if (devinfo->ver < 12)
+      return false;
+
+   switch (inst->opcode) {
+   case BRW_OPCODE_ADD3:
+      /* ADD3 only exists on Gfx12.5+. */
+      return true;
+
+   case BRW_OPCODE_MAD:
+      /* Integer types can always mix sizes. Floating point types can mix
+       * sizes on Gfx12. On Gfx12.5, floating point sources must all be HF or
+       * all be F.
+       */
+      return devinfo->verx10 < 125 || inst->src[0].type != BRW_REGISTER_TYPE_F;
+
+   default:
+      return false;
+   }
+}
+
+static bool
+can_promote_src_as_imm(const struct intel_device_info *devinfo, fs_inst *inst,
+                       unsigned src_idx)
+{
+   bool can_promote = false;
+
+   /* Experiment shows that we can only support src0 as immediate for MAD on
+    * Gfx12. ADD3 can use src0 or src2 in Gfx12.5, but constant propagation
+    * only propagates into src0. It's possible that src2 works for W or UW MAD
+    * on Gfx12.5.
+    */
+   if (src_idx != 0)
+      return false;
+
+   if (!supports_src_as_imm(devinfo, inst))
+      return false;
+
+   /* TODO - Fix the codepath below to use a bfloat16 immediate on XeHP,
+    *        since HF/F mixed mode has been removed from the hardware.
+    */
+   switch (inst->src[src_idx].type) {
+   case BRW_REGISTER_TYPE_F: {
+      uint16_t hf;
+      if (representable_as_hf(inst->src[src_idx].f, &hf)) {
+         inst->src[src_idx] = retype(brw_imm_uw(hf), BRW_REGISTER_TYPE_HF);
+         can_promote = true;
+      }
+      break;
+   }
+   case BRW_REGISTER_TYPE_D: {
+      int16_t w;
+      if (representable_as_w(inst->src[src_idx].d, &w)) {
+         inst->src[src_idx] = brw_imm_w(w);
+         can_promote = true;
+      }
+      break;
+   }
+   case BRW_REGISTER_TYPE_UD: {
+      uint16_t uw;
+      if (representable_as_uw(inst->src[src_idx].ud, &uw)) {
+         inst->src[src_idx] = brw_imm_uw(uw);
+         can_promote = true;
+      }
+      break;
+   }
+   case BRW_REGISTER_TYPE_W:
+   case BRW_REGISTER_TYPE_UW:
+   case BRW_REGISTER_TYPE_HF:
+      can_promote = true;
+      break;
+   default:
+      break;
+   }
+
+   return can_promote;
+}
+
+static void
+add_candidate_immediate(struct table *table, fs_inst *inst, unsigned ip,
+                        unsigned i,
+                        bool must_promote,
+                        const brw::idom_tree &idom, bblock_t *block,
+                        const struct intel_device_info *devinfo,
+                        void *const_ctx)
+{
+   char data[8];
+   brw_reg_type type;
+   if (!get_constant_value(devinfo, inst, i, data, &type))
+      return;
+
+   uint8_t size = type_sz(type);
+
+   struct imm *imm = find_imm(table, data, size);
+
+   if (imm) {
+      bblock_t *intersection = idom.intersect(block, imm->block);
+      if (intersection != imm->block)
+         imm->inst = NULL;
+      imm->block = intersection;
+      imm->uses->push_tail(link(const_ctx, &inst->src[i]));
+      imm->uses_by_coissue += int(!must_promote);
+      imm->must_promote = imm->must_promote || must_promote;
+      imm->last_use_ip = ip;
+      if (type == BRW_REGISTER_TYPE_HF)
+         imm->is_half_float = true;
+   } else {
+      imm = new_imm(table, const_ctx);
+      imm->block = block;
+      imm->inst = inst;
+      imm->uses = new(const_ctx) exec_list();
+      imm->uses->push_tail(link(const_ctx, &inst->src[i]));
+      memcpy(imm->bytes, data, size);
+      imm->size = size;
+      imm->is_half_float = type == BRW_REGISTER_TYPE_HF;
+      imm->uses_by_coissue = int(!must_promote);
+      imm->must_promote = must_promote;
+      imm->first_use_ip = ip;
+      imm->last_use_ip = ip;
+   }
 }
 
 bool
@@ -370,55 +482,64 @@ fs_visitor::opt_combine_constants()
    foreach_block_and_inst(block, fs_inst, inst, cfg) {
       ip++;
 
-      if (!could_coissue(devinfo, inst) && !must_promote_imm(devinfo, inst))
-         continue;
+      switch (inst->opcode) {
+      case SHADER_OPCODE_POW:
+         assert(inst->src[0].file != IMM);
 
-      bool represented_as_imm = false;
-      for (int i = 0; i < inst->sources; i++) {
-         if (inst->src[i].file != IMM)
-            continue;
-
-         if (!represented_as_imm && i == 0 &&
-             inst->opcode == BRW_OPCODE_MAD &&
-             represent_src_as_imm(devinfo, &inst->src[i])) {
-            represented_as_imm = true;
-            continue;
+         if (inst->src[1].file == IMM && devinfo->ver < 8) {
+            add_candidate_immediate(&table, inst, ip, 1, true, idom, block,
+                                    devinfo, const_ctx);
          }
 
-         char data[8];
-         brw_reg_type type;
-         if (!get_constant_value(devinfo, inst, i, data, &type))
-            continue;
+         break;
 
-         uint8_t size = type_sz(type);
+      case BRW_OPCODE_ADD3:
+      case BRW_OPCODE_MAD: {
+         for (int i = 0; i < inst->sources; i++) {
+            if (inst->src[i].file != IMM)
+               continue;
 
-         struct imm *imm = find_imm(&table, data, size);
+            if (can_promote_src_as_imm(devinfo, inst, i))
+               continue;
 
-         if (imm) {
-            bblock_t *intersection = idom.intersect(block, imm->block);
-            if (intersection != imm->block)
-               imm->inst = NULL;
-            imm->block = intersection;
-            imm->uses->push_tail(link(const_ctx, &inst->src[i]));
-            imm->uses_by_coissue += could_coissue(devinfo, inst);
-            imm->must_promote = imm->must_promote || must_promote_imm(devinfo, inst);
-            imm->last_use_ip = ip;
-            if (type == BRW_REGISTER_TYPE_HF)
-               imm->is_half_float = true;
-         } else {
-            imm = new_imm(&table, const_ctx);
-            imm->block = block;
-            imm->inst = inst;
-            imm->uses = new(const_ctx) exec_list();
-            imm->uses->push_tail(link(const_ctx, &inst->src[i]));
-            memcpy(imm->bytes, data, size);
-            imm->size = size;
-            imm->is_half_float = type == BRW_REGISTER_TYPE_HF;
-            imm->uses_by_coissue = could_coissue(devinfo, inst);
-            imm->must_promote = must_promote_imm(devinfo, inst);
-            imm->first_use_ip = ip;
-            imm->last_use_ip = ip;
+            add_candidate_immediate(&table, inst, ip, i, true, idom, block,
+                                    devinfo, const_ctx);
          }
+
+         break;
+      }
+
+      case BRW_OPCODE_LRP:
+         for (int i = 0; i < inst->sources; i++) {
+            if (inst->src[i].file != IMM)
+               continue;
+
+            add_candidate_immediate(&table, inst, ip, i, true, idom, block,
+                                    devinfo, const_ctx);
+         }
+
+         break;
+
+      case BRW_OPCODE_MOV:
+         if (could_coissue(devinfo, inst) && inst->src[0].file == IMM) {
+            add_candidate_immediate(&table, inst, ip, 0, false, idom, block,
+                                    devinfo, const_ctx);
+         }
+         break;
+
+      case BRW_OPCODE_CMP:
+      case BRW_OPCODE_ADD:
+      case BRW_OPCODE_MUL:
+         assert(inst->src[0].file != IMM);
+
+         if (could_coissue(devinfo, inst) && inst->src[1].file == IMM) {
+            add_candidate_immediate(&table, inst, ip, 1, false, idom, block,
+                                    devinfo, const_ctx);
+         }
+         break;
+
+      default:
+         break;
       }
    }
 
@@ -465,7 +586,7 @@ fs_visitor::opt_combine_constants()
        * replicating the single one we want. To avoid this, we always populate
        * both HF slots within a DWord with the constant.
        */
-      const uint32_t width = devinfo->gen == 8 && imm->is_half_float ? 2 : 1;
+      const uint32_t width = devinfo->ver == 8 && imm->is_half_float ? 2 : 1;
       const fs_builder ibld = bld.at(imm->block, n).exec_all().group(width, 0);
 
       /* Put the immediate in an offset aligned to its size. Some instructions
@@ -544,17 +665,18 @@ fs_visitor::opt_combine_constants()
       for (int i = 0; i < table.len; i++) {
          struct imm *imm = &table.imm[i];
 
-         printf("0x%016" PRIx64 " - block %3d, reg %3d sub %2d, "
-                "Uses: (%2d, %2d), IP: %4d to %4d, length %4d\n",
-                (uint64_t)(imm->d & BITFIELD64_MASK(imm->size * 8)),
-                imm->block->num,
-                imm->nr,
-                imm->subreg_offset,
-                imm->must_promote,
-                imm->uses_by_coissue,
-                imm->first_use_ip,
-                imm->last_use_ip,
-                imm->last_use_ip - imm->first_use_ip);
+         fprintf(stderr,
+                 "0x%016" PRIx64 " - block %3d, reg %3d sub %2d, "
+                 "Uses: (%2d, %2d), IP: %4d to %4d, length %4d\n",
+                 (uint64_t)(imm->d & BITFIELD64_MASK(imm->size * 8)),
+                 imm->block->num,
+                 imm->nr,
+                 imm->subreg_offset,
+                 imm->must_promote,
+                 imm->uses_by_coissue,
+                 imm->first_use_ip,
+                 imm->last_use_ip,
+                 imm->last_use_ip - imm->first_use_ip);
       }
    }
 

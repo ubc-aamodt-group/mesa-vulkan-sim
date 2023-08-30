@@ -1,24 +1,7 @@
 /*
  * Copyright 2014 Advanced Micro Devices, Inc.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "ac_binary.h"
@@ -27,8 +10,6 @@
 #include "util/u_math.h"
 #include "util/u_memory.h"
 
-#include <gelf.h>
-#include <libelf.h>
 #include <sid.h>
 #include <stdio.h>
 
@@ -37,11 +18,8 @@
 
 /* Parse configuration data in .AMDGPU.config section format. */
 void ac_parse_shader_binary_config(const char *data, size_t nbytes, unsigned wave_size,
-                                   bool really_needs_scratch, const struct radeon_info *info,
-                                   struct ac_shader_config *conf)
+                                   const struct radeon_info *info, struct ac_shader_config *conf)
 {
-   uint32_t scratch_size = 0;
-
    for (size_t i = 0; i < nbytes; i += 8) {
       unsigned reg = util_le32_to_cpu(*(uint32_t *)(data + i));
       unsigned value = util_le32_to_cpu(*(uint32_t *)(data + i + 4));
@@ -51,7 +29,7 @@ void ac_parse_shader_binary_config(const char *data, size_t nbytes, unsigned wav
       case R_00B228_SPI_SHADER_PGM_RSRC1_GS:
       case R_00B848_COMPUTE_PGM_RSRC1:
       case R_00B428_SPI_SHADER_PGM_RSRC1_HS:
-         if (wave_size == 32)
+         if (wave_size == 32 || info->wave64_vgpr_alloc_granularity == 8)
             conf->num_vgprs = MAX2(conf->num_vgprs, (G_00B028_VGPRS(value) + 1) * 8);
          else
             conf->num_vgprs = MAX2(conf->num_vgprs, (G_00B028_VGPRS(value) + 1) * 4);
@@ -95,8 +73,10 @@ void ac_parse_shader_binary_config(const char *data, size_t nbytes, unsigned wav
          break;
       case R_0286E8_SPI_TMPRING_SIZE:
       case R_00B860_COMPUTE_TMPRING_SIZE:
-         /* WAVESIZE is in units of 256 dwords. */
-         scratch_size = value;
+         if (info->gfx_level >= GFX11)
+            conf->scratch_bytes_per_wave = G_00B860_WAVESIZE(value) * 256;
+         else
+            conf->scratch_bytes_per_wave = G_00B860_WAVESIZE(value) * 1024;
          break;
       case SPILLED_SGPRS:
          conf->spilled_sgprs = value;
@@ -121,21 +101,6 @@ void ac_parse_shader_binary_config(const char *data, size_t nbytes, unsigned wav
    if (!conf->spi_ps_input_addr)
       conf->spi_ps_input_addr = conf->spi_ps_input_ena;
 
-   if (really_needs_scratch) {
-      /* sgprs spills aren't spilling */
-      conf->scratch_bytes_per_wave = G_00B860_WAVESIZE(scratch_size) * 256 * 4;
-   }
-
-   /* GFX 10.3 internally:
-    * - aligns VGPRS to 16 for Wave32 and 8 for Wave64
-    * - aligns LDS to 1024
-    *
-    * For shader-db stats, set num_vgprs that the hw actually uses.
-    */
-   if (info->chip_class >= GFX10_3) {
-      conf->num_vgprs = align(conf->num_vgprs, wave_size == 32 ? 16 : 8);
-   }
-
    /* Enable 64-bit and 16-bit denormals, because there is no performance
     * cost.
     *
@@ -144,6 +109,40 @@ void ac_parse_shader_binary_config(const char *data, size_t nbytes, unsigned wav
     * - denormals break v_mad_f32
     * - GFX6 & GFX7 would be very slow
     */
-   conf->float_mode &= ~V_00B028_FP_ALL_DENORMS;
-   conf->float_mode |= V_00B028_FP_64_DENORMS;
+   conf->float_mode &= ~V_00B028_FP_32_DENORMS;
+   conf->float_mode |= V_00B028_FP_16_64_DENORMS;
+}
+
+unsigned ac_align_shader_binary_for_prefetch(const struct radeon_info *info, unsigned size)
+{
+   /* The SQ fetches up to N cache lines of 16 dwords
+    * ahead of the PC, configurable by SH_MEM_CONFIG and
+    * S_INST_PREFETCH. This can cause two issues:
+    *
+    * (1) Crossing a page boundary to an unmapped page. The logic
+    *     does not distinguish between a required fetch and a "mere"
+    *     prefetch and will fault.
+    *
+    * (2) Prefetching instructions that will be changed for a
+    *     different shader.
+    *
+    * (2) is not currently an issue because we flush the I$ at IB
+    * boundaries, but (1) needs to be addressed. Due to buffer
+    * suballocation, we just play it safe.
+    */
+   unsigned prefetch_distance = 0;
+
+   if (!info->has_graphics && info->family >= CHIP_MI200)
+      prefetch_distance = 16;
+   else if (info->gfx_level >= GFX10)
+      prefetch_distance = 3;
+
+   if (prefetch_distance) {
+      if (info->gfx_level >= GFX11)
+         size = align(size + prefetch_distance * 64, 128);
+      else
+         size = align(size + prefetch_distance * 64, 64);
+   }
+
+   return size;
 }

@@ -51,7 +51,7 @@ emit_indirect_load_store_deref(nir_builder *b, nir_intrinsic_instr *orig_instr,
       nir_deref_instr *deref = *deref_arr;
       assert(deref->deref_type == nir_deref_type_array);
 
-      nir_push_if(b, nir_ilt(b, deref->arr.index.ssa, nir_imm_intN_t(b, mid, parent->dest.ssa.bit_size)));
+      nir_push_if(b, nir_ilt_imm(b, deref->arr.index.ssa, mid));
       emit_indirect_load_store_deref(b, orig_instr, parent, deref_arr,
                                      start, mid, &then_dest, src);
       nir_push_else(b, NULL);
@@ -98,11 +98,11 @@ emit_load_store_deref(nir_builder *b, nir_intrinsic_instr *orig_instr,
       /* Copy over any other sources.  This is needed for interp_deref_at */
       for (unsigned i = 1;
            i < nir_intrinsic_infos[orig_instr->intrinsic].num_srcs; i++)
-         nir_src_copy(&load->src[i], &orig_instr->src[i], load);
+         nir_src_copy(&load->src[i], &orig_instr->src[i], &load->instr);
 
       nir_ssa_dest_init(&load->instr, &load->dest,
                         orig_instr->dest.ssa.num_components,
-                        orig_instr->dest.ssa.bit_size, NULL);
+                        orig_instr->dest.ssa.bit_size);
       nir_builder_instr_insert(b, &load->instr);
       *dest = &load->dest.ssa;
    } else {
@@ -114,6 +114,7 @@ emit_load_store_deref(nir_builder *b, nir_intrinsic_instr *orig_instr,
 static bool
 lower_indirect_derefs_block(nir_block *block, nir_builder *b,
                             nir_variable_mode modes,
+                            const struct set *vars,
                             uint32_t max_lower_array_len)
 {
    bool progress = false;
@@ -158,6 +159,9 @@ lower_indirect_derefs_block(nir_block *block, nir_builder *b,
       if (!(modes & base->var->data.mode) && !base->var->data.compact)
          continue;
 
+      if (vars && !_mesa_set_search(vars, base->var))
+         continue;
+
       b->cursor = nir_instr_remove(&intrin->instr);
 
       nir_deref_path path;
@@ -172,7 +176,7 @@ lower_indirect_derefs_block(nir_block *block, nir_builder *b,
          nir_ssa_def *result;
          emit_load_store_deref(b, intrin, base, &path.path[1],
                                &result, NULL);
-         nir_ssa_def_rewrite_uses(&intrin->dest.ssa, nir_src_for_ssa(result));
+         nir_ssa_def_rewrite_uses(&intrin->dest.ssa, result);
       }
 
       nir_deref_path_finish(&path);
@@ -185,14 +189,14 @@ lower_indirect_derefs_block(nir_block *block, nir_builder *b,
 
 static bool
 lower_indirects_impl(nir_function_impl *impl, nir_variable_mode modes,
-                     uint32_t max_lower_array_len)
+                     const struct set *vars, uint32_t max_lower_array_len)
 {
    nir_builder builder;
    nir_builder_init(&builder, impl);
    bool progress = false;
 
    nir_foreach_block_safe(block, impl) {
-      progress |= lower_indirect_derefs_block(block, &builder, modes,
+      progress |= lower_indirect_derefs_block(block, &builder, modes, vars,
                                               max_lower_array_len);
    }
 
@@ -217,8 +221,24 @@ nir_lower_indirect_derefs(nir_shader *shader, nir_variable_mode modes,
 
    nir_foreach_function(function, shader) {
       if (function->impl) {
-         progress = lower_indirects_impl(function->impl, modes,
+         progress = lower_indirects_impl(function->impl, modes, NULL,
                                          max_lower_array_len) || progress;
+      }
+   }
+
+   return progress;
+}
+
+/** Lowers indirects on any variables in the given set */
+bool
+nir_lower_indirect_var_derefs(nir_shader *shader, const struct set *vars)
+{
+   bool progress = false;
+
+   nir_foreach_function(function, shader) {
+      if (function->impl) {
+         progress = lower_indirects_impl(function->impl, nir_var_uniform,
+                                         vars, UINT_MAX) || progress;
       }
    }
 

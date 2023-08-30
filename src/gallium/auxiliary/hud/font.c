@@ -390,7 +390,7 @@ util_font_create_fixed_8x13(struct pipe_context *pipe,
 
    for (i = 0; i < ARRAY_SIZE(formats); i++) {
       if (screen->is_format_supported(screen, formats[i],
-                                   PIPE_TEXTURE_RECT, 0, 0,
+                                   PIPE_TEXTURE_2D, 0, 0,
                                    PIPE_BIND_SAMPLER_VIEW)) {
          tex_format = formats[i];
          break;
@@ -403,7 +403,7 @@ util_font_create_fixed_8x13(struct pipe_context *pipe,
    }
 
    memset(&tex_templ, 0, sizeof(tex_templ));
-   tex_templ.target = PIPE_TEXTURE_RECT;
+   tex_templ.target = PIPE_TEXTURE_2D;
    tex_templ.format = tex_format;
    tex_templ.width0 = 128;
    tex_templ.height0 = 256;
@@ -417,8 +417,8 @@ util_font_create_fixed_8x13(struct pipe_context *pipe,
       return FALSE;
    }
 
-   map = pipe_transfer_map(pipe, tex, 0, 0, PIPE_MAP_WRITE, 0, 0,
-                           tex->width0, tex->height0, &transfer);
+   map = pipe_texture_map(pipe, tex, 0, 0, PIPE_MAP_WRITE, 0, 0,
+                          tex->width0, tex->height0, &transfer);
    if (!map) {
       pipe_resource_reference(&tex, NULL);
       return FALSE;
@@ -432,7 +432,7 @@ util_font_create_fixed_8x13(struct pipe_context *pipe,
                                transfer->stride, i);
    }
 
-   pipe_transfer_unmap(pipe, transfer);
+   pipe_texture_unmap(pipe, transfer);
 
    pipe_resource_reference(&out_font->texture, NULL);
    out_font->texture = tex;

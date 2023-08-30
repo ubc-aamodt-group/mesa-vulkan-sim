@@ -99,8 +99,9 @@ static int regex_helper(
 	err_code = regexec(&regex, search_str, num_matches, matches, 0);
 	DBG("Search string: '%s'\n", search_str);
 	for (i = 0; i < num_matches; i++) {
-		DBG("Match %u start = %d end = %d\n", i,
-					matches[i].rm_so, matches[i].rm_eo);
+		DBG("Match %u start = %zu end = %zu\n", i,
+					(size_t)matches[i].rm_so,
+					(size_t)matches[i].rm_eo);
 	}
 	if (err_code) {
 		regerror(err_code, &regex, err_buf, REGEX_ERR_BUF_SIZE);
@@ -509,9 +510,10 @@ void init_compiler(
 	unsigned is_r400)
 {
 	struct rc_regalloc_state *rs = malloc(sizeof(struct rc_regalloc_state));
-	rc_init_regalloc_state(rs);
+	rc_init_regalloc_state(rs, program_type);
 	rc_init(c, rs);
 
+	c->type = program_type;
 	c->is_r500 = is_r500;
 	c->max_temp_regs = is_r500 ? 128 : (is_r400 ? 64 : 32);
 	c->max_constants = is_r500 ? 256 : 32;

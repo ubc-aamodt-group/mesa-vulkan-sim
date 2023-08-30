@@ -34,10 +34,7 @@
 #include "util/blob.h"
 #include "util/format/u_format.h"
 #include "util/macros.h"
-
-#ifdef __cplusplus
-#include "mesa/main/config.h"
-#endif
+#include "util/simple_mtx.h"
 
 struct glsl_type;
 
@@ -84,6 +81,7 @@ enum glsl_base_type {
    GLSL_TYPE_INT64,
    GLSL_TYPE_BOOL,
    GLSL_TYPE_SAMPLER,
+   GLSL_TYPE_TEXTURE,
    GLSL_TYPE_IMAGE,
    GLSL_TYPE_ATOMIC_UINT,
    GLSL_TYPE_STRUCT,
@@ -122,6 +120,7 @@ static unsigned glsl_base_type_bit_size(enum glsl_base_type type)
    case GLSL_TYPE_INT64:
    case GLSL_TYPE_UINT64:
    case GLSL_TYPE_IMAGE:
+   case GLSL_TYPE_TEXTURE:
    case GLSL_TYPE_SAMPLER:
       return 64;
 
@@ -158,6 +157,7 @@ static inline bool glsl_base_type_is_integer(enum glsl_base_type type)
           type == GLSL_TYPE_INT64 ||
           type == GLSL_TYPE_BOOL ||
           type == GLSL_TYPE_SAMPLER ||
+          type == GLSL_TYPE_TEXTURE ||
           type == GLSL_TYPE_IMAGE;
 }
 
@@ -188,7 +188,7 @@ glsl_base_type_get_bit_size(const enum glsl_base_type base_type)
    case GLSL_TYPE_UINT64:
    case GLSL_TYPE_IMAGE:
    case GLSL_TYPE_SAMPLER:
-   case GLSL_TYPE_STRUCT:
+   case GLSL_TYPE_TEXTURE:
       return 64;
 
    default:
@@ -284,15 +284,24 @@ enum {
    GLSL_PRECISION_LOW
 };
 
+/**
+ * Built-in / reserved GL variables names start with "gl_"
+ */
+static inline bool
+is_gl_identifier(const char *s)
+{
+   return s && s[0] == 'g' && s[1] == 'l' && s[2] == '_';
+}
+
 #ifdef __cplusplus
 } /* extern "C" */
+#endif
 
-#include "GL/gl.h"
-#include "util/ralloc.h"
-#include "mesa/main/menums.h" /* for gl_texture_index, C++'s enum rules are broken */
+/* C++ struct types for glsl */
+#ifdef __cplusplus
 
 struct glsl_type {
-   GLenum gl_type;
+   uint32_t gl_type;
    glsl_base_type base_type:8;
 
    glsl_base_type sampled_type:8; /**< Type of data returned using this
@@ -460,14 +469,18 @@ public:
                                                 bool array,
                                                 glsl_base_type type);
 
+   static const glsl_type *get_texture_instance(enum glsl_sampler_dim dim,
+                                                bool array,
+                                                glsl_base_type type);
+
    static const glsl_type *get_image_instance(enum glsl_sampler_dim dim,
                                               bool array, glsl_base_type type);
 
    /**
     * Get the instance of an array type
     */
-   static const glsl_type *get_array_instance(const glsl_type *base,
-                                              unsigned elements,
+   static const glsl_type *get_array_instance(const glsl_type *element,
+                                              unsigned array_size,
                                               unsigned explicit_stride = 0);
 
    /**
@@ -521,6 +534,8 @@ public:
     * might occupy.
     */
    unsigned component_slots() const;
+
+   unsigned component_slots_aligned(unsigned offset) const;
 
    /**
     * Calculate offset between the base location of the struct in
@@ -674,43 +689,6 @@ public:
    unsigned explicit_size(bool align_to_stride=false) const;
 
    /**
-    * \brief Can this type be implicitly converted to another?
-    *
-    * \return True if the types are identical or if this type can be converted
-    *         to \c desired according to Section 4.1.10 of the GLSL spec.
-    *
-    * \verbatim
-    * From page 25 (31 of the pdf) of the GLSL 1.50 spec, Section 4.1.10
-    * Implicit Conversions:
-    *
-    *     In some situations, an expression and its type will be implicitly
-    *     converted to a different type. The following table shows all allowed
-    *     implicit conversions:
-    *
-    *     Type of expression | Can be implicitly converted to
-    *     --------------------------------------------------
-    *     int                  float
-    *     uint
-    *
-    *     ivec2                vec2
-    *     uvec2
-    *
-    *     ivec3                vec3
-    *     uvec3
-    *
-    *     ivec4                vec4
-    *     uvec4
-    *
-    *     There are no implicit array or structure conversions. For example,
-    *     an array of int cannot be implicitly converted to an array of float.
-    *     There are no implicit conversions between signed and unsigned
-    *     integers.
-    * \endverbatim
-    */
-   bool can_implicitly_convert_to(const glsl_type *desired,
-                                  _mesa_glsl_parse_state *state) const;
-
-   /**
     * Query whether or not a type is a scalar (non-vector and non-matrix).
     */
    bool is_scalar() const
@@ -795,7 +773,7 @@ public:
     */
    bool is_integer_16_32() const
    {
-      return is_integer_16() || is_integer_32() || is_integer_64();
+      return is_integer_16() || is_integer_32();
    }
 
    /**
@@ -938,6 +916,14 @@ public:
    bool is_sampler() const
    {
       return base_type == GLSL_TYPE_SAMPLER;
+   }
+
+   /**
+    * Query whether or not a type is a texture
+    */
+   bool is_texture() const
+   {
+      return base_type == GLSL_TYPE_TEXTURE;
    }
 
    /**
@@ -1269,7 +1255,7 @@ public:
 
 private:
 
-   static mtx_t hash_mutex;
+   static simple_mtx_t hash_mutex;
 
    /**
     * ralloc context for the type itself.
@@ -1277,14 +1263,14 @@ private:
    void *mem_ctx;
 
    /** Constructor for vector and matrix types */
-   glsl_type(GLenum gl_type,
+   glsl_type(uint32_t gl_type,
              glsl_base_type base_type, unsigned vector_elements,
              unsigned matrix_columns, const char *name,
              unsigned explicit_stride = 0, bool row_major = false,
              unsigned explicit_alignment = 0);
 
    /** Constructor for sampler or image types */
-   glsl_type(GLenum gl_type, glsl_base_type base_type,
+   glsl_type(uint32_t gl_type, glsl_base_type base_type,
 	     enum glsl_sampler_dim dim, bool shadow, bool array,
 	     glsl_base_type type, const char *name);
 
@@ -1372,6 +1358,12 @@ struct glsl_struct_field {
    int location;
 
    /**
+    * For interface blocks, members may explicitly assign the component used
+    * by a varying. Ignored for structs.
+    */
+   int component;
+
+   /**
     * For interface blocks, members may have an explicit byte offset
     * specified; -1 otherwise. Also used for xfb_offset layout qualifier.
     *
@@ -1390,6 +1382,7 @@ struct glsl_struct_field {
     * -1 otherwise.
     */
    int xfb_stride;
+
    /**
     * Layout format, applicable to image variables only.
     */
@@ -1454,8 +1447,8 @@ struct glsl_struct_field {
    };
 #ifdef __cplusplus
 #define DEFAULT_CONSTRUCTORS(_type, _name)                  \
-   type(_type), name(_name), location(-1), offset(-1), xfb_buffer(0),   \
-   xfb_stride(0), image_format(PIPE_FORMAT_NONE), flags(0) \
+   type(_type), name(_name), location(-1), component(-1), offset(-1), \
+   xfb_buffer(0),  xfb_stride(0), image_format(PIPE_FORMAT_NONE), flags(0) \
 
    glsl_struct_field(const struct glsl_type *_type,
                      int _precision,
@@ -1489,11 +1482,5 @@ struct glsl_function_param {
    bool in;
    bool out;
 };
-
-static inline unsigned int
-glsl_align(unsigned int a, unsigned int align)
-{
-   return (a + align - 1) / align * align;
-}
 
 #endif /* GLSL_TYPES_H */

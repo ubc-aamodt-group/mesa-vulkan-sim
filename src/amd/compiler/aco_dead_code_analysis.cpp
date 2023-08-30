@@ -25,6 +25,7 @@
 #include "aco_ir.h"
 
 #include <algorithm>
+#include <vector>
 
 /*
  * Implements an analysis pass to determine the number of uses
@@ -39,7 +40,8 @@ struct dce_ctx {
    std::vector<uint16_t> uses;
    std::vector<std::vector<bool>> live;
 
-   dce_ctx(Program* program) : current_block(program->blocks.size() - 1), uses(program->peekAllocationId())
+   dce_ctx(Program* program)
+       : current_block(program->blocks.size() - 1), uses(program->peekAllocationId())
    {
       live.reserve(program->blocks.size());
       for (Block& block : program->blocks)
@@ -47,7 +49,8 @@ struct dce_ctx {
    }
 };
 
-void process_block(dce_ctx& ctx, Block& block)
+void
+process_block(dce_ctx& ctx, Block& block)
 {
    std::vector<bool>& live = ctx.live[block.index];
    assert(live.size() == block.instructions.size());
@@ -71,23 +74,15 @@ void process_block(dce_ctx& ctx, Block& block)
 
    if (process_predecessors) {
       for (unsigned pred_idx : block.linear_preds)
-         ctx.current_block = std::max(ctx.current_block, (int) pred_idx);
+         ctx.current_block = std::max(ctx.current_block, (int)pred_idx);
    }
 }
 
 } /* end namespace */
 
-bool is_dead(const std::vector<uint16_t>& uses, Instruction *instr)
+std::vector<uint16_t>
+dead_code_analysis(Program* program)
 {
-   if (instr->definitions.empty() || instr->format == Format::PSEUDO_BRANCH)
-      return false;
-   if (std::any_of(instr->definitions.begin(), instr->definitions.end(),
-          [&uses] (const Definition& def) { return uses[def.tempId()];}))
-      return false;
-   return !(get_sync_info(instr).semantics & (semantic_volatile | semantic_acqrel));
-}
-
-std::vector<uint16_t> dead_code_analysis(Program *program) {
 
    dce_ctx ctx(program);
 
@@ -96,13 +91,7 @@ std::vector<uint16_t> dead_code_analysis(Program *program) {
       process_block(ctx, program->blocks[next_block]);
    }
 
-   /* add one use to exec to prevent startpgm from being removed */
-   aco_ptr<Instruction>& startpgm = program->blocks[0].instructions[0];
-   assert(startpgm->opcode == aco_opcode::p_startpgm);
-   ctx.uses[startpgm->definitions.back().tempId()]++;
-
    return ctx.uses;
 }
 
-}
-
+} // namespace aco

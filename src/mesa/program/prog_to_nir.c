@@ -28,6 +28,7 @@
 #include "compiler/glsl/list.h"
 
 #include "main/mtypes.h"
+#include "main/shader_types.h"
 #include "util/ralloc.h"
 
 #include "prog_to_nir.h"
@@ -35,6 +36,7 @@
 #include "prog_parameter.h"
 #include "prog_print.h"
 #include "program.h"
+#include "state_tracker/st_nir.h"
 
 /**
  * \file prog_to_nir.c
@@ -45,6 +47,7 @@
  */
 
 struct ptn_compile {
+   const struct gl_context *ctx;
    const struct gl_program *prog;
    nir_builder build;
    bool error;
@@ -223,7 +226,7 @@ ptn_get_src(struct ptn_compile *c, const struct prog_src_register *prog_src)
          } else {
             assert(swizzle != SWIZZLE_NIL);
             nir_alu_instr *mov = nir_alu_instr_create(b->shader, nir_op_mov);
-            nir_ssa_dest_init(&mov->instr, &mov->dest.dest, 1, 32, NULL);
+            nir_ssa_dest_init(&mov->instr, &mov->dest.dest, 1, 32);
             mov->dest.write_mask = 0x1;
             mov->src[0] = src;
             mov->src[0].swizzle[0] = swizzle;
@@ -363,7 +366,7 @@ ptn_lit(nir_builder *b, nir_alu_dest dest, nir_ssa_def **src)
                                   wclamp);
 
       nir_ssa_def *z = nir_bcsel(b,
-                                 nir_fge(b, nir_imm_float(b, 0.0), ptn_channel(b, src[0], X)),
+                                 nir_fle_imm(b, ptn_channel(b, src[0], X), 0.0),
                                  nir_imm_float(b, 0.0),
                                  pow);
 
@@ -443,7 +446,7 @@ static void
 ptn_cmp(nir_builder *b, nir_alu_dest dest, nir_ssa_def **src)
 {
    ptn_move_dest(b, dest, nir_bcsel(b,
-                                    nir_flt(b, src[0], nir_imm_float(b, 0.0)),
+                                    nir_flt_imm(b, src[0], 0.0),
                                     src[1], src[2]));
 }
 
@@ -458,7 +461,7 @@ ptn_kil(nir_builder *b, nir_ssa_def **src)
 {
    /* flt must be exact, because NaN shouldn't discard. (apps rely on this) */
    b->exact = true;
-   nir_ssa_def *cmp = nir_bany(b, nir_flt(b, src[0], nir_imm_float(b, 0.0)));
+   nir_ssa_def *cmp = nir_bany(b, nir_flt_imm(b, src[0], 0.0));
    b->exact = false;
 
    nir_discard_if(b, cmp);
@@ -547,7 +550,7 @@ ptn_tex(struct ptn_compile *c, nir_alu_dest dest, nir_ssa_def **src,
 
    instr = nir_tex_instr_create(b->shader, num_srcs);
    instr->op = op;
-   instr->dest_type = nir_type_float;
+   instr->dest_type = nir_type_float32;
    instr->is_shadow = prog_inst->TexShadow;
 
    bool is_array;
@@ -572,34 +575,33 @@ ptn_tex(struct ptn_compile *c, nir_alu_dest dest, nir_ssa_def **src,
 
    unsigned src_number = 0;
 
-   instr->src[src_number].src = nir_src_for_ssa(&deref->dest.ssa);
-   instr->src[src_number].src_type = nir_tex_src_texture_deref;
+   instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_texture_deref,
+                                                &deref->dest.ssa);
    src_number++;
-   instr->src[src_number].src = nir_src_for_ssa(&deref->dest.ssa);
-   instr->src[src_number].src_type = nir_tex_src_sampler_deref;
+   instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_sampler_deref,
+                                                &deref->dest.ssa);
    src_number++;
 
-   instr->src[src_number].src =
-      nir_src_for_ssa(nir_swizzle(b, src[0], SWIZ(X, Y, Z, W),
-                                  instr->coord_components));
-   instr->src[src_number].src_type = nir_tex_src_coord;
+   instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_coord,
+                                                nir_trim_vector(b, src[0],
+                                                                instr->coord_components));
    src_number++;
 
    if (prog_inst->Opcode == OPCODE_TXP) {
-      instr->src[src_number].src = nir_src_for_ssa(ptn_channel(b, src[0], W));
-      instr->src[src_number].src_type = nir_tex_src_projector;
+      instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_projector,
+                                                   ptn_channel(b, src[0], W));
       src_number++;
    }
 
    if (prog_inst->Opcode == OPCODE_TXB) {
-      instr->src[src_number].src = nir_src_for_ssa(ptn_channel(b, src[0], W));
-      instr->src[src_number].src_type = nir_tex_src_bias;
+      instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_bias,
+                                                   ptn_channel(b, src[0], W));
       src_number++;
    }
 
    if (prog_inst->Opcode == OPCODE_TXL) {
-      instr->src[src_number].src = nir_src_for_ssa(ptn_channel(b, src[0], W));
-      instr->src[src_number].src_type = nir_tex_src_lod;
+      instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_lod,
+                                                   ptn_channel(b, src[0], W));
       src_number++;
    }
 
@@ -615,7 +617,7 @@ ptn_tex(struct ptn_compile *c, nir_alu_dest dest, nir_ssa_def **src,
 
    assert(src_number == num_srcs);
 
-   nir_ssa_dest_init(&instr->instr, &instr->dest, 4, 32, NULL);
+   nir_ssa_dest_init(&instr->instr, &instr->dest, 4, 32);
    nir_builder_instr_insert(b, &instr->instr);
 
    /* Resolve the writemask on the texture op. */
@@ -662,7 +664,6 @@ static const nir_op op_trans[MAX_OPCODE] = {
    [OPCODE_SUB] = nir_op_fsub,
    [OPCODE_SWZ] = 0,
    [OPCODE_TEX] = 0,
-   [OPCODE_TRUNC] = nir_op_ftrunc,
    [OPCODE_TXB] = 0,
    [OPCODE_TXD] = 0,
    [OPCODE_TXL] = 0,
@@ -866,11 +867,17 @@ setup_registers_and_variables(struct ptn_compile *c)
    while (inputs_read) {
       const int i = u_bit_scan64(&inputs_read);
 
+      if (c->ctx->Const.GLSLFragCoordIsSysVal &&
+          shader->info.stage == MESA_SHADER_FRAGMENT &&
+          i == VARYING_SLOT_POS) {
+         c->input_vars[i] = nir_create_variable_with_location(shader, nir_var_system_value,
+                                                              SYSTEM_VALUE_FRAG_COORD, glsl_vec4_type());
+         continue;
+      }
+
       nir_variable *var =
-         nir_variable_create(shader, nir_var_shader_in, glsl_vec4_type(),
-                             ralloc_asprintf(shader, "in_%d", i));
-      var->data.location = i;
-      var->data.index = 0;
+          nir_create_variable_with_location(shader, nir_var_shader_in,
+                                            i, glsl_vec4_type());
 
       if (c->prog->Target == GL_FRAGMENT_PROGRAM_ARB) {
          if (i == VARYING_SLOT_FOGC) {
@@ -904,21 +911,14 @@ setup_registers_and_variables(struct ptn_compile *c)
    }
 
    /* Create system value variables */
-   uint64_t system_values_read = c->prog->info.system_values_read;
-   while (system_values_read) {
-      const int i = u_bit_scan64(&system_values_read);
-
-      nir_variable *var =
-         nir_variable_create(shader, nir_var_system_value, glsl_vec4_type(),
-                             ralloc_asprintf(shader, "sv_%d", i));
-      var->data.location = i;
-      var->data.index = 0;
-
-      c->sysval_vars[i] = var;
+   int i;
+   BITSET_FOREACH_SET(i, c->prog->info.system_values_read, SYSTEM_VALUE_MAX) {
+      c->sysval_vars[i] = nir_create_variable_with_location(b->shader, nir_var_system_value,
+                                                            i, glsl_vec4_type());
    }
 
    /* Create output registers and variables. */
-   int max_outputs = util_last_bit(c->prog->info.outputs_written);
+   int max_outputs = util_last_bit64(c->prog->info.outputs_written);
    c->output_regs = rzalloc_array(c, nir_register *, max_outputs);
 
    uint64_t outputs_written = c->prog->info.outputs_written;
@@ -976,7 +976,7 @@ setup_registers_and_variables(struct ptn_compile *c)
 }
 
 struct nir_shader *
-prog_to_nir(const struct gl_program *prog,
+prog_to_nir(const struct gl_context *ctx, const struct gl_program *prog,
             const nir_shader_compiler_options *options)
 {
    struct ptn_compile *c;
@@ -987,6 +987,7 @@ prog_to_nir(const struct gl_program *prog,
    if (!c)
       return NULL;
    c->prog = prog;
+   c->ctx = ctx;
 
    c->build = nir_builder_init_simple_shader(stage, options, NULL);
 
@@ -1025,7 +1026,20 @@ prog_to_nir(const struct gl_program *prog,
    s->info.uses_texture_gather = false;
    s->info.clip_distance_array_size = 0;
    s->info.cull_distance_array_size = 0;
-   s->info.separate_shader = false;
+   s->info.separate_shader = true;
+   s->info.io_lowered = false;
+   s->info.internal = false;
+
+   /* ARB_vp: */
+   if (prog->arb.IsPositionInvariant) {
+      NIR_PASS_V(s, st_nir_lower_position_invariant,
+                 ctx->Const.ShaderCompilerOptions[MESA_SHADER_VERTEX].OptimizeForAOS,
+                 prog->Parameters);
+   }
+
+   /* Add OPTION ARB_fog_exp code */
+   if (prog->arb.Fog)
+      NIR_PASS_V(s, st_nir_lower_fog, prog->arb.Fog, prog->Parameters);
 
 fail:
    if (c->error) {

@@ -23,12 +23,12 @@
  */
 
 #include "util/u_blitter.h"
+#include "util/u_draw.h"
 #include "util/u_prim.h"
 #include "util/format/u_format.h"
 #include "util/u_pack_color.h"
 #include "util/u_split_draw.h"
 #include "util/u_upload_mgr.h"
-#include "indices/u_primconvert.h"
 
 #include "vc4_context.h"
 #include "vc4_resource.h"
@@ -132,6 +132,7 @@ vc4_predraw_check_textures(struct pipe_context *pctx,
 static void
 vc4_emit_gl_shader_state(struct vc4_context *vc4,
                          const struct pipe_draw_info *info,
+                         const struct pipe_draw_start_count_bias *draws,
                          uint32_t extra_index_bias)
 {
         struct vc4_job *job = vc4->job;
@@ -157,7 +158,7 @@ vc4_emit_gl_shader_state(struct vc4_context *vc4,
 
                 /* VC4_DIRTY_PRIM_MODE | VC4_DIRTY_RASTERIZER */
                 rec.point_size_included_in_shaded_vertex_data =
-                         (info->mode == PIPE_PRIM_POINTS &&
+                         (info->mode == MESA_PRIM_POINTS &&
                           vc4->rasterizer->base.point_size_per_vertex);
 
                 /* VC4_DIRTY_COMPILED_FS */
@@ -182,7 +183,7 @@ vc4_emit_gl_shader_state(struct vc4_context *vc4,
         };
 
         uint32_t max_index = 0xffff;
-        unsigned index_bias = info->index_size ? info->index_bias : 0;
+        unsigned index_bias = info->index_size ? draws->index_bias : 0;
         for (int i = 0; i < vtx->num_elements; i++) {
                 struct pipe_vertex_element *elem = &vtx->pipe[i];
                 struct pipe_vertex_buffer *vb =
@@ -286,49 +287,52 @@ vc4_hw_2116_workaround(struct pipe_context *pctx, int vert_count)
         }
 }
 
+/* A HW bug fails to draw 2-vert line loops.  Just draw it as two GL_LINES. */
+static bool
+vc4_draw_workaround_line_loop_2(struct pipe_context *pctx, const struct pipe_draw_info *info,
+             unsigned drawid_offset,
+             const struct pipe_draw_indirect_info *indirect,
+             const struct pipe_draw_start_count_bias *draw)
+{
+        if (draw->count != 2 || info->mode != MESA_PRIM_LINE_LOOP)
+                return false;
+
+        struct pipe_draw_info local_info = *info;
+        local_info.mode = MESA_PRIM_LINES;
+
+        /* Draw twice.  The vertex order will be wrong on the second prim, but
+         * that's probably not worth rewriting an index buffer over.
+         */
+        for (int i = 0; i < 2; i++)
+                pctx->draw_vbo(pctx, &local_info, drawid_offset, indirect, draw, 1);
+
+        return true;
+}
+
 static void
 vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
+             unsigned drawid_offset,
              const struct pipe_draw_indirect_info *indirect,
-             const struct pipe_draw_start_count *draws,
+             const struct pipe_draw_start_count_bias *draws,
              unsigned num_draws)
 {
-	if (num_draws > 1) {
-           struct pipe_draw_info tmp_info = *info;
-
-           for (unsigned i = 0; i < num_draws; i++) {
-              vc4_draw_vbo(pctx, &tmp_info, indirect, &draws[i], 1);
-              if (tmp_info.increment_draw_id)
-                 tmp_info.drawid++;
-           }
-           return;
-	}
+        if (num_draws > 1) {
+                util_draw_multi(pctx, info, drawid_offset, indirect, draws, num_draws);
+                return;
+        }
 
         if (!indirect && (!draws[0].count || !info->instance_count))
            return;
 
         struct vc4_context *vc4 = vc4_context(pctx);
-        struct pipe_draw_info local_info;
 
 	if (!indirect &&
 	    !info->primitive_restart &&
 	    !u_trim_pipe_prim(info->mode, (unsigned*)&draws[0].count))
 		return;
 
-        if (info->mode >= PIPE_PRIM_QUADS) {
-                if (info->mode == PIPE_PRIM_QUADS &&
-                    draws[0].count == 4 &&
-                    !vc4->rasterizer->base.flatshade) {
-                        local_info = *info;
-                        local_info.mode = PIPE_PRIM_TRIANGLE_FAN;
-                        info = &local_info;
-                } else {
-                        util_primconvert_save_rasterizer_state(vc4->primconvert, &vc4->rasterizer->base);
-                        util_primconvert_draw_vbo(vc4->primconvert, info, &draws[0]);
-                        perf_debug("Fallback conversion for %d %s vertices\n",
-                                   draws[0].count, u_prim_name(info->mode));
-                        return;
-                }
-        }
+        if (vc4_draw_workaround_line_loop_2(pctx, info, drawid_offset, indirect, draws))
+                return;
 
         /* Before setting up the draw, do any fixup blits necessary. */
         vc4_predraw_check_textures(pctx, &vc4->verttex);
@@ -363,7 +367,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
 
         bool needs_drawarrays_shader_state = false;
 
-        unsigned index_bias = info->index_size ? info->index_bias : 0;
+        unsigned index_bias = info->index_size ? draws->index_bias : 0;
         if ((vc4->dirty & (VC4_DIRTY_VTXBUF |
                            VC4_DIRTY_VTXSTATE |
                            VC4_DIRTY_PRIM_MODE |
@@ -376,7 +380,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
                            vc4->prog.fs->uniform_dirty_bits)) ||
             vc4->last_index_bias != index_bias) {
                 if (info->index_size)
-                        vc4_emit_gl_shader_state(vc4, info, 0);
+                        vc4_emit_gl_shader_state(vc4, info, draws, 0);
                 else
                         needs_drawarrays_shader_state = true;
         }
@@ -472,7 +476,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
                         uint32_t step;
 
                         if (needs_drawarrays_shader_state) {
-                                vc4_emit_gl_shader_state(vc4, info,
+                                vc4_emit_gl_shader_state(vc4, info, draws,
                                                          extra_index_bias);
                         }
 
@@ -521,7 +525,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
         if (job->bo_space > 128 * 1024 * 1024)
                 vc4_flush(pctx);
 
-        if (vc4_debug & VC4_DEBUG_ALWAYS_FLUSH)
+        if (VC4_DBG(ALWAYS_FLUSH))
                 vc4_flush(pctx);
 }
 

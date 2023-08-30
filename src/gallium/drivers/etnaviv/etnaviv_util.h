@@ -30,16 +30,6 @@
 /* for conditionally setting boolean flag(s): */
 #define COND(bool, val) ((bool) ? (val) : 0)
 
-#define foreach_bit(b, mask) \
-   for (uint32_t _m = (mask); _m && ({(b) = u_bit_scan(&_m); 1;});)
-
-/* align to a value divisable by granularity >= value, works only for powers of two */
-static inline uint32_t
-etna_align_up(uint32_t value, uint32_t granularity)
-{
-   return (value + (granularity - 1)) & (~(granularity - 1));
-}
-
 /* clamped float [0.0 .. 1.0] -> [0 .. 255] */
 static inline uint8_t
 etna_cfloat_to_uint8(float f)
@@ -51,19 +41,6 @@ etna_cfloat_to_uint8(float f)
       return 255;
 
    return f * 256.0f;
-}
-
-/* clamped float [0.0 .. 1.0] -> [0 .. (1<<bits)-1] */
-static inline uint32_t
-etna_cfloat_to_uintN(float f, int bits)
-{
-   if (f <= 0.0f)
-      return 0;
-
-   if (f >= (1.0f - 1.0f / (1 << bits)))
-      return (1 << bits) - 1;
-
-   return f * (1 << bits);
 }
 
 /* 1/log10(2) */

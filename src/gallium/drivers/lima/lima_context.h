@@ -27,6 +27,7 @@
 
 #include "util/list.h"
 #include "util/slab.h"
+#include "util/u_debug.h"
 
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
@@ -43,21 +44,29 @@ struct lima_depth_stencil_alpha_state {
    struct pipe_depth_stencil_alpha_state base;
 };
 
-struct lima_fs_shader_state {
-   void *shader;
-   int shader_size;
-   int stack_size;
-   bool uses_discard;
+struct lima_fs_compiled_shader {
    struct lima_bo *bo;
+   void *shader;
+   struct {
+      int shader_size;
+      int stack_size;
+      int frag_color0_reg;
+      int frag_color1_reg;
+      int frag_depth_reg;
+      bool uses_discard;
+   } state;
 };
 
-struct lima_fs_bind_state {
+struct lima_fs_uncompiled_shader {
    struct pipe_shader_state base;
+   unsigned char nir_sha1[20];
 };
 
 struct lima_fs_key {
-   struct lima_fs_bind_state *shader_state;
-   uint8_t swizzles[PIPE_MAX_SAMPLERS][4];
+   unsigned char nir_sha1[20];
+   struct {
+      uint8_t swizzle[4];
+   } tex[PIPE_MAX_SAMPLERS];
 };
 
 #define LIMA_MAX_VARYING_NUM 13
@@ -68,31 +77,31 @@ struct lima_varying_info {
    int offset;
 };
 
-struct lima_vs_shader_state {
-   void *shader;
-   int shader_size;
-   int prefetch;
-
-   int uniform_size;
-   void *constant;
-   int constant_size;
-
-   struct lima_varying_info varying[LIMA_MAX_VARYING_NUM];
-   int varying_stride;
-   int num_outputs;
-   int num_varyings;
-   int gl_pos_idx;
-   int point_size_idx;
-
+struct lima_vs_compiled_shader {
    struct lima_bo *bo;
+   void *shader;
+   void *constant;
+   struct {
+      int shader_size;
+      int prefetch;
+      int uniform_size;
+      int constant_size;
+      struct lima_varying_info varying[LIMA_MAX_VARYING_NUM];
+      int varying_stride;
+      int num_outputs;
+      int num_varyings;
+      int gl_pos_idx;
+      int point_size_idx;
+   } state;
 };
 
-struct lima_vs_bind_state {
+struct lima_vs_uncompiled_shader {
    struct pipe_shader_state base;
+   unsigned char nir_sha1[20];
 };
 
 struct lima_vs_key {
-   struct lima_vs_bind_state *shader_state;
+   unsigned char nir_sha1[20];
 };
 
 struct lima_rasterizer_state {
@@ -195,6 +204,7 @@ struct lima_context {
       LIMA_CONTEXT_DIRTY_CLIP         = (1 << 15),
       LIMA_CONTEXT_DIRTY_UNCOMPILED_VS = (1 << 16),
       LIMA_CONTEXT_DIRTY_UNCOMPILED_FS = (1 << 17),
+      LIMA_CONTEXT_DIRTY_SAMPLE_MASK   = (1 << 18),
    } dirty;
 
    struct u_upload_mgr *uploader;
@@ -204,12 +214,14 @@ struct lima_context {
 
    struct lima_context_framebuffer framebuffer;
    struct lima_context_viewport_state viewport;
+   /* input for PLBU_CMD_VIEWPORT_* */
+   struct lima_context_viewport_state ext_viewport;
    struct pipe_scissor_state scissor;
    struct pipe_scissor_state clipped_scissor;
-   struct lima_vs_shader_state *vs;
-   struct lima_fs_shader_state *fs;
-   struct lima_vs_bind_state *bind_vs;
-   struct lima_fs_bind_state *bind_fs;
+   struct lima_vs_compiled_shader *vs;
+   struct lima_fs_compiled_shader *fs;
+   struct lima_vs_uncompiled_shader *uncomp_vs;
+   struct lima_fs_uncompiled_shader *uncomp_fs;
    struct lima_vertex_element_state *vertex_elements;
    struct lima_context_vertex_buffer vertex_buffers;
    struct lima_rasterizer_state *rasterizer;
@@ -221,6 +233,9 @@ struct lima_context {
    struct lima_context_constant_buffer const_buffer[PIPE_SHADER_TYPES];
    struct lima_texture_stateobj tex_stateobj;
    struct lima_pp_stream_state pp_stream;
+
+   #define LIMA_MAX_SAMPLES 4
+   unsigned sample_mask;
 
    unsigned min_index;
    unsigned max_index;
@@ -265,8 +280,6 @@ struct lima_context {
 
    int id;
 
-   struct pipe_debug_callback debug;
-
    unsigned index_offset;
    struct lima_resource *index_res;
 };
@@ -289,6 +302,7 @@ lima_sampler_state(struct pipe_sampler_state *psstate)
 
 struct lima_sampler_view {
    struct pipe_sampler_view base;
+   uint8_t swizzle[4];
 };
 
 static inline struct lima_sampler_view *

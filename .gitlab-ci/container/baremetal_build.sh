@@ -1,63 +1,62 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -e
 set -o xtrace
 
-ROOTFS=/lava-files/rootfs-${arch}
+# Fetch the arm-built rootfs image and unpack it in our x86_64 container (saves
+# network transfer, disk usage, and runtime on test jobs)
 
-INCLUDE_PIGLIT=1
+# shellcheck disable=SC2154 # arch is assigned in previous scripts
+if curl -X HEAD -s "${ARTIFACTS_PREFIX}/${FDO_UPSTREAM_REPO}/${ARTIFACTS_SUFFIX}/${arch}/done"; then
+  ARTIFACTS_URL="${ARTIFACTS_PREFIX}/${FDO_UPSTREAM_REPO}/${ARTIFACTS_SUFFIX}/${arch}"
+else
+  ARTIFACTS_URL="${ARTIFACTS_PREFIX}/${CI_PROJECT_PATH}/${ARTIFACTS_SUFFIX}/${arch}"
+fi
 
-dpkg --add-architecture $arch
-apt-get update
+curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
+    "${ARTIFACTS_URL}"/lava-rootfs.tar.zst -o rootfs.tar.zst
+mkdir -p /rootfs-"$arch"
+tar -C /rootfs-"$arch" '--exclude=./dev/*' --zstd -xf rootfs.tar.zst
+rm rootfs.tar.zst
 
-# Cross-build test deps
-BAREMETAL_EPHEMERAL=" \
-        autoconf \
-        automake \
-        crossbuild-essential-$arch \
-        git-lfs \
-        libboost-dev:$arch \
-        libdrm-dev:$arch \
-        libegl1-mesa-dev:$arch \
-        libelf-dev:$arch \
-        libexpat1-dev:$arch \
-        libffi-dev:$arch \
-        libgbm-dev:$arch \
-        libgles2-mesa-dev:$arch \
-        libpciaccess-dev:$arch \
-        libpcre3-dev:$arch \
-        libpng-dev:$arch \
-        libpython3-dev:$arch \
-        libstdc++6:$arch \
-        libtinfo-dev:$arch \
-        libudev-dev:$arch \
-        libvulkan-dev:$arch \
-        libwaffle-dev:$arch \
-        libxcb-keysyms1-dev:$arch \
-        libxkbcommon-dev:$arch \
-        python3-dev \
-        qt5-default \
-        qt5-qmake \
-        qtbase5-dev:$arch \
-        "
+if [[ $arch == "arm64" ]]; then
+    mkdir -p /baremetal-files
+    pushd /baremetal-files
 
-apt-get install -y --no-remove $BAREMETAL_EPHEMERAL
+    curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
+	-O "${ARTIFACTS_URL}"/Image
+    curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
+        -O "${ARTIFACTS_URL}"/Image.gz
+    curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
+        -O "${ARTIFACTS_URL}"/cheza-kernel
 
-mkdir /var/cache/apt/archives/$arch
+    DEVICE_TREES=""
+    DEVICE_TREES="$DEVICE_TREES apq8016-sbc.dtb"
+    DEVICE_TREES="$DEVICE_TREES apq8096-db820c.dtb"
+    DEVICE_TREES="$DEVICE_TREES tegra210-p3450-0000.dtb"
+    DEVICE_TREES="$DEVICE_TREES imx8mq-nitrogen.dtb"
 
-############### Create cross-files
+    for DTB in $DEVICE_TREES; do
+	curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
+            -O "${ARTIFACTS_URL}/$DTB"
+    done
 
-. .gitlab-ci/create-cross-file.sh $arch
+    popd
+elif [[ $arch == "armhf" ]]; then
+    mkdir -p /baremetal-files
+    pushd /baremetal-files
 
-. .gitlab-ci/container/container_pre_build.sh
+    curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
+        -O "${ARTIFACTS_URL}"/zImage
 
-############### Create rootfs
-KERNEL_URL=https://github.com/anholt/linux/archive/cheza-pagetables-2020-09-04.tar.gz
+    DEVICE_TREES=""
+    DEVICE_TREES="$DEVICE_TREES imx6q-cubox-i.dtb"
+    DEVICE_TREES="$DEVICE_TREES tegra124-jetson-tk1.dtb"
 
-DEBIAN_ARCH=$arch INCLUDE_VK_CTS=1 . .gitlab-ci/container/lava_build.sh
+    for DTB in $DEVICE_TREES; do
+	curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
+            -O "${ARTIFACTS_URL}/$DTB"
+    done
 
-############### Uninstall the build software
-
-apt-get purge -y $BAREMETAL_EPHEMERAL
-
-. .gitlab-ci/container/container_post_build.sh
+    popd
+fi

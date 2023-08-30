@@ -20,13 +20,24 @@
 
 inc_amd = include_directories('.')
 
-subdir('addrlib')
-subdir('common')
-subdir('llvm')
-if with_amd_vk
+if with_amd_vk or with_gallium_radeonsi
+  subdir('addrlib')
+  subdir('common')
+  if with_llvm
+    subdir('llvm')
+  else
+    libamd_common_llvm = []
+  endif
   subdir('compiler')
+endif
+
+if with_amd_vk
   subdir('vulkan')
   if with_aco_tests
     subdir('compiler/tests')
   endif
+endif
+
+if with_tools.contains('drm-shim')
+  subdir('drm-shim')
 endif

@@ -35,8 +35,11 @@ lower_impl(nir_function_impl *impl)
    nir_builder_init(&b, impl);
    b.cursor = nir_before_cf_list(&impl->body);
 
-   /* The edge flag is the last input in st/mesa. */
-   assert(shader->num_inputs == util_bitcount64(shader->info.inputs_read));
+   /* The edge flag is the last input in st/mesa.  This code is also called by
+    * i965 which calls it before any input locations are assigned.
+    */
+   assert(shader->num_inputs == 0 ||
+          shader->num_inputs == util_bitcount64(shader->info.inputs_read));
 
    /* Lowered IO only uses intrinsics. It doesn't use variables. */
    if (shader->info.io_lowered) {
@@ -72,16 +75,13 @@ lower_impl(nir_function_impl *impl)
       return;
    }
 
-   in  = nir_variable_create(shader, nir_var_shader_in,
-                             glsl_vec4_type(), "edgeflag_in");
-   in->data.location = VERT_ATTRIB_EDGEFLAG;
+   in = nir_create_variable_with_location(b.shader, nir_var_shader_in,
+                                          VERT_ATTRIB_EDGEFLAG, glsl_vec4_type());
+   shader->info.inputs_read |= VERT_BIT_EDGEFLAG;
 
-   in->data.driver_location = shader->num_inputs++;
-   shader->info.inputs_read |= BITFIELD64_BIT(VERT_ATTRIB_EDGEFLAG);
-
-   out = nir_variable_create(shader, nir_var_shader_out,
-                             glsl_vec4_type(), "edgeflag_out");
-   out->data.location = VARYING_SLOT_EDGE;
+   out = nir_create_variable_with_location(b.shader, nir_var_shader_out,
+                                           VARYING_SLOT_EDGE, glsl_vec4_type());
+   shader->info.outputs_written |= VARYING_BIT_EDGE;
 
    def = nir_load_var(&b, in);
    nir_store_var(&b, out, def, 0xf);
@@ -92,5 +92,9 @@ lower_impl(nir_function_impl *impl)
 
 void nir_lower_passthrough_edgeflags(nir_shader *shader)
 {
+   assert(shader->info.stage == MESA_SHADER_VERTEX);
+
+   shader->info.vs.needs_edge_flag = true;
+
    lower_impl(nir_shader_get_entrypoint(shader));
 }

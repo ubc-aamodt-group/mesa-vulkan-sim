@@ -46,15 +46,18 @@
 #endif
 #include <GL/gl.h>
 #include <GL/internal/dri_interface.h>
+#include <GL/internal/mesa_interface.h>
 #include "loader.h"
+#include "util/libdrm.h"
+#include "util/os_file.h"
+#include "util/os_misc.h"
+#include "git_sha1.h"
 
-#ifdef HAVE_LIBDRM
-#include <xf86drm.h>
 #define MAX_DRM_DEVICES 64
+
 #ifdef USE_DRICONF
 #include "util/xmlconfig.h"
 #include "util/driconf.h"
-#endif
 #endif
 
 #include "util/macros.h"
@@ -101,7 +104,6 @@ loader_open_device(const char *device_name)
 
 static char *loader_get_kernel_driver_name(int fd)
 {
-#if HAVE_LIBDRM
    char *driver;
    drmVersionPtr version = drmGetVersion(fd);
 
@@ -116,22 +118,19 @@ static char *loader_get_kernel_driver_name(int fd)
 
    drmFreeVersion(version);
    return driver;
-#else
-   return NULL;
-#endif
 }
 
 bool
-is_kernel_i915(int fd)
+iris_predicate(int fd)
 {
    char *kernel_driver = loader_get_kernel_driver_name(fd);
-   bool is_i915 = kernel_driver && strcmp(kernel_driver, "i915") == 0;
+   bool ret = kernel_driver && (strcmp(kernel_driver, "i915") == 0 ||
+                                strcmp(kernel_driver, "xe") == 0);
 
    free(kernel_driver);
-   return is_i915;
+   return ret;
 }
 
-#if defined(HAVE_LIBDRM)
 int
 loader_open_render_node(const char *name)
 {
@@ -177,6 +176,31 @@ loader_open_render_node(const char *name)
    return fd;
 }
 
+// char *
+// loader_get_render_node(dev_t device)
+// {
+//    char *render_node = NULL;
+//    drmDevicePtr dev_ptr;
+
+//    if (drmGetDeviceFromDevId(device, 0, &dev_ptr) < 0)
+//       return NULL;
+
+//    if (dev_ptr->available_nodes & (1 << DRM_NODE_RENDER)) {
+//       render_node = strdup(dev_ptr->nodes[DRM_NODE_RENDER]);
+//       if (!render_node)
+//          log_(_LOADER_DEBUG, "MESA-LOADER: failed to allocate memory for render node\n");
+//    }
+
+//    drmFreeDevice(&dev_ptr);
+
+//    return render_node;
+// }
+char *
+loader_get_render_node(dev_t device)
+{
+   return NULL;
+}
+
 #ifdef USE_DRICONF
 static const driOptionDescription __driConfigOptionsLoader[] = {
     DRI_CONF_SECTION_INITIALIZATION
@@ -195,7 +219,7 @@ static char *loader_get_dri_config_driver(int fd)
    driParseOptionInfo(&defaultInitOptions, __driConfigOptionsLoader,
                       ARRAY_SIZE(__driConfigOptionsLoader));
    driParseConfigFiles(&userInitOptions, &defaultInitOptions, 0,
-                       "loader", kernel_driver, NULL, 0, NULL, 0);
+                       "loader", kernel_driver, NULL, NULL, 0, NULL, 0);
    if (driCheckOption(&userInitOptions, "dri_driver", DRI_STRING)) {
       char *opt = driQueryOptionstr(&userInitOptions, "dri_driver");
       /* not an empty string */
@@ -218,9 +242,12 @@ static char *loader_get_dri_config_device_id(void)
    driParseOptionInfo(&defaultInitOptions, __driConfigOptionsLoader,
                       ARRAY_SIZE(__driConfigOptionsLoader));
    driParseConfigFiles(&userInitOptions, &defaultInitOptions, 0,
-                       "loader", NULL, NULL, 0, NULL, 0);
-   if (driCheckOption(&userInitOptions, "device_id", DRI_STRING))
-      prime = strdup(driQueryOptionstr(&userInitOptions, "device_id"));
+                       "loader", NULL, NULL, NULL, 0, NULL, 0);
+   if (driCheckOption(&userInitOptions, "device_id", DRI_STRING)) {
+      char *opt = driQueryOptionstr(&userInitOptions, "device_id");
+      if (*opt)
+         prime = strdup(opt);
+   }
    driDestroyOptionCache(&userInitOptions);
    driDestroyOptionInfo(&defaultInitOptions);
 
@@ -298,12 +325,14 @@ static char *drm_get_id_path_tag_for_fd(int fd)
    return tag;
 }
 
-int loader_get_user_preferred_fd(int default_fd, bool *different_device)
+bool loader_get_user_preferred_fd(int *fd_render_gpu, int *original_fd)
 {
    const char *dri_prime = getenv("DRI_PRIME");
    char *default_tag, *prime = NULL;
    drmDevicePtr devices[MAX_DRM_DEVICES];
    int i, num_devices, fd = -1;
+   bool prime_is_vid_did;
+   uint16_t vendor_id, device_id;
 
    if (dri_prime)
       prime = strdup(dri_prime);
@@ -312,12 +341,12 @@ int loader_get_user_preferred_fd(int default_fd, bool *different_device)
       prime = loader_get_dri_config_device_id();
 #endif
 
-   if (prime == NULL) {
-      *different_device = false;
-      return default_fd;
-   }
+   if (prime == NULL)
+      goto no_prime_gpu_offloading;
+   else
+      prime_is_vid_did = sscanf(prime, "%hx:%hx", &vendor_id, &device_id) == 2;
 
-   default_tag = drm_get_id_path_tag_for_fd(default_fd);
+   default_tag = drm_get_id_path_tag_for_fd(*fd_render_gpu);
    if (default_tag == NULL)
       goto err;
 
@@ -329,17 +358,27 @@ int loader_get_user_preferred_fd(int default_fd, bool *different_device)
       if (!(devices[i]->available_nodes & 1 << DRM_NODE_RENDER))
          continue;
 
-      /* two formats of DRI_PRIME are supported:
+      /* three formats of DRI_PRIME are supported:
        * "1": choose any other card than the card used by default.
        * id_path_tag: (for example "pci-0000_02_00_0") choose the card
        * with this id_path_tag.
+       * vendor_id:device_id
        */
       if (!strcmp(prime,"1")) {
          if (drm_device_matches_tag(devices[i], default_tag))
             continue;
       } else {
-         if (!drm_device_matches_tag(devices[i], prime))
-            continue;
+         if (prime_is_vid_did && devices[i]->bustype == DRM_BUS_PCI &&
+             devices[i]->deviceinfo.pci->vendor_id == vendor_id &&
+             devices[i]->deviceinfo.pci->device_id == device_id) {
+            /* Update prime for the "different_device"
+             * determination below. */
+            free(prime);
+            prime = drm_construct_id_path_tag(devices[i]);
+         } else {
+            if (!drm_device_matches_tag(devices[i], prime))
+               continue;
+         }
       }
 
       fd = loader_open_device(devices[i]->nodes[DRM_NODE_RENDER]);
@@ -353,36 +392,31 @@ int loader_get_user_preferred_fd(int default_fd, bool *different_device)
    if (fd < 0)
       goto err;
 
-   close(default_fd);
-
-   *different_device = !!strcmp(default_tag, prime);
+   bool is_render_and_display_gpu_diff = !!strcmp(default_tag, prime);
+   if (original_fd) {
+      if (is_render_and_display_gpu_diff) {
+         *original_fd = *fd_render_gpu;
+         *fd_render_gpu = fd;
+      } else {
+         *original_fd = *fd_render_gpu;
+         close(fd);
+      }
+   } else {
+      close(*fd_render_gpu);
+      *fd_render_gpu = fd;
+   }
 
    free(default_tag);
    free(prime);
-   return fd;
-
+   return is_render_and_display_gpu_diff;
  err:
-   *different_device = false;
-
    free(default_tag);
    free(prime);
-   return default_fd;
+ no_prime_gpu_offloading:
+   if (original_fd)
+      *original_fd = *fd_render_gpu;
+   return false;
 }
-#else
-int
-loader_open_render_node(const char *name)
-{
-   return -1;
-}
-
-int loader_get_user_preferred_fd(int default_fd, bool *different_device)
-{
-   *different_device = false;
-   return default_fd;
-}
-#endif
-
-#if defined(HAVE_LIBDRM)
 
 static bool
 drm_get_pci_id_for_fd(int fd, int *vendor_id, int *chip_id)
@@ -405,28 +439,60 @@ drm_get_pci_id_for_fd(int fd, int *vendor_id, int *chip_id)
    drmFreeDevice(&device);
    return true;
 }
-#endif
 
+#ifdef __linux__
+static int loader_get_linux_pci_field(int maj, int min, const char *field)
+{
+   char path[PATH_MAX + 1];
+   snprintf(path, sizeof(path), "/sys/dev/char/%d:%d/device/%s", maj, min, field);
+
+   char *field_str = os_read_file(path, NULL);
+   if (!field_str) {
+      /* Probably non-PCI device. */
+      return 0;
+   }
+
+   int value = (int)strtoll(field_str, NULL, 16);
+   free(field_str);
+
+   return value;
+}
+
+static bool
+loader_get_linux_pci_id_for_fd(int fd, int *vendor_id, int *chip_id)
+{
+   struct stat sbuf;
+   if (fstat(fd, &sbuf) != 0) {
+      log_(_LOADER_DEBUG, "MESA-LOADER: failed to fstat fd\n");
+      return false;
+   }
+
+   int maj = major(sbuf.st_rdev);
+   int min = minor(sbuf.st_rdev);
+
+   *vendor_id = loader_get_linux_pci_field(maj, min, "vendor");
+   *chip_id = loader_get_linux_pci_field(maj, min, "device");
+
+   return *vendor_id && *chip_id;
+}
+#endif /* __linux__ */
 
 bool
 loader_get_pci_id_for_fd(int fd, int *vendor_id, int *chip_id)
 {
-#if HAVE_LIBDRM
-   return drm_get_pci_id_for_fd(fd, vendor_id, chip_id);
+#ifdef __linux__
+   /* Implementation without causing full enumeration of DRM devices. */
+   if (loader_get_linux_pci_id_for_fd(fd, vendor_id, chip_id))
+      return true;
 #endif
-   return false;
+
+   return drm_get_pci_id_for_fd(fd, vendor_id, chip_id);
 }
 
 char *
 loader_get_device_name_for_fd(int fd)
 {
-   char *result = NULL;
-
-#if HAVE_LIBDRM
-   result = drmGetDeviceNameFromFd2(fd);
-#endif
-
-   return result;
+   return drmGetDeviceNameFromFd2(fd);
 }
 
 static char *
@@ -475,12 +541,12 @@ loader_get_driver_for_fd(int fd)
     * and may be useful for some touch testing of i915 on an i965 host.
     */
    if (geteuid() == getuid()) {
-      driver = getenv("MESA_LOADER_DRIVER_OVERRIDE");
-      if (driver)
-         return strdup(driver);
+      const char *override = os_get_option("MESA_LOADER_DRIVER_OVERRIDE");
+      if (override)
+         return strdup(override);
    }
 
-#if defined(HAVE_LIBDRM) && defined(USE_DRICONF)
+#if defined(USE_DRICONF)
    driver = loader_get_dri_config_driver(fd);
    if (driver)
       return driver;
@@ -516,6 +582,121 @@ loader_get_extensions_name(const char *driver_name)
    return name;
 }
 
+bool
+loader_bind_extensions(void *data,
+                       const struct dri_extension_match *matches, size_t num_matches,
+                       const __DRIextension **extensions)
+{
+   bool ret = true;
+
+   for (size_t j = 0; j < num_matches; j++) {
+      const struct dri_extension_match *match = &matches[j];
+      const __DRIextension **field = (const __DRIextension **)((char *)data + matches[j].offset);
+      for (size_t i = 0; extensions[i]; i++) {
+         if (strcmp(extensions[i]->name, match->name) == 0 &&
+             extensions[i]->version >= match->version) {
+            *field = extensions[i];
+            break;
+         }
+      }
+
+      if (!*field) {
+         log_(match->optional ? _LOADER_DEBUG : _LOADER_FATAL, "did not find extension %s version %d\n",
+               match->name, match->version);
+         if (!match->optional)
+            ret = false;
+         continue;
+      }
+
+      /* The loaders rely on the loaded DRI drivers being from the same Mesa
+       * build so that we can reference the same structs on both sides.
+       */
+      if (strcmp(match->name, __DRI_MESA) == 0) {
+         const __DRImesaCoreExtension *mesa = (const __DRImesaCoreExtension *)*field;
+         if (strcmp(mesa->version_string, MESA_INTERFACE_VERSION_STRING) != 0) {
+            log_(_LOADER_FATAL, "DRI driver not from this Mesa build ('%s' vs '%s')\n",
+                 mesa->version_string, MESA_INTERFACE_VERSION_STRING);
+            ret = false;
+         }
+      }
+   }
+
+   return ret;
+}
+/**
+ * Opens a driver or backend using its name, returning the library handle.
+ *
+ * \param driverName - a name like "i965", "radeon", "nouveau", etc.
+ * \param lib_suffix - a suffix to append to the driver name to generate the
+ * full library name.
+ * \param search_path_vars - NULL-terminated list of env vars that can be used
+ * \param default_search_path - a colon-separted list of directories used if
+ * search_path_vars is NULL or none of the vars are set in the environment.
+ * \param warn_on_fail - Log a warning if the driver is not found.
+ */
+void *
+loader_open_driver_lib(const char *driver_name,
+                       const char *lib_suffix,
+                       const char **search_path_vars,
+                       const char *default_search_path,
+                       bool warn_on_fail)
+{
+   char path[PATH_MAX];
+   const char *search_paths, *next, *end;
+
+   search_paths = NULL;
+   if (geteuid() == getuid() && search_path_vars) {
+      for (int i = 0; search_path_vars[i] != NULL; i++) {
+         search_paths = getenv(search_path_vars[i]);
+         if (search_paths)
+            break;
+      }
+   }
+   if (search_paths == NULL)
+      search_paths = default_search_path;
+
+   void *driver = NULL;
+   const char *dl_error = NULL;
+   end = search_paths + strlen(search_paths);
+   for (const char *p = search_paths; p < end; p = next + 1) {
+      int len;
+      next = strchr(p, ':');
+      if (next == NULL)
+         next = end;
+
+      len = next - p;
+      snprintf(path, sizeof(path), "%.*s/tls/%s%s.so", len,
+               p, driver_name, lib_suffix);
+      driver = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+      if (driver == NULL) {
+         snprintf(path, sizeof(path), "%.*s/%s%s.so", len,
+                  p, driver_name, lib_suffix);
+         driver = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+         if (driver == NULL) {
+            dl_error = dlerror();
+            log_(_LOADER_DEBUG, "MESA-LOADER: failed to open %s: %s\n",
+                 path, dl_error);
+         }
+      }
+      /* not need continue to loop all paths once the driver is found */
+      if (driver != NULL)
+         break;
+   }
+
+   if (driver == NULL) {
+      if (warn_on_fail) {
+         log_(_LOADER_WARNING,
+              "MESA-LOADER: failed to open %s: %s (search paths %s, suffix %s)\n",
+              driver_name, dl_error, search_paths, lib_suffix);
+      }
+      return NULL;
+   }
+
+   log_(_LOADER_DEBUG, "MESA-LOADER: dlopen(%s)\n", path);
+
+   return driver;
+}
+
 /**
  * Opens a DRI driver using its driver name, returning the __DRIextension
  * entrypoints.
@@ -530,58 +711,14 @@ loader_open_driver(const char *driver_name,
                    void **out_driver_handle,
                    const char **search_path_vars)
 {
-   char path[PATH_MAX], *search_paths, *next, *end;
    char *get_extensions_name;
    const struct __DRIextensionRec **extensions = NULL;
    const struct __DRIextensionRec **(*get_extensions)(void);
+   void *driver = loader_open_driver_lib(driver_name, "_dri", search_path_vars,
+                                         DEFAULT_DRIVER_DIR, true);
 
-   search_paths = NULL;
-   if (geteuid() == getuid() && search_path_vars) {
-      for (int i = 0; search_path_vars[i] != NULL; i++) {
-         search_paths = getenv(search_path_vars[i]);
-         if (search_paths)
-            break;
-      }
-   }
-   if (search_paths == NULL)
-      search_paths = DEFAULT_DRIVER_DIR;
-
-   void *driver = NULL;
-   char *dl_error = NULL;
-   end = search_paths + strlen(search_paths);
-   for (char *p = search_paths; p < end; p = next + 1) {
-      int len;
-      next = strchr(p, ':');
-      if (next == NULL)
-         next = end;
-
-      len = next - p;
-#if USE_ELF_TLS
-      snprintf(path, sizeof(path), "%.*s/tls/%s_dri.so", len, p, driver_name);
-      driver = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
-#endif
-      if (driver == NULL) {
-         snprintf(path, sizeof(path), "%.*s/%s_dri.so", len, p, driver_name);
-         driver = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
-         if (driver == NULL) {
-            dl_error = dlerror();
-            log_(_LOADER_DEBUG, "MESA-LOADER: failed to open %s: %s\n",
-                 path, dl_error);
-         }
-      }
-      /* not need continue to loop all paths once the driver is found */
-      if (driver != NULL)
-         break;
-   }
-
-   if (driver == NULL) {
-      log_(_LOADER_WARNING, "MESA-LOADER: failed to open %s: %s (search paths %s)\n",
-           driver_name, dl_error, search_paths);
-      *out_driver_handle = NULL;
-      return NULL;
-   }
-
-   log_(_LOADER_DEBUG, "MESA-LOADER: dlopen(%s)\n", path);
+   if (!driver)
+      goto failed;
 
    get_extensions_name = loader_get_extensions_name(driver_name);
    if (get_extensions_name) {
@@ -601,8 +738,10 @@ loader_open_driver(const char *driver_name,
       log_(_LOADER_WARNING,
            "MESA-LOADER: driver exports no extensions (%s)\n", dlerror());
       dlclose(driver);
+      driver = NULL;
    }
 
+failed:
    *out_driver_handle = driver;
    return extensions;
 }

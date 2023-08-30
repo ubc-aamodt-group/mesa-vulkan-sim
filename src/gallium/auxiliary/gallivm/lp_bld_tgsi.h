@@ -55,8 +55,6 @@ extern "C" {
 
 #define LP_CHAN_ALL ~0u
 
-#define LP_MAX_INSTRUCTIONS 256
-
 struct tgsi_full_declaration;
 struct tgsi_full_immediate;
 struct tgsi_full_instruction;
@@ -171,6 +169,7 @@ struct lp_bld_tgsi_system_values {
    LLVMValueRef vertex_id_nobase;
    LLVMValueRef prim_id;
    LLVMValueRef basevertex;
+   LLVMValueRef firstvertex;
    LLVMValueRef invocation_id;
    LLVMValueRef draw_id;
    LLVMValueRef thread_id;
@@ -184,8 +183,12 @@ struct lp_bld_tgsi_system_values {
    LLVMValueRef tess_inner;
    LLVMValueRef vertices_in;
    LLVMValueRef sample_id;
+   LLVMTypeRef sample_pos_type;
    LLVMValueRef sample_pos;
    LLVMValueRef sample_mask_in;
+   LLVMValueRef view_index;
+   LLVMValueRef subgroup_id;
+   LLVMValueRef num_subgroups;
 };
 
 
@@ -200,30 +203,27 @@ struct lp_bld_tgsi_system_values {
 struct lp_build_sampler_soa
 {
    void
-   (*destroy)( struct lp_build_sampler_soa *sampler );
-
-   void
    (*emit_tex_sample)(const struct lp_build_sampler_soa *sampler,
                       struct gallivm_state *gallivm,
                       const struct lp_sampler_params *params);
 
    void
-   (*emit_size_query)( const struct lp_build_sampler_soa *sampler,
-                       struct gallivm_state *gallivm,
-                       const struct lp_sampler_size_query_params *params);
+   (*emit_size_query)(const struct lp_build_sampler_soa *sampler,
+                      struct gallivm_state *gallivm,
+                      const struct lp_sampler_size_query_params *params);
 };
 
 
 struct lp_build_sampler_aos
 {
    LLVMValueRef
-   (*emit_fetch_texel)( const struct lp_build_sampler_aos *sampler,
-                        struct lp_build_context *bld,
-                        unsigned target, /* TGSI_TEXTURE_* */
-                        unsigned unit,
-                        LLVMValueRef coords,
-                        const struct lp_derivatives derivs,
-                        enum lp_build_tex_modifier modifier);
+   (*emit_fetch_texel)(const struct lp_build_sampler_aos *sampler,
+                       struct lp_build_context *bld,
+                       enum tgsi_texture_type target,
+                       unsigned unit,
+                       LLVMValueRef coords,
+                       const struct lp_derivatives derivs,
+                       enum lp_build_tex_modifier modifier);
 };
 
 struct lp_img_params;
@@ -231,17 +231,14 @@ struct lp_img_params;
 struct lp_build_image_soa
 {
    void
-   (*destroy)( struct lp_build_image_soa *image );
-
-   void
    (*emit_op)(const struct lp_build_image_soa *image,
               struct gallivm_state *gallivm,
               const struct lp_img_params *params);
 
    void
-   (*emit_size_query)( const struct lp_build_image_soa *sampler,
-                       struct gallivm_state *gallivm,
-                       const struct lp_sampler_size_query_params *params);
+   (*emit_size_query)(const struct lp_build_image_soa *sampler,
+                      struct gallivm_state *gallivm,
+                      const struct lp_sampler_size_query_params *params);
 };
 
 struct lp_build_fs_iface;
@@ -254,7 +251,7 @@ struct lp_build_fs_iface {
 
    void (*fb_fetch)(const struct lp_build_fs_iface *iface,
                     struct lp_build_context *bld,
-                    unsigned cbuf,
+                    int location,
                     LLVMValueRef result[4]);
 };
 
@@ -270,21 +267,28 @@ struct lp_build_tgsi_params {
    LLVMValueRef const_sizes_ptr;
    const struct lp_bld_tgsi_system_values *system_values;
    const LLVMValueRef (*inputs)[4];
+   LLVMTypeRef context_type;
    LLVMValueRef context_ptr;
+   LLVMTypeRef resources_type;
+   LLVMValueRef resources_ptr;
+   LLVMTypeRef thread_data_type;
    LLVMValueRef thread_data_ptr;
    const struct lp_build_sampler_soa *sampler;
    const struct tgsi_shader_info *info;
    const struct lp_build_gs_iface *gs_iface;
    const struct lp_build_tcs_iface *tcs_iface;
    const struct lp_build_tes_iface *tes_iface;
+   const struct lp_build_mesh_iface *mesh_iface;
    LLVMValueRef ssbo_ptr;
    LLVMValueRef ssbo_sizes_ptr;
    const struct lp_build_image_soa *image;
    LLVMValueRef shared_ptr;
+   LLVMValueRef payload_ptr;
    const struct lp_build_coro_suspend_info *coro;
    LLVMValueRef kernel_args;
    const struct lp_build_fs_iface *fs_iface;
    unsigned gs_vertex_streams;
+   LLVMValueRef aniso_filter_table;
 };
 
 void
@@ -502,6 +506,25 @@ struct lp_build_tes_iface
                                      LLVMValueRef swizzle_index);
 };
 
+struct lp_build_mesh_iface
+{
+   void (*emit_store_output)(const struct lp_build_mesh_iface *mesh_iface,
+                             struct lp_build_context * bld,
+                             unsigned name,
+                             boolean is_vindex_indirect,
+                             LLVMValueRef vertex_index,
+                             boolean is_aindex_indirect,
+                             LLVMValueRef attrib_index,
+                             boolean is_sindex_indirect,
+                             LLVMValueRef swizzle_index,
+                             LLVMValueRef value,
+                             LLVMValueRef mask_vec);
+   void (*emit_vertex_and_primitive_count)(const struct lp_build_mesh_iface *mesh_iface,
+                                           struct lp_build_context *bld,
+                                           LLVMValueRef vertices_count,
+                                           LLVMValueRef primitives_count);
+};
+
 struct lp_build_tgsi_soa_context
 {
    struct lp_build_tgsi_context bld_base;
@@ -519,16 +542,18 @@ struct lp_build_tgsi_soa_context
    LLVMValueRef max_output_vertices_vec;
 
    LLVMValueRef consts_ptr;
-   LLVMValueRef const_sizes_ptr;
    LLVMValueRef consts[LP_MAX_TGSI_CONST_BUFFERS];
    LLVMValueRef consts_sizes[LP_MAX_TGSI_CONST_BUFFERS];
    const LLVMValueRef (*inputs)[TGSI_NUM_CHANNELS];
    LLVMValueRef (*outputs)[TGSI_NUM_CHANNELS];
+   LLVMTypeRef context_type;
    LLVMValueRef context_ptr;
+   LLVMTypeRef resources_type;
+   LLVMValueRef resources_ptr;
+   LLVMTypeRef thread_data_type;
    LLVMValueRef thread_data_ptr;
 
    LLVMValueRef ssbo_ptr;
-   LLVMValueRef ssbo_sizes_ptr;
    LLVMValueRef ssbos[LP_MAX_TGSI_SHADER_BUFFERS];
    LLVMValueRef ssbo_sizes[LP_MAX_TGSI_SHADER_BUFFERS];
 
@@ -549,12 +574,14 @@ struct lp_build_tgsi_soa_context
     * set in the indirect_files field.
     * The temps[] array above is unused then.
     */
+   LLVMTypeRef temps_array_type;
    LLVMValueRef temps_array;
 
    /* We allocate/use this array of output if (1 << TGSI_FILE_OUTPUT) is
     * set in the indirect_files field.
     * The outputs[] array above is unused then.
     */
+   LLVMTypeRef outputs_array_type;
    LLVMValueRef outputs_array;
 
    /* We allocate/use this array of inputs if (1 << TGSI_FILE_INPUT) is

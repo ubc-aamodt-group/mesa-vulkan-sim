@@ -3,13 +3,10 @@
 #define INLINE_SW_HELPER_H
 
 #include "pipe/p_compiler.h"
+#include "pipe/p_screen.h"
 #include "util/u_debug.h"
 #include "frontend/sw_winsys.h"
 #include "target-helpers/inline_debug_helper.h"
-
-#ifdef GALLIUM_SWR
-#include "swr/swr_public.h"
-#endif
 
 /* Helper function to choose and instantiate one of the software rasterizers:
  * llvmpipe, softpipe.
@@ -55,14 +52,9 @@ sw_screen_create_named(struct sw_winsys *winsys, const char *driver)
       screen = softpipe_create_screen(winsys);
 #endif
 
-#if defined(GALLIUM_SWR)
-   if (screen == NULL && strcmp(driver, "swr") == 0)
-      screen = swr_create_screen(winsys);
-#endif
-
 #if defined(GALLIUM_ZINK)
    if (screen == NULL && strcmp(driver, "zink") == 0)
-      screen = zink_create_screen(winsys);
+      screen = zink_create_screen(winsys, NULL);
 #endif
 
 #if defined(GALLIUM_D3D12)
@@ -75,24 +67,19 @@ sw_screen_create_named(struct sw_winsys *winsys, const char *driver)
 
 
 static inline struct pipe_screen *
-sw_screen_create(struct sw_winsys *winsys)
+sw_screen_create_vk(struct sw_winsys *winsys, bool sw_vk)
 {
+   UNUSED bool only_sw = debug_get_bool_option("LIBGL_ALWAYS_SOFTWARE", false);
    const char *drivers[] = {
-      debug_get_option("GALLIUM_DRIVER", ""),
-#if defined(GALLIUM_ZINK)
-      "zink",
-#endif
+      (sw_vk ? "" : debug_get_option("GALLIUM_DRIVER", "")),
 #if defined(GALLIUM_D3D12)
-      "d3d12",
+      (sw_vk || only_sw) ? "" : "d3d12",
 #endif
 #if defined(GALLIUM_LLVMPIPE)
       "llvmpipe",
 #endif
 #if defined(GALLIUM_SOFTPIPE)
-      "softpipe",
-#endif
-#if defined(GALLIUM_SWR)
-      "swr",
+      (sw_vk ? "" : "softpipe"),
 #endif
    };
 
@@ -107,4 +94,19 @@ sw_screen_create(struct sw_winsys *winsys)
    return NULL;
 }
 
+static inline struct pipe_screen *
+sw_screen_create_zink(struct sw_winsys *winsys, const struct pipe_screen_config *config, bool whatever)
+{
+#if defined(GALLIUM_ZINK)
+   return zink_create_screen(winsys, config);
+#else
+   return NULL;
+#endif
+}
+
+static inline struct pipe_screen *
+sw_screen_create(struct sw_winsys *winsys)
+{
+   return sw_screen_create_vk(winsys, false);
+}
 #endif

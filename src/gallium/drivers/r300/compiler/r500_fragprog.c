@@ -34,23 +34,21 @@
 #include "radeon_variable.h"
 #include "r300_reg.h"
 
+#include "util/compiler.h"
+
 /**
  * Rewrite IF instructions to use the ALU result special register.
  */
-int r500_transform_IF(
+static void r500_transform_IF_instr(
 	struct radeon_compiler * c,
 	struct rc_instruction * inst_if,
-	void *data)
+	struct rc_list * var_list)
 {
+
 	struct rc_variable * writer;
 	struct rc_list * writer_list, * list_ptr;
-	struct rc_list * var_list = rc_get_variables(c);
 	unsigned int generic_if = 0;
 	unsigned int alu_chan;
-
-	if (inst_if->U.I.Opcode != RC_OPCODE_IF) {
-		return 0;
-	}
 
 	writer_list = rc_variable_list_get_writers(
 			var_list, inst_if->Type, &inst_if->U.I.SrcReg[0]);
@@ -138,13 +136,13 @@ int r500_transform_IF(
 				break;
 			case RC_OPCODE_SLE:
 				reverse_srcs = 1;
-				/* Fall through */
+				FALLTHROUGH;
 			case RC_OPCODE_SGE:
 				compare_func = RC_COMPARE_FUNC_GEQUAL;
 				break;
 			case RC_OPCODE_SGT:
 				reverse_srcs = 1;
-				/* Fall through */
+				FALLTHROUGH;
 			case RC_OPCODE_SLT:
 				compare_func = RC_COMPARE_FUNC_LESS;
 				break;
@@ -176,8 +174,22 @@ int r500_transform_IF(
 				RC_SWIZZLE_X, RC_SWIZZLE_UNUSED,
 				RC_SWIZZLE_UNUSED, RC_SWIZZLE_UNUSED);
 	inst_if->U.I.SrcReg[0].Negate = 0;
+}
 
-	return 1;
+void r500_transform_IF(
+	struct radeon_compiler * c,
+	void *user)
+{
+	struct rc_list * var_list = rc_get_variables(c);
+
+	struct rc_instruction * inst = c->Program.Instructions.Next;
+	while(inst != &c->Program.Instructions) {
+		struct rc_instruction * current = inst;
+		inst = inst->Next;
+
+		if (current->U.I.Opcode == RC_OPCODE_IF)
+			r500_transform_IF_instr(c, current, var_list);
+	}
 }
 
 static int r500_swizzle_is_native(rc_opcode opcode, struct rc_src_register reg)
@@ -218,8 +230,6 @@ static int r500_swizzle_is_native(rc_opcode opcode, struct rc_src_register reg)
 			return 1;
 
 		return 0;
-	} else if (reg.File == RC_FILE_INLINE) {
-		return 1;
 	} else {
 		/* ALU instructions support almost everything */
 		relevant = 0;
@@ -264,7 +274,7 @@ static void r500_swizzle_split(struct rc_src_register src, unsigned int usemask,
 	}
 }
 
-struct rc_swizzle_caps r500_swizzle_caps = {
+const struct rc_swizzle_caps r500_swizzle_caps = {
 	.IsNative = r500_swizzle_is_native,
 	.Split = r500_swizzle_split
 };

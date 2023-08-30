@@ -58,7 +58,7 @@ convert_to_soa(struct gallivm_state *gallivm,
    LLVMValueRef aos_channels[4];
    unsigned pixels_per_channel = soa_type.length / 4;
 
-   debug_assert((soa_type.length % 4) == 0);
+   assert((soa_type.length % 4) == 0);
 
    aos_channel_type.length >>= 1;
 
@@ -81,7 +81,7 @@ convert_to_soa(struct gallivm_state *gallivm,
 void
 lp_build_format_swizzle_soa(const struct util_format_description *format_desc,
                             struct lp_build_context *bld,
-                            const LLVMValueRef *unswizzled,
+                            const LLVMValueRef unswizzled[4],
                             LLVMValueRef swizzled_out[4])
 {
    if (format_desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS) {
@@ -832,7 +832,7 @@ lp_build_fetch_rgba_soa(struct gallivm_state *gallivm,
 
       if (gallivm_debug & GALLIVM_DEBUG_PERF) {
          debug_printf("%s: AoS fetch fallback for %s\n",
-                      __FUNCTION__, format_desc->short_name);
+                      __func__, format_desc->short_name);
       }
 
       tmp_type = type;
@@ -919,7 +919,15 @@ lp_build_insert_soa_chan(struct lp_build_context *bld,
     case UTIL_FORMAT_TYPE_SIGNED:
        if (chan_desc.pure_integer) {
           chan = LLVMBuildBitCast(builder, rgba, bld->int_vec_type, "");
-          chan = LLVMBuildAnd(builder, chan, lp_build_const_int_vec(gallivm, type, chan_mask), "");
+          /* clamp to SINT range for < 32-bit values */
+          if (width < 32) {
+             struct lp_build_context int_bld;
+             lp_build_context_init(&int_bld, gallivm, lp_int_type(bld->type));
+             chan = lp_build_clamp(&int_bld, chan,
+                                   lp_build_const_int_vec(gallivm, type, -(1ULL << (width - 1))),
+                                   lp_build_const_int_vec(gallivm, type, (1ULL << (width - 1)) - 1));
+             chan = LLVMBuildAnd(builder, chan, lp_build_const_int_vec(gallivm, type, chan_mask), "");
+          }
        } else if (type.floating) {
           if (chan_desc.normalized) {
              char intrin[32];
@@ -945,6 +953,8 @@ lp_build_insert_soa_chan(struct lp_build_context *bld,
        if (type.floating) {
           if (chan_desc.size == 16) {
              chan = lp_build_float_to_half(gallivm, rgba);
+             chan = LLVMBuildBitCast(builder, chan,
+				     lp_build_vec_type(gallivm, lp_type_int_vec(16, 16 * type.length)), "");
              chan = LLVMBuildZExt(builder, chan, bld->int_vec_type, "");
              if (start)
                 chan = LLVMBuildShl(builder, chan,
@@ -977,6 +987,7 @@ lp_build_pack_rgba_soa(struct gallivm_state *gallivm,
 {
    unsigned chan;
    struct lp_build_context bld;
+   LLVMValueRef rgba_swiz[4];
    assert(format_desc->layout == UTIL_FORMAT_LAYOUT_PLAIN);
    assert(format_desc->block.width == 1);
    assert(format_desc->block.height == 1);
@@ -985,13 +996,16 @@ lp_build_pack_rgba_soa(struct gallivm_state *gallivm,
    assert(type.width == 32);
 
    lp_build_context_init(&bld, gallivm, type);
+
+   lp_build_format_swizzle_soa(format_desc, &bld, rgba_in, rgba_swiz);
+
    for (chan = 0; chan < format_desc->nr_channels; ++chan) {
       struct util_format_channel_description chan_desc = format_desc->channel[chan];
 
       lp_build_insert_soa_chan(&bld, format_desc->block.bits,
                                chan_desc,
                                packed,
-                               rgba_in[chan]);
+                               rgba_swiz[chan]);
    }
 }
 
@@ -1085,7 +1099,7 @@ lp_build_store_rgba_soa(struct gallivm_state *gallivm,
       struct lp_build_loop_state loop_state;
 
       LLVMValueRef store_offset = LLVMBuildAdd(gallivm->builder, offset, lp_build_const_int_vec(gallivm, type, i * 4), "");
-      store_offset = LLVMBuildGEP(gallivm->builder, base_ptr, &store_offset, 1, "");
+      store_offset = LLVMBuildGEP2(gallivm->builder, LLVMInt8TypeInContext(gallivm->context), base_ptr, &store_offset, 1, "");
 
       lp_build_loop_begin(&loop_state, gallivm, lp_build_const_int32(gallivm, 0));
 

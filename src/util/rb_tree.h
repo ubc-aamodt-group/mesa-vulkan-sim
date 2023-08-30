@@ -1,5 +1,5 @@
 /*
- * Copyright © 2017 Jason Ekstrand
+ * Copyright © 2017 Faith Ekstrand
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -27,6 +27,10 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /** A red-black tree node
  *
@@ -310,5 +314,9 @@ struct rb_node *rb_node_prev(struct rb_node *node);
  * black tree.  If anything is wrong, it will assert-fail.
  */
 void rb_tree_validate(struct rb_tree *T);
+
+#ifdef __cplusplus
+} /* extern C */
+#endif
 
 #endif /* RB_TREE_H */

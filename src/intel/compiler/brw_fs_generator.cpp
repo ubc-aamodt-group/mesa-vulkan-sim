@@ -30,7 +30,9 @@
 #include "brw_eu.h"
 #include "brw_fs.h"
 #include "brw_cfg.h"
+#include "dev/intel_debug.h"
 #include "util/mesa-sha1.h"
+#include "util/half_float.h"
 
 static enum brw_reg_file
 brw_file_from_reg(fs_reg *reg)
@@ -54,15 +56,15 @@ brw_file_from_reg(fs_reg *reg)
 }
 
 static struct brw_reg
-brw_reg_from_fs_reg(const struct gen_device_info *devinfo, fs_inst *inst,
+brw_reg_from_fs_reg(const struct intel_device_info *devinfo, fs_inst *inst,
                     fs_reg *reg, bool compressed)
 {
    struct brw_reg brw_reg;
 
    switch (reg->file) {
    case MRF:
-      assert((reg->nr & ~BRW_MRF_COMPR4) < BRW_MAX_MRF(devinfo->gen));
-      /* Fallthrough */
+      assert((reg->nr & ~BRW_MRF_COMPR4) < BRW_MAX_MRF(devinfo->ver));
+      FALLTHROUGH;
    case VGRF:
       if (reg->stride == 0) {
          brw_reg = brw_vec1_reg(brw_file_from_reg(reg), reg->nr, 0);
@@ -88,7 +90,7 @@ brw_reg_from_fs_reg(const struct gen_device_info *devinfo, fs_inst *inst,
          const unsigned max_hw_width = 16;
 
          /* XXX - The equation above is strictly speaking not correct on
-          *       hardware that supports unbalanced GRF writes -- On Gen9+
+          *       hardware that supports unbalanced GRF writes -- On Gfx9+
           *       each decompressed chunk of the instruction may have a
           *       different execution size when the number of components
           *       written to each destination GRF is not the same.
@@ -104,7 +106,7 @@ brw_reg_from_fs_reg(const struct gen_device_info *devinfo, fs_inst *inst,
             brw_reg = stride(brw_reg, width * reg->stride, width, reg->stride);
          }
 
-         if (devinfo->gen == 7 && !devinfo->is_haswell) {
+         if (devinfo->verx10 == 70) {
             /* From the IvyBridge PRM (EU Changes by Processor Generation, page 13):
              *  "Each DF (Double Float) operand uses an element size of 4 rather
              *   than 8 and all regioning parameters are twice what the values
@@ -171,7 +173,7 @@ brw_reg_from_fs_reg(const struct gen_device_info *devinfo, fs_inst *inst,
     * region, but on IVB and BYT DF regions must be programmed in terms of
     * floats. A <0,2,1> region accomplishes this.
     */
-   if (devinfo->gen == 7 && !devinfo->is_haswell &&
+   if (devinfo->verx10 == 70 &&
        type_sz(reg->type) == 8 &&
        brw_reg.vstride == BRW_VERTICAL_STRIDE_0 &&
        brw_reg.width == BRW_WIDTH_1 &&
@@ -196,7 +198,7 @@ fs_generator::fs_generator(const struct brw_compiler *compiler, void *log_data,
      shader_name(NULL), stage(stage), mem_ctx(mem_ctx)
 {
    p = rzalloc(mem_ctx, struct brw_codegen);
-   brw_init_codegen(devinfo, p, mem_ctx);
+   brw_init_codegen(&compiler->isa, p, mem_ctx);
 
    /* In the FS code generator, we are very careful to ensure that we always
     * set the right execution size so we don't need the EU code to "help" us
@@ -229,7 +231,7 @@ fs_generator::patch_halt_jumps()
 
    int scale = brw_jump_scale(p->devinfo);
 
-   if (devinfo->gen >= 6) {
+   if (devinfo->ver >= 6) {
       /* There is a somewhat strange undocumented requirement of using
        * HALT, according to the simulator.  If some channel has HALTed to
        * a particular UIP, then by the end of the program, every channel
@@ -251,8 +253,8 @@ fs_generator::patch_halt_jumps()
    foreach_in_list(ip_record, patch_ip, &discard_halt_patches) {
       brw_inst *patch = &p->store[patch_ip->ip];
 
-      assert(brw_inst_opcode(p->devinfo, patch) == BRW_OPCODE_HALT);
-      if (devinfo->gen >= 6) {
+      assert(brw_inst_opcode(p->isa, patch) == BRW_OPCODE_HALT);
+      if (devinfo->ver >= 6) {
          /* HALT takes a half-instruction distance from the pre-incremented IP. */
          brw_inst_set_uip(p->devinfo, patch, (ip - patch_ip->ip) * scale);
       } else {
@@ -262,7 +264,7 @@ fs_generator::patch_halt_jumps()
 
    this->discard_halt_patches.make_empty();
 
-   if (devinfo->gen < 6) {
+   if (devinfo->ver < 6) {
       /* From the g965 PRM:
        *
        *    "As DMask is not automatically reloaded into AMask upon completion
@@ -279,7 +281,7 @@ fs_generator::patch_halt_jumps()
       brw_inst_set_thread_control(devinfo, reset, BRW_THREAD_SWITCH);
    }
 
-   if (devinfo->gen == 4 && !devinfo->is_g4x) {
+   if (devinfo->ver == 4 && devinfo->platform != INTEL_PLATFORM_G4X) {
       /* From the g965 PRM:
        *
        *    "[DevBW, DevCL] Erratum: The subfields in mask stack register are
@@ -331,23 +333,26 @@ fs_generator::generate_send(fs_inst *inst,
    uint32_t desc_imm = inst->desc |
       brw_message_desc(devinfo, inst->mlen, rlen, inst->header_size);
 
-   uint32_t ex_desc_imm = brw_message_ex_desc(devinfo, inst->ex_mlen);
+   uint32_t ex_desc_imm = inst->ex_desc |
+      brw_message_ex_desc(devinfo, inst->ex_mlen);
 
-   if (ex_desc.file != BRW_IMMEDIATE_VALUE || ex_desc.ud || ex_desc_imm) {
+   if (ex_desc.file != BRW_IMMEDIATE_VALUE || ex_desc.ud || ex_desc_imm ||
+       inst->send_ex_desc_scratch) {
       /* If we have any sort of extended descriptor, then we need SENDS.  This
        * also covers the dual-payload case because ex_mlen goes in ex_desc.
        */
       brw_send_indirect_split_message(p, inst->sfid, dst, payload, payload2,
                                       desc, desc_imm, ex_desc, ex_desc_imm,
-                                      inst->eot);
+                                      inst->send_ex_desc_scratch,
+                                      inst->send_ex_bso, inst->eot);
       if (inst->check_tdr)
-         brw_inst_set_opcode(p->devinfo, brw_last_inst,
-                             devinfo->gen >= 12 ? BRW_OPCODE_SENDC : BRW_OPCODE_SENDSC);
+         brw_inst_set_opcode(p->isa, brw_last_inst,
+                             devinfo->ver >= 12 ? BRW_OPCODE_SENDC : BRW_OPCODE_SENDSC);
    } else {
       brw_send_indirect_message(p, inst->sfid, dst, payload, desc, desc_imm,
                                    inst->eot);
       if (inst->check_tdr)
-         brw_inst_set_opcode(p->devinfo, brw_last_inst, BRW_OPCODE_SENDC);
+         brw_inst_set_opcode(p->isa, brw_last_inst, BRW_OPCODE_SENDC);
    }
 }
 
@@ -359,7 +364,7 @@ fs_generator::fire_fb_write(fs_inst *inst,
 {
    struct brw_wm_prog_data *prog_data = brw_wm_prog_data(this->prog_data);
 
-   if (devinfo->gen < 6) {
+   if (devinfo->ver < 6) {
       brw_push_insn_state(p);
       brw_set_default_exec_size(p, BRW_EXECUTE_8);
       brw_set_default_mask_control(p, BRW_MASK_DISABLE);
@@ -389,20 +394,20 @@ fs_generator::fire_fb_write(fs_inst *inst,
                                  inst->last_rt,
                                  inst->header_size != 0);
 
-   if (devinfo->gen >= 6)
+   if (devinfo->ver >= 6)
       brw_inst_set_rt_slot_group(devinfo, insn, inst->group / 16);
 }
 
 void
 fs_generator::generate_fb_write(fs_inst *inst, struct brw_reg payload)
 {
-   if (devinfo->gen < 8 && !devinfo->is_haswell) {
+   if (devinfo->verx10 <= 70) {
       brw_set_default_predicate_control(p, BRW_PREDICATE_NONE);
       brw_set_default_flag_reg(p, 0, 0);
    }
 
    const struct brw_reg implied_header =
-      devinfo->gen < 6 ? payload : brw_null_reg();
+      devinfo->ver < 6 ? payload : brw_null_reg();
 
    if (inst->base_mrf >= 0)
       payload = brw_message_reg(inst->base_mrf);
@@ -411,7 +416,7 @@ fs_generator::generate_fb_write(fs_inst *inst, struct brw_reg payload)
       fire_fb_write(inst, payload, implied_header, inst->mlen);
    } else {
       /* This can only happen in gen < 6 */
-      assert(devinfo->gen < 6);
+      assert(devinfo->ver < 6);
 
       struct brw_reg v1_null_ud = vec1(retype(brw_null_reg(), BRW_REGISTER_TYPE_UD));
 
@@ -445,7 +450,7 @@ fs_generator::generate_fb_read(fs_inst *inst, struct brw_reg dst,
    /* We assume that render targets start at binding table index 0. */
    const unsigned surf_index = inst->target;
 
-   gen9_fb_READ(p, dst, payload, surf_index,
+   gfx9_fb_READ(p, dst, payload, surf_index,
                 inst->header_size, inst->size_written / REG_SIZE,
                 prog_data->persample_dispatch);
 }
@@ -459,7 +464,18 @@ fs_generator::generate_mov_indirect(fs_inst *inst,
    assert(indirect_byte_offset.type == BRW_REGISTER_TYPE_UD);
    assert(indirect_byte_offset.file == BRW_GENERAL_REGISTER_FILE);
    assert(!reg.abs && !reg.negate);
+
+   /* Gen12.5 adds the following region restriction:
+    *
+    *    "Vx1 and VxH indirect addressing for Float, Half-Float, Double-Float
+    *    and Quad-Word data must not be used."
+    *
+    * We require the source and destination types to match so stomp to an
+    * unsigned integer type.
+    */
    assert(reg.type == dst.type);
+   reg.type = dst.type = brw_reg_type_from_bit_size(type_sz(reg.type) * 8,
+                                                    BRW_REGISTER_TYPE_UD);
 
    unsigned imm_byte_offset = reg.nr * REG_SIZE + reg.subnr;
 
@@ -479,7 +495,7 @@ fs_generator::generate_mov_indirect(fs_inst *inst,
       }
    } else {
       /* Prior to Broadwell, there are only 8 address registers. */
-      assert(inst->exec_size <= 8 || devinfo->gen >= 8);
+      assert(inst->exec_size <= 8 || devinfo->ver >= 8);
 
       /* We use VxH indirect addressing, clobbering a0.0 through a0.7. */
       struct brw_reg addr = vec8(brw_address_reg(0));
@@ -524,33 +540,33 @@ fs_generator::generate_mov_indirect(fs_inst *inst,
        * code, using it saves us 0 instructions and would require quite a bit
        * of case-by-case work.  It's just not worth it.
        *
-       * Due to a hardware bug some platforms (particularly Gen11+) seem to
+       * Due to a hardware bug some platforms (particularly Gfx11+) seem to
        * require the address components of all channels to be valid whether or
        * not they're active, which causes issues if we use VxH addressing
        * under non-uniform control-flow.  We can easily work around that by
        * initializing the whole address register with a pipelined NoMask MOV
        * instruction.
        */
-      if (devinfo->gen >= 7) {
+      if (devinfo->ver >= 7) {
          insn = brw_MOV(p, addr, brw_imm_uw(imm_byte_offset));
          brw_inst_set_mask_control(devinfo, insn, BRW_MASK_DISABLE);
          brw_inst_set_pred_control(devinfo, insn, BRW_PREDICATE_NONE);
-         if (devinfo->gen >= 12)
+         if (devinfo->ver >= 12)
             brw_set_default_swsb(p, tgl_swsb_null());
          else
             brw_inst_set_no_dd_clear(devinfo, insn, use_dep_ctrl);
       }
 
       insn = brw_ADD(p, addr, indirect_byte_offset, brw_imm_uw(imm_byte_offset));
-      if (devinfo->gen >= 12)
+      if (devinfo->ver >= 12)
          brw_set_default_swsb(p, tgl_swsb_regdist(1));
-      else if (devinfo->gen >= 7)
+      else if (devinfo->ver >= 7)
          brw_inst_set_no_dd_check(devinfo, insn, use_dep_ctrl);
 
       if (type_sz(reg.type) > 4 &&
-          ((devinfo->gen == 7 && !devinfo->is_haswell) ||
-           devinfo->is_cherryview || gen_device_info_is_9lp(devinfo) ||
-           !devinfo->has_64bit_float)) {
+          ((devinfo->verx10 == 70) ||
+           devinfo->platform == INTEL_PLATFORM_CHV || intel_device_info_is_9lp(devinfo) ||
+           !devinfo->has_64bit_float || devinfo->verx10 >= 125)) {
          /* IVB has an issue (which we found empirically) where it reads two
           * address register components per channel for indirectly addressed
           * 64-bit sources.
@@ -576,7 +592,7 @@ fs_generator::generate_mov_indirect(fs_inst *inst,
 
          brw_inst *mov = brw_MOV(p, dst, retype(ind_src, reg.type));
 
-         if (devinfo->gen == 6 && dst.file == BRW_MESSAGE_REGISTER_FILE &&
+         if (devinfo->ver == 6 && dst.file == BRW_MESSAGE_REGISTER_FILE &&
              !inst->get_next()->is_tail_sentinel() &&
              ((fs_inst *)inst->get_next())->mlen > 0) {
             /* From the Sandybridge PRM:
@@ -599,21 +615,37 @@ fs_generator::generate_shuffle(fs_inst *inst,
                                struct brw_reg src,
                                struct brw_reg idx)
 {
+   assert(src.file == BRW_GENERAL_REGISTER_FILE);
+   assert(!src.abs && !src.negate);
+
    /* Ivy bridge has some strange behavior that makes this a real pain to
     * implement for 64-bit values so we just don't bother.
     */
-   assert(devinfo->gen >= 8 || devinfo->is_haswell || type_sz(src.type) <= 4);
+   assert((devinfo->verx10 >= 75 && devinfo->has_64bit_float) ||
+          type_sz(src.type) <= 4);
+
+   /* Gen12.5 adds the following region restriction:
+    *
+    *    "Vx1 and VxH indirect addressing for Float, Half-Float, Double-Float
+    *    and Quad-Word data must not be used."
+    *
+    * We require the source and destination types to match so stomp to an
+    * unsigned integer type.
+    */
+   assert(src.type == dst.type);
+   src.type = dst.type = brw_reg_type_from_bit_size(type_sz(src.type) * 8,
+                                                    BRW_REGISTER_TYPE_UD);
 
    /* Because we're using the address register, we're limited to 8-wide
-    * execution on gen7.  On gen8, we're limited to 16-wide by the address
+    * execution on gfx7.  On gfx8, we're limited to 16-wide by the address
     * register file and 8-wide for 64-bit types.  We could try and make this
     * instruction splittable higher up in the compiler but that gets weird
     * because it reads all of the channels regardless of execution size.  It's
     * easier just to split it here.
     */
    const unsigned lower_width =
-      (devinfo->gen <= 7 || type_sz(src.type) > 4) ?
-      8 : MIN2(16, inst->exec_size);
+      devinfo->ver <= 7 || element_sz(src) > 4 || element_sz(dst) > 4 ? 8 :
+      MIN2(16, inst->exec_size);
 
    brw_set_default_exec_size(p, cvt(lower_width) - 1);
    for (unsigned group = 0; group < inst->exec_size; group += lower_width) {
@@ -626,7 +658,9 @@ fs_generator::generate_shuffle(fs_inst *inst,
           * but asserting would be mean.
           */
          const unsigned i = idx.file == BRW_IMMEDIATE_VALUE ? idx.ud : 0;
-         brw_MOV(p, suboffset(dst, group), stride(suboffset(src, i), 0, 1, 0));
+         struct brw_reg group_src = stride(suboffset(src, i), 0, 1, 0);
+         struct brw_reg group_dst = suboffset(dst, group << (dst.hstride - 1));
+         brw_MOV(p, group_dst, group_src);
       } else {
          /* We use VxH indirect addressing, clobbering a0.0 through a0.7. */
          struct brw_reg addr = vec8(brw_address_reg(0));
@@ -671,7 +705,7 @@ fs_generator::generate_shuffle(fs_inst *inst,
                                    lower_width == dispatch_width;
          brw_inst *insn;
 
-         /* Due to a hardware bug some platforms (particularly Gen11+) seem
+         /* Due to a hardware bug some platforms (particularly Gfx11+) seem
           * to require the address components of all channels to be valid
           * whether or not they're active, which causes issues if we use VxH
           * addressing under non-uniform control-flow.  We can easily work
@@ -681,7 +715,7 @@ fs_generator::generate_shuffle(fs_inst *inst,
          insn = brw_MOV(p, addr, brw_imm_uw(src_start_offset));
          brw_inst_set_mask_control(devinfo, insn, BRW_MASK_DISABLE);
          brw_inst_set_pred_control(devinfo, insn, BRW_PREDICATE_NONE);
-         if (devinfo->gen >= 12)
+         if (devinfo->ver >= 12)
             brw_set_default_swsb(p, tgl_swsb_null());
          else
             brw_inst_set_no_dd_clear(devinfo, insn, use_dep_ctrl);
@@ -691,46 +725,15 @@ fs_generator::generate_shuffle(fs_inst *inst,
          insn = brw_SHL(p, addr, group_idx,
                         brw_imm_uw(util_logbase2(type_sz(src.type)) +
                                    src.hstride - 1));
-         if (devinfo->gen >= 12)
+         if (devinfo->ver >= 12)
             brw_set_default_swsb(p, tgl_swsb_regdist(1));
          else
             brw_inst_set_no_dd_check(devinfo, insn, use_dep_ctrl);
 
          /* Add on the register start offset */
          brw_ADD(p, addr, addr, brw_imm_uw(src_start_offset));
-
-         if (type_sz(src.type) > 4 &&
-             ((devinfo->gen == 7 && !devinfo->is_haswell) ||
-              devinfo->is_cherryview || gen_device_info_is_9lp(devinfo))) {
-            /* IVB has an issue (which we found empirically) where it reads
-             * two address register components per channel for indirectly
-             * addressed 64-bit sources.
-             *
-             * From the Cherryview PRM Vol 7. "Register Region Restrictions":
-             *
-             *    "When source or destination datatype is 64b or operation is
-             *    integer DWord multiply, indirect addressing must not be
-             *    used."
-             *
-             * To work around both of these, we do two integer MOVs insead of
-             * one 64-bit MOV.  Because no double value should ever cross a
-             * register boundary, it's safe to use the immediate offset in the
-             * indirect here to handle adding 4 bytes to the offset and avoid
-             * the extra ADD to the register file.
-             */
-            struct brw_reg gdst = suboffset(dst, group);
-            struct brw_reg dst_d = retype(spread(gdst, 2),
-                                          BRW_REGISTER_TYPE_D);
-            assert(dst.hstride == 1);
-            brw_MOV(p, dst_d,
-                    retype(brw_VxH_indirect(0, 0), BRW_REGISTER_TYPE_D));
-            brw_set_default_swsb(p, tgl_swsb_null());
-            brw_MOV(p, byte_offset(dst_d, 4),
-                    retype(brw_VxH_indirect(0, 4), BRW_REGISTER_TYPE_D));
-         } else {
-            brw_MOV(p, suboffset(dst, group * dst.hstride),
-                    retype(brw_VxH_indirect(0, 0), src.type));
-         }
+         brw_MOV(p, suboffset(dst, group << (dst.hstride - 1)),
+                 retype(brw_VxH_indirect(0, 0), src.type));
       }
 
       brw_set_default_swsb(p, tgl_swsb_null());
@@ -750,7 +753,7 @@ fs_generator::generate_quad_swizzle(const fs_inst *inst,
       /* The value is uniform across all channels */
       brw_MOV(p, dst, src);
 
-   } else if (devinfo->gen < 11 && type_sz(src.type) == 4) {
+   } else if (devinfo->ver < 11 && type_sz(src.type) == 4) {
       /* This only works on 8-wide 32-bit values */
       assert(inst->exec_size == 8);
       assert(src.hstride == BRW_HORIZONTAL_STRIDE_1);
@@ -794,7 +797,7 @@ fs_generator::generate_quad_swizzle(const fs_inst *inst,
                          4 * inst->dst.stride, 1, 4 * inst->dst.stride),
                stride(suboffset(src, BRW_GET_SWZ(swiz, c)), 4, 1, 0));
 
-            if (devinfo->gen < 12) {
+            if (devinfo->ver < 12) {
                brw_inst_set_no_dd_clear(devinfo, insn, c < 3);
                brw_inst_set_no_dd_check(devinfo, insn, c > 0);
             }
@@ -808,61 +811,6 @@ fs_generator::generate_quad_swizzle(const fs_inst *inst,
 }
 
 void
-fs_generator::generate_urb_read(fs_inst *inst,
-                                struct brw_reg dst,
-                                struct brw_reg header)
-{
-   assert(inst->size_written % REG_SIZE == 0);
-   assert(header.file == BRW_GENERAL_REGISTER_FILE);
-   assert(header.type == BRW_REGISTER_TYPE_UD);
-
-   brw_inst *send = brw_next_insn(p, BRW_OPCODE_SEND);
-   brw_set_dest(p, send, retype(dst, BRW_REGISTER_TYPE_UD));
-   brw_set_src0(p, send, header);
-   if (devinfo->gen < 12)
-      brw_set_src1(p, send, brw_imm_ud(0u));
-
-   brw_inst_set_sfid(p->devinfo, send, BRW_SFID_URB);
-   brw_inst_set_urb_opcode(p->devinfo, send, GEN8_URB_OPCODE_SIMD8_READ);
-
-   if (inst->opcode == SHADER_OPCODE_URB_READ_SIMD8_PER_SLOT)
-      brw_inst_set_urb_per_slot_offset(p->devinfo, send, true);
-
-   brw_inst_set_mlen(p->devinfo, send, inst->mlen);
-   brw_inst_set_rlen(p->devinfo, send, inst->size_written / REG_SIZE);
-   brw_inst_set_header_present(p->devinfo, send, true);
-   brw_inst_set_urb_global_offset(p->devinfo, send, inst->offset);
-}
-
-void
-fs_generator::generate_urb_write(fs_inst *inst, struct brw_reg payload)
-{
-   brw_inst *insn = brw_next_insn(p, BRW_OPCODE_SEND);
-
-   brw_set_dest(p, insn, brw_null_reg());
-   brw_set_src0(p, insn, payload);
-   if (devinfo->gen < 12)
-      brw_set_src1(p, insn, brw_imm_ud(0u));
-
-   brw_inst_set_sfid(p->devinfo, insn, BRW_SFID_URB);
-   brw_inst_set_urb_opcode(p->devinfo, insn, GEN8_URB_OPCODE_SIMD8_WRITE);
-
-   if (inst->opcode == SHADER_OPCODE_URB_WRITE_SIMD8_PER_SLOT ||
-       inst->opcode == SHADER_OPCODE_URB_WRITE_SIMD8_MASKED_PER_SLOT)
-      brw_inst_set_urb_per_slot_offset(p->devinfo, insn, true);
-
-   if (inst->opcode == SHADER_OPCODE_URB_WRITE_SIMD8_MASKED ||
-       inst->opcode == SHADER_OPCODE_URB_WRITE_SIMD8_MASKED_PER_SLOT)
-      brw_inst_set_urb_channel_mask_present(p->devinfo, insn, true);
-
-   brw_inst_set_mlen(p->devinfo, insn, inst->mlen);
-   brw_inst_set_rlen(p->devinfo, insn, 0);
-   brw_inst_set_eot(p->devinfo, insn, inst->eot);
-   brw_inst_set_header_present(p->devinfo, insn, true);
-   brw_inst_set_urb_global_offset(p->devinfo, insn, inst->offset);
-}
-
-void
 fs_generator::generate_cs_terminate(fs_inst *inst, struct brw_reg payload)
 {
    struct brw_inst *insn;
@@ -871,12 +819,17 @@ fs_generator::generate_cs_terminate(fs_inst *inst, struct brw_reg payload)
 
    brw_set_dest(p, insn, retype(brw_null_reg(), BRW_REGISTER_TYPE_UW));
    brw_set_src0(p, insn, retype(payload, BRW_REGISTER_TYPE_UW));
-   if (devinfo->gen < 12)
+   if (devinfo->ver < 12)
       brw_set_src1(p, insn, brw_imm_ud(0u));
 
-   /* Terminate a compute shader by sending a message to the thread spawner.
+   /* For XeHP and newer send a message to the message gateway to terminate a
+    * compute shader. For older devices, a message is sent to the thread
+    * spawner.
     */
-   brw_inst_set_sfid(devinfo, insn, BRW_SFID_THREAD_SPAWNER);
+   if (devinfo->verx10 >= 125)
+      brw_inst_set_sfid(devinfo, insn, BRW_SFID_MESSAGE_GATEWAY);
+   else
+      brw_inst_set_sfid(devinfo, insn, BRW_SFID_THREAD_SPAWNER);
    brw_inst_set_mlen(devinfo, insn, 1);
    brw_inst_set_rlen(devinfo, insn, 0);
    brw_inst_set_eot(devinfo, insn, inst->eot);
@@ -884,7 +837,7 @@ fs_generator::generate_cs_terminate(fs_inst *inst, struct brw_reg payload)
 
    brw_inst_set_ts_opcode(devinfo, insn, 0); /* Dereference resource */
 
-   if (devinfo->gen < 11) {
+   if (devinfo->ver < 11) {
       brw_inst_set_ts_request_type(devinfo, insn, 0); /* Root thread */
 
       /* Note that even though the thread has a URB resource associated with it,
@@ -901,7 +854,7 @@ void
 fs_generator::generate_barrier(fs_inst *, struct brw_reg src)
 {
    brw_barrier(p, src);
-   if (devinfo->gen >= 12) {
+   if (devinfo->ver >= 12) {
       brw_set_default_swsb(p, tgl_swsb_null());
       brw_SYNC(p, TGL_SYNC_BAR);
    } else {
@@ -931,7 +884,7 @@ fs_generator::generate_linterp(fs_inst *inst,
     *   |(x0, x1)|(x2, x3)|(y0, y1)|(y2, y3)| in SIMD16
     *    -----------------------------------
     *
-    * See also: emit_interpolation_setup_gen4().
+    * See also: emit_interpolation_setup_gfx4().
     */
    struct brw_reg delta_x = src[0];
    struct brw_reg delta_y = offset(src[0], inst->exec_size / 8);
@@ -939,12 +892,12 @@ fs_generator::generate_linterp(fs_inst *inst,
    brw_inst *i[2];
 
    /* nir_lower_interpolation() will do the lowering to MAD instructions for
-    * us on gen11+
+    * us on gfx11+
     */
-   assert(devinfo->gen < 11);
+   assert(devinfo->ver < 11);
 
    if (devinfo->has_pln) {
-      if (devinfo->gen <= 6 && (delta_x.nr & 1) != 0) {
+      if (devinfo->ver <= 6 && (delta_x.nr & 1) != 0) {
          /* From the Sandy Bridge PRM Vol. 4, Pt. 2, Section 8.3.53, "Plane":
           *
           *    "[DevSNB]:<src1> must be even register aligned.
@@ -953,7 +906,7 @@ fs_generator::generate_linterp(fs_inst *inst,
           *
           * This means that we need to split PLN into LINE+MAC on-the-fly.
           * Unfortunately, the inputs are laid out for PLN and not LINE+MAC so
-          * we have to split into SIMD8 pieces.  For gen4 (!has_pln), the
+          * we have to split into SIMD8 pieces.  For gfx4 (!has_pln), the
           * coordinate registers are laid out differently so we leave it as a
           * SIMD16 instruction.
           */
@@ -971,10 +924,10 @@ fs_generator::generate_linterp(fs_inst *inst,
                                       offset(delta_x, g * 2));
             brw_inst_set_group(devinfo, line, inst->group + g * 8);
 
-            /* LINE writes the accumulator automatically on gen4-5.  On Sandy
+            /* LINE writes the accumulator automatically on gfx4-5.  On Sandy
              * Bridge and later, we have to explicitly enable it.
              */
-            if (devinfo->gen >= 6)
+            if (devinfo->ver >= 6)
                brw_inst_set_acc_wr_control(p->devinfo, line, true);
 
             /* brw_set_default_saturate() is called before emitting
@@ -1016,53 +969,11 @@ fs_generator::generate_linterp(fs_inst *inst,
 }
 
 void
-fs_generator::generate_get_buffer_size(fs_inst *inst,
-                                       struct brw_reg dst,
-                                       struct brw_reg src,
-                                       struct brw_reg surf_index)
-{
-   assert(devinfo->gen >= 7);
-   assert(surf_index.file == BRW_IMMEDIATE_VALUE);
-
-   uint32_t simd_mode;
-   int rlen = 4;
-
-   switch (inst->exec_size) {
-   case 8:
-      simd_mode = BRW_SAMPLER_SIMD_MODE_SIMD8;
-      break;
-   case 16:
-      simd_mode = BRW_SAMPLER_SIMD_MODE_SIMD16;
-      break;
-   default:
-      unreachable("Invalid width for texture instruction");
-   }
-
-   if (simd_mode == BRW_SAMPLER_SIMD_MODE_SIMD16) {
-      rlen = 8;
-      dst = vec16(dst);
-   }
-
-   brw_SAMPLE(p,
-              retype(dst, BRW_REGISTER_TYPE_UW),
-              inst->base_mrf,
-              src,
-              surf_index.ud,
-              0,
-              GEN5_SAMPLER_MESSAGE_SAMPLE_RESINFO,
-              rlen, /* response length */
-              inst->mlen,
-              inst->header_size > 0,
-              simd_mode,
-              BRW_SAMPLER_RETURN_FORMAT_SINT32);
-}
-
-void
 fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst,
                            struct brw_reg surface_index,
                            struct brw_reg sampler_index)
 {
-   assert(devinfo->gen < 7);
+   assert(devinfo->ver < 7);
    assert(inst->size_written % REG_SIZE == 0);
    int msg_type = -1;
    uint32_t simd_mode;
@@ -1086,11 +997,11 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst,
    }
 
    /* Stomp the resinfo output type to UINT32.  On gens 4-5, the output type
-    * is set as part of the message descriptor.  On gen4, the PRM seems to
+    * is set as part of the message descriptor.  On gfx4, the PRM seems to
     * allow UINT32 and FLOAT32 (i965 PRM, Vol. 4 Section 4.8.1.1), but on
     * later gens UINT32 is required.  Once you hit Sandy Bridge, the bit is
     * gone from the message descriptor entirely and you just get UINT32 all
-    * the time regasrdless.  Since we can really only do non-UINT32 on gen4,
+    * the time regasrdless.  Since we can really only do non-UINT32 on gfx4,
     * just stomp it to UINT32 all the time.
     */
    if (inst->opcode == SHADER_OPCODE_TXS)
@@ -1107,52 +1018,52 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst,
       unreachable("Invalid width for texture instruction");
    }
 
-   if (devinfo->gen >= 5) {
+   if (devinfo->ver >= 5) {
       switch (inst->opcode) {
       case SHADER_OPCODE_TEX:
 	 if (inst->shadow_compare) {
-	    msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE_COMPARE;
+	    msg_type = GFX5_SAMPLER_MESSAGE_SAMPLE_COMPARE;
 	 } else {
-	    msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE;
+	    msg_type = GFX5_SAMPLER_MESSAGE_SAMPLE;
 	 }
 	 break;
       case FS_OPCODE_TXB:
 	 if (inst->shadow_compare) {
-	    msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE_BIAS_COMPARE;
+	    msg_type = GFX5_SAMPLER_MESSAGE_SAMPLE_BIAS_COMPARE;
 	 } else {
-	    msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE_BIAS;
+	    msg_type = GFX5_SAMPLER_MESSAGE_SAMPLE_BIAS;
 	 }
 	 break;
       case SHADER_OPCODE_TXL:
 	 if (inst->shadow_compare) {
-	    msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE_LOD_COMPARE;
+	    msg_type = GFX5_SAMPLER_MESSAGE_SAMPLE_LOD_COMPARE;
 	 } else {
-	    msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE_LOD;
+	    msg_type = GFX5_SAMPLER_MESSAGE_SAMPLE_LOD;
 	 }
 	 break;
       case SHADER_OPCODE_TXS:
-	 msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE_RESINFO;
+	 msg_type = GFX5_SAMPLER_MESSAGE_SAMPLE_RESINFO;
 	 break;
       case SHADER_OPCODE_TXD:
          assert(!inst->shadow_compare);
-         msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE_DERIVS;
+         msg_type = GFX5_SAMPLER_MESSAGE_SAMPLE_DERIVS;
 	 break;
       case SHADER_OPCODE_TXF:
-	 msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE_LD;
+	 msg_type = GFX5_SAMPLER_MESSAGE_SAMPLE_LD;
 	 break;
       case SHADER_OPCODE_TXF_CMS:
-         msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE_LD;
+         msg_type = GFX5_SAMPLER_MESSAGE_SAMPLE_LD;
          break;
       case SHADER_OPCODE_LOD:
-         msg_type = GEN5_SAMPLER_MESSAGE_LOD;
+         msg_type = GFX5_SAMPLER_MESSAGE_LOD;
          break;
       case SHADER_OPCODE_TG4:
-         assert(devinfo->gen == 6);
+         assert(devinfo->ver == 6);
          assert(!inst->shadow_compare);
-         msg_type = GEN7_SAMPLER_MESSAGE_SAMPLE_GATHER4;
+         msg_type = GFX7_SAMPLER_MESSAGE_SAMPLE_GATHER4;
          break;
       case SHADER_OPCODE_SAMPLEINFO:
-         msg_type = GEN6_SAMPLER_MESSAGE_SAMPLE_SAMPLEINFO;
+         msg_type = GFX6_SAMPLER_MESSAGE_SAMPLE_SAMPLEINFO;
          break;
       default:
 	 unreachable("not reached");
@@ -1236,7 +1147,7 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst,
     */
    struct brw_reg src = brw_null_reg();
    if (inst->header_size != 0) {
-      if (devinfo->gen < 6 && !inst->offset) {
+      if (devinfo->ver < 6 && !inst->offset) {
          /* Set up an implied move from g0 to the MRF. */
          src = retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UW);
       } else {
@@ -1265,16 +1176,6 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst,
       }
    }
 
-   uint32_t base_binding_table_index;
-   switch (inst->opcode) {
-   case SHADER_OPCODE_TG4:
-      base_binding_table_index = prog_data->binding_table.gather_texture_start;
-      break;
-   default:
-      base_binding_table_index = prog_data->binding_table.texture_start;
-      break;
-   }
-
    assert(surface_index.file == BRW_IMMEDIATE_VALUE);
    assert(sampler_index.file == BRW_IMMEDIATE_VALUE);
 
@@ -1282,7 +1183,7 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst,
               retype(dst, BRW_REGISTER_TYPE_UW),
               inst->base_mrf,
               src,
-              surface_index.ud + base_binding_table_index,
+              surface_index.ud,
               sampler_index.ud % 16,
               msg_type,
               inst->size_written / REG_SIZE,
@@ -1327,7 +1228,7 @@ fs_generator::generate_ddx(const fs_inst *inst,
 {
    unsigned vstride, width;
 
-   if (devinfo->gen >= 8) {
+   if (devinfo->ver >= 8) {
       if (inst->opcode == FS_OPCODE_DDX_FINE) {
          /* produce accurate derivatives */
          vstride = BRW_VERTICAL_STRIDE_2;
@@ -1354,7 +1255,7 @@ fs_generator::generate_ddx(const fs_inst *inst,
        * correctly for compressed instructions.  At least on Haswell and
        * Iron Lake, compressed ALIGN16 instructions do work.  Since we
        * would have to split to SIMD8 no matter which method we choose, we
-       * may as well use ALIGN16 on all platforms gen7 and earlier.
+       * may as well use ALIGN16 on all platforms gfx7 and earlier.
        */
       struct brw_reg src0 = stride(src, 4, 4, 1);
       struct brw_reg src1 = stride(src, 4, 4, 1);
@@ -1394,11 +1295,11 @@ fs_generator::generate_ddy(const fs_inst *inst,
        *     DWord elements ONLY. This is applicable when both source and
        *     destination are half-floats."
        *
-       * So for half-float operations we use the Gen11+ Align1 path. CHV
+       * So for half-float operations we use the Gfx11+ Align1 path. CHV
        * inherits its FP16 hardware from SKL, so it is not affected.
        */
-      if (devinfo->gen >= 11 ||
-          (devinfo->is_broadwell && src.type == BRW_REGISTER_TYPE_HF)) {
+      if (devinfo->ver >= 11 ||
+          (devinfo->platform == INTEL_PLATFORM_BDW && src.type == BRW_REGISTER_TYPE_HF)) {
          src = stride(src, 0, 2, 1);
 
          brw_push_insn_state(p);
@@ -1424,7 +1325,7 @@ fs_generator::generate_ddy(const fs_inst *inst,
       }
    } else {
       /* replicate the derivative at the top-left pixel to other pixels */
-      if (devinfo->gen >= 8) {
+      if (devinfo->ver >= 8) {
          struct brw_reg src0 = byte_offset(stride(src, 4, 4, 0), 0 * type_size);
          struct brw_reg src1 = byte_offset(stride(src, 4, 4, 0), 2 * type_size);
 
@@ -1434,7 +1335,7 @@ fs_generator::generate_ddy(const fs_inst *inst,
           * correctly for compressed instructions.  At least on Haswell and
           * Iron Lake, compressed ALIGN16 instructions do work.  Since we
           * would have to split to SIMD8 no matter which method we choose, we
-          * may as well use ALIGN16 on all platforms gen7 and earlier.
+          * may as well use ALIGN16 on all platforms gfx7 and earlier.
           */
          struct brw_reg src0 = stride(src, 4, 4, 1);
          struct brw_reg src1 = stride(src, 4, 4, 1);
@@ -1511,11 +1412,11 @@ fs_generator::generate_scratch_read(fs_inst *inst, struct brw_reg dst)
 }
 
 void
-fs_generator::generate_scratch_read_gen7(fs_inst *inst, struct brw_reg dst)
+fs_generator::generate_scratch_read_gfx7(fs_inst *inst, struct brw_reg dst)
 {
    assert(inst->exec_size <= 16 || inst->force_writemask_all);
 
-   gen7_block_read_scratch(p, dst, inst->exec_size / 8, inst->offset);
+   gfx7_block_read_scratch(p, dst, inst->exec_size / 8, inst->offset);
 }
 
 /* The A32 messages take a buffer base address in header.5:[31:0] (See
@@ -1565,7 +1466,7 @@ fs_generator::generate_scratch_header(fs_inst *inst, struct brw_reg dst)
    dst.type = BRW_REGISTER_TYPE_UD;
 
    brw_inst *insn = brw_MOV(p, dst, brw_imm_ud(0));
-   if (devinfo->gen >= 12)
+   if (devinfo->ver >= 12)
       brw_set_default_swsb(p, tgl_swsb_null());
    else
       brw_inst_set_no_dd_clear(p->devinfo, insn, true);
@@ -1575,7 +1476,7 @@ fs_generator::generate_scratch_header(fs_inst *inst, struct brw_reg dst)
    insn = brw_AND(p, suboffset(dst, 3),
                      retype(brw_vec1_grf(0, 3), BRW_REGISTER_TYPE_UD),
                      brw_imm_ud(INTEL_MASK(3, 0)));
-   if (devinfo->gen < 12) {
+   if (devinfo->ver < 12) {
       brw_inst_set_no_dd_clear(p->devinfo, insn, true);
       brw_inst_set_no_dd_check(p->devinfo, insn, true);
    }
@@ -1584,7 +1485,7 @@ fs_generator::generate_scratch_header(fs_inst *inst, struct brw_reg dst)
    insn = brw_AND(p, suboffset(dst, 5),
                      retype(brw_vec1_grf(0, 5), BRW_REGISTER_TYPE_UD),
                      brw_imm_ud(INTEL_MASK(31, 10)));
-   if (devinfo->gen < 12)
+   if (devinfo->ver < 12)
       brw_inst_set_no_dd_check(p->devinfo, insn, true);
 }
 
@@ -1610,73 +1511,11 @@ fs_generator::generate_uniform_pull_constant_load(fs_inst *inst,
 }
 
 void
-fs_generator::generate_uniform_pull_constant_load_gen7(fs_inst *inst,
-                                                       struct brw_reg dst,
-                                                       struct brw_reg index,
-                                                       struct brw_reg payload)
-{
-   assert(index.type == BRW_REGISTER_TYPE_UD);
-   assert(payload.file == BRW_GENERAL_REGISTER_FILE);
-   assert(type_sz(dst.type) == 4);
-
-   if (index.file == BRW_IMMEDIATE_VALUE) {
-      const uint32_t surf_index = index.ud;
-
-      brw_push_insn_state(p);
-      brw_set_default_mask_control(p, BRW_MASK_DISABLE);
-      brw_inst *send = brw_next_insn(p, BRW_OPCODE_SEND);
-      brw_pop_insn_state(p);
-
-      brw_inst_set_sfid(devinfo, send, GEN6_SFID_DATAPORT_CONSTANT_CACHE);
-      brw_set_dest(p, send, retype(dst, BRW_REGISTER_TYPE_UD));
-      brw_set_src0(p, send, retype(payload, BRW_REGISTER_TYPE_UD));
-      brw_set_desc(p, send,
-                   brw_message_desc(devinfo, 1, DIV_ROUND_UP(inst->size_written,
-                                                             REG_SIZE), true) |
-                   brw_dp_read_desc(devinfo, surf_index,
-                                    BRW_DATAPORT_OWORD_BLOCK_DWORDS(inst->exec_size),
-                                    GEN7_DATAPORT_DC_OWORD_BLOCK_READ,
-                                    BRW_DATAPORT_READ_TARGET_DATA_CACHE));
-
-   } else {
-      const tgl_swsb swsb = brw_get_default_swsb(p);
-      struct brw_reg addr = vec1(retype(brw_address_reg(0), BRW_REGISTER_TYPE_UD));
-
-      brw_push_insn_state(p);
-      brw_set_default_mask_control(p, BRW_MASK_DISABLE);
-
-      /* a0.0 = surf_index & 0xff */
-      brw_set_default_swsb(p, tgl_swsb_src_dep(swsb));
-      brw_inst *insn_and = brw_next_insn(p, BRW_OPCODE_AND);
-      brw_inst_set_exec_size(p->devinfo, insn_and, BRW_EXECUTE_1);
-      brw_set_dest(p, insn_and, addr);
-      brw_set_src0(p, insn_and, vec1(retype(index, BRW_REGISTER_TYPE_UD)));
-      brw_set_src1(p, insn_and, brw_imm_ud(0x0ff));
-
-      /* dst = send(payload, a0.0 | <descriptor>) */
-      brw_set_default_swsb(p, tgl_swsb_dst_dep(swsb, 1));
-      brw_send_indirect_message(
-         p, GEN6_SFID_DATAPORT_CONSTANT_CACHE,
-         retype(dst, BRW_REGISTER_TYPE_UD),
-         retype(payload, BRW_REGISTER_TYPE_UD), addr,
-         brw_message_desc(devinfo, 1,
-                          DIV_ROUND_UP(inst->size_written, REG_SIZE), true) |
-         brw_dp_read_desc(devinfo, 0 /* surface */,
-                          BRW_DATAPORT_OWORD_BLOCK_DWORDS(inst->exec_size),
-                          GEN7_DATAPORT_DC_OWORD_BLOCK_READ,
-                          BRW_DATAPORT_READ_TARGET_DATA_CACHE),
-         false /* EOT */);
-
-      brw_pop_insn_state(p);
-   }
-}
-
-void
-fs_generator::generate_varying_pull_constant_load_gen4(fs_inst *inst,
+fs_generator::generate_varying_pull_constant_load_gfx4(fs_inst *inst,
                                                        struct brw_reg dst,
                                                        struct brw_reg index)
 {
-   assert(devinfo->gen < 7); /* Should use the gen7 variant. */
+   assert(devinfo->ver < 7); /* Should use the gfx7 variant. */
    assert(inst->header_size != 0);
    assert(inst->mlen);
 
@@ -1694,8 +1533,8 @@ fs_generator::generate_varying_pull_constant_load_gen4(fs_inst *inst,
       rlen = 4;
    }
 
-   if (devinfo->gen >= 5)
-      msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE_LD;
+   if (devinfo->ver >= 5)
+      msg_type = GFX5_SAMPLER_MESSAGE_SAMPLE_LD;
    else {
       /* We always use the SIMD16 message so that we only have to load U, and
        * not V or R.
@@ -1708,14 +1547,14 @@ fs_generator::generate_varying_pull_constant_load_gen4(fs_inst *inst,
    }
 
    struct brw_reg header = brw_vec8_grf(0, 0);
-   gen6_resolve_implied_move(p, &header, inst->base_mrf);
+   gfx6_resolve_implied_move(p, &header, inst->base_mrf);
 
    brw_inst *send = brw_next_insn(p, BRW_OPCODE_SEND);
    brw_inst_set_compression(devinfo, send, false);
    brw_inst_set_sfid(devinfo, send, BRW_SFID_SAMPLER);
    brw_set_dest(p, send, retype(dst, BRW_REGISTER_TYPE_UW));
    brw_set_src0(p, send, header);
-   if (devinfo->gen < 6)
+   if (devinfo->ver < 6)
       brw_inst_set_base_mrf(p->devinfo, send, inst->base_mrf);
 
    /* Our surface is set up as floats, regardless of what actual data is
@@ -1727,28 +1566,6 @@ fs_generator::generate_varying_pull_constant_load_gen4(fs_inst *inst,
                 brw_sampler_desc(devinfo, surf_index,
                                  0, /* sampler (unused) */
                                  msg_type, simd_mode, return_format));
-}
-
-void
-fs_generator::generate_pixel_interpolator_query(fs_inst *inst,
-                                                struct brw_reg dst,
-                                                struct brw_reg src,
-                                                struct brw_reg msg_data,
-                                                unsigned msg_type)
-{
-   const bool has_payload = inst->src[0].file != BAD_FILE;
-   assert(msg_data.type == BRW_REGISTER_TYPE_UD);
-   assert(inst->size_written % REG_SIZE == 0);
-
-   brw_pixel_interpolator_query(p,
-         retype(dst, BRW_REGISTER_TYPE_UW),
-         /* If we don't have a payload, what we send doesn't matter */
-         has_payload ? src : brw_vec8_grf(0, 0),
-         inst->pi_noperspective,
-         msg_type,
-         msg_data,
-         has_payload ? 2 * inst->exec_size / 8 : 1,
-         inst->size_written / REG_SIZE);
 }
 
 /* Sets vstride=1, width=4, hstride=0 of register src1 during
@@ -1767,7 +1584,7 @@ fs_generator::generate_set_sample_id(fs_inst *inst,
 
    const struct brw_reg reg = stride(src1, 1, 4, 0);
    const unsigned lower_size = MIN2(inst->exec_size,
-                                    devinfo->gen >= 8 ? 16 : 8);
+                                    devinfo->ver >= 8 ? 16 : 8);
 
    for (unsigned i = 0; i < inst->exec_size / lower_size; i++) {
       brw_inst *insn = brw_ADD(p, offset(dst, i * lower_size / 8),
@@ -1780,87 +1597,6 @@ fs_generator::generate_set_sample_id(fs_inst *inst,
       brw_inst_set_compression(devinfo, insn, lower_size > 8);
       brw_set_default_swsb(p, tgl_swsb_null());
    }
-}
-
-void
-fs_generator::generate_pack_half_2x16_split(fs_inst *,
-                                            struct brw_reg dst,
-                                            struct brw_reg x,
-                                            struct brw_reg y)
-{
-   assert(devinfo->gen >= 7);
-   assert(dst.type == BRW_REGISTER_TYPE_UD);
-   assert(x.type == BRW_REGISTER_TYPE_F);
-   assert(y.type == BRW_REGISTER_TYPE_F);
-
-   /* From the Ivybridge PRM, Vol4, Part3, Section 6.27 f32to16:
-    *
-    *   Because this instruction does not have a 16-bit floating-point type,
-    *   the destination data type must be Word (W).
-    *
-    *   The destination must be DWord-aligned and specify a horizontal stride
-    *   (HorzStride) of 2. The 16-bit result is stored in the lower word of
-    *   each destination channel and the upper word is not modified.
-    */
-   struct brw_reg dst_w = spread(retype(dst, BRW_REGISTER_TYPE_W), 2);
-
-   /* Give each 32-bit channel of dst the form below, where "." means
-    * unchanged.
-    *   0x....hhhh
-    */
-   brw_F32TO16(p, dst_w, y);
-
-   /* Now the form:
-    *   0xhhhh0000
-    */
-   brw_set_default_swsb(p, tgl_swsb_regdist(1));
-   brw_SHL(p, dst, dst, brw_imm_ud(16u));
-
-   /* And, finally the form of packHalf2x16's output:
-    *   0xhhhhllll
-    */
-   brw_F32TO16(p, dst_w, x);
-}
-
-void
-fs_generator::generate_shader_time_add(fs_inst *,
-                                       struct brw_reg payload,
-                                       struct brw_reg offset,
-                                       struct brw_reg value)
-{
-   const tgl_swsb swsb = brw_get_default_swsb(p);
-
-   assert(devinfo->gen >= 7);
-   brw_push_insn_state(p);
-   brw_set_default_mask_control(p, true);
-   brw_set_default_swsb(p, tgl_swsb_src_dep(swsb));
-
-   assert(payload.file == BRW_GENERAL_REGISTER_FILE);
-   struct brw_reg payload_offset = retype(brw_vec1_grf(payload.nr, 0),
-                                          offset.type);
-   struct brw_reg payload_value = retype(brw_vec1_grf(payload.nr + 1, 0),
-                                         value.type);
-
-   assert(offset.file == BRW_IMMEDIATE_VALUE);
-   if (value.file == BRW_GENERAL_REGISTER_FILE) {
-      value.width = BRW_WIDTH_1;
-      value.hstride = BRW_HORIZONTAL_STRIDE_0;
-      value.vstride = BRW_VERTICAL_STRIDE_0;
-   } else {
-      assert(value.file == BRW_IMMEDIATE_VALUE);
-   }
-
-   /* Trying to deal with setup of the params from the IR is crazy in the FS8
-    * case, and we don't really care about squeezing every bit of performance
-    * out of this path, so we just emit the MOVs from here.
-    */
-   brw_MOV(p, payload_offset, offset);
-   brw_set_default_swsb(p, tgl_swsb_null());
-   brw_MOV(p, payload_value, value);
-   brw_set_default_swsb(p, tgl_swsb_dst_dep(swsb, 1));
-   brw_shader_time_add(p, payload,
-                       prog_data->binding_table.shader_time_start);
-   brw_pop_insn_state(p);
 }
 
 void
@@ -1883,17 +1619,10 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
 
    int start_offset = p->next_insn_offset;
 
-   /* `send_count` explicitly does not include spills or fills, as we'd
-    * like to use it as a metric for intentional memory access or other
-    * shared function use.  Otherwise, subtle changes to scheduling or
-    * register allocation could cause it to fluctuate wildly - and that
-    * effect is already counted in spill/fill counts.
-    */
-   int spill_count = 0, fill_count = 0;
    int loop_count = 0, send_count = 0, nop_count = 0;
    bool is_accum_used = false;
 
-   struct disasm_info *disasm_info = disasm_initialize(devinfo, cfg);
+   struct disasm_info *disasm_info = disasm_initialize(p->isa, cfg);
 
    foreach_block_and_inst (block, fs_inst, inst, cfg) {
       if (inst->opcode == SHADER_OPCODE_UNDEF)
@@ -1902,6 +1631,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
       struct brw_reg src[4], dst;
       unsigned int last_insn_offset = p->next_insn_offset;
       bool multiple_instructions_emitted = false;
+      tgl_swsb swsb = inst->sched;
 
       /* From the Broadwell PRM, Volume 7, "3D-Media-GPGPU", in the
        * "Register Region Restrictions" section: for BDW, SKL:
@@ -1912,10 +1642,10 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
        * The documentation is often lacking annotations for Atom parts,
        * and empirically this affects CHV as well.
        */
-      if (devinfo->gen >= 8 &&
-          devinfo->gen <= 9 &&
+      if (devinfo->ver >= 8 &&
+          devinfo->ver <= 9 &&
           p->nr_insn > 1 &&
-          brw_inst_opcode(devinfo, brw_last_inst) == BRW_OPCODE_MATH &&
+          brw_inst_opcode(p->isa, brw_last_inst) == BRW_OPCODE_MATH &&
           brw_inst_math_function(devinfo, brw_last_inst) == BRW_MATH_FUNCTION_POW &&
           inst->dst.component_size(inst->exec_size) > REG_SIZE) {
          brw_NOP(p);
@@ -1928,21 +1658,41 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
          nop_count++;
       }
 
-      /* GEN:BUG:14010017096:
+      /* Wa_14010017096:
        *
        * Clear accumulator register before end of thread.
        */
-      if (inst->eot && is_accum_used && devinfo->gen >= 12) {
+      if (inst->eot && is_accum_used &&
+          intel_needs_workaround(devinfo, 14010017096)) {
          brw_set_default_exec_size(p, BRW_EXECUTE_16);
          brw_set_default_mask_control(p, BRW_MASK_DISABLE);
          brw_set_default_predicate_control(p, BRW_PREDICATE_NONE);
+         brw_set_default_swsb(p, tgl_swsb_src_dep(swsb));
          brw_MOV(p, brw_acc_reg(8), brw_imm_f(0.0f));
          last_insn_offset = p->next_insn_offset;
+         swsb = tgl_swsb_dst_dep(swsb, 1);
       }
 
       if (!is_accum_used && !inst->eot) {
          is_accum_used = inst->writes_accumulator_implicitly(devinfo) ||
                          inst->dst.is_accumulator();
+      }
+
+      /* Wa_14013745556:
+       *
+       * Always use @1 SWSB for EOT.
+       */
+      if (inst->eot && devinfo->ver >= 12) {
+         if (tgl_swsb_src_dep(swsb).mode) {
+            brw_set_default_exec_size(p, BRW_EXECUTE_1);
+            brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+            brw_set_default_predicate_control(p, BRW_PREDICATE_NONE);
+            brw_set_default_swsb(p, tgl_swsb_src_dep(swsb));
+            brw_SYNC(p, TGL_SYNC_NOP);
+            last_insn_offset = p->next_insn_offset;
+         }
+
+         swsb = tgl_swsb_dst_dep(swsb, 1);
       }
 
       if (unlikely(debug_flag))
@@ -1985,20 +1735,20 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
       brw_set_default_access_mode(p, BRW_ALIGN_1);
       brw_set_default_predicate_control(p, inst->predicate);
       brw_set_default_predicate_inverse(p, inst->predicate_inverse);
-      /* On gen7 and above, hardware automatically adds the group onto the
+      /* On gfx7 and above, hardware automatically adds the group onto the
        * flag subregister number.  On Sandy Bridge and older, we have to do it
        * ourselves.
        */
       const unsigned flag_subreg = inst->flag_subreg +
-         (devinfo->gen >= 7 ? 0 : inst->group / 16);
+         (devinfo->ver >= 7 ? 0 : inst->group / 16);
       brw_set_default_flag_reg(p, flag_subreg / 2, flag_subreg % 2);
       brw_set_default_saturate(p, inst->saturate);
       brw_set_default_mask_control(p, inst->force_writemask_all);
       brw_set_default_acc_write_control(p, inst->writes_accumulator);
-      brw_set_default_swsb(p, inst->sched);
+      brw_set_default_swsb(p, swsb);
 
       unsigned exec_size = inst->exec_size;
-      if (devinfo->gen == 7 && !devinfo->is_haswell &&
+      if (devinfo->verx10 == 70 &&
           (get_exec_type_size(inst) == 8 || type_sz(inst->dst.type) == 8)) {
          exec_size *= 2;
       }
@@ -2007,7 +1757,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
 
       assert(inst->force_writemask_all || inst->exec_size >= 4);
       assert(inst->force_writemask_all || inst->group % inst->exec_size == 0);
-      assert(inst->base_mrf + inst->mlen <= BRW_MAX_MRF(devinfo->gen));
+      assert(inst->base_mrf + inst->mlen <= BRW_MAX_MRF(devinfo->ver));
       assert(inst->mlen <= BRW_MAX_MSG_LENGTH);
 
       switch (inst->opcode) {
@@ -2031,23 +1781,33 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
 	 brw_MACH(p, dst, src[0], src[1]);
 	 break;
 
+      case BRW_OPCODE_DP4A:
+         assert(devinfo->ver >= 12);
+         brw_DP4A(p, dst, src[0], src[1], src[2]);
+         break;
+
       case BRW_OPCODE_LINE:
          brw_LINE(p, dst, src[0], src[1]);
          break;
 
       case BRW_OPCODE_MAD:
-         assert(devinfo->gen >= 6);
-         if (devinfo->gen < 10)
+         assert(devinfo->ver >= 6);
+         if (devinfo->ver < 10)
             brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_MAD(p, dst, src[0], src[1], src[2]);
 	 break;
 
       case BRW_OPCODE_LRP:
-         assert(devinfo->gen >= 6 && devinfo->gen <= 10);
-         if (devinfo->gen < 10)
+         assert(devinfo->ver >= 6 && devinfo->ver <= 10);
+         if (devinfo->ver < 10)
             brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_LRP(p, dst, src[0], src[1], src[2]);
 	 break;
+
+      case BRW_OPCODE_ADD3:
+         assert(devinfo->verx10 >= 125);
+         brw_ADD3(p, dst, src[0], src[1], src[2]);
+         break;
 
       case BRW_OPCODE_FRC:
 	 brw_FRC(p, dst, src[0]);
@@ -2084,56 +1844,65 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
 	 brw_SHL(p, dst, src[0], src[1]);
 	 break;
       case BRW_OPCODE_ROL:
-	 assert(devinfo->gen >= 11);
+	 assert(devinfo->ver >= 11);
 	 assert(src[0].type == dst.type);
 	 brw_ROL(p, dst, src[0], src[1]);
 	 break;
       case BRW_OPCODE_ROR:
-	 assert(devinfo->gen >= 11);
+	 assert(devinfo->ver >= 11);
 	 assert(src[0].type == dst.type);
 	 brw_ROR(p, dst, src[0], src[1]);
 	 break;
       case BRW_OPCODE_F32TO16:
-         assert(devinfo->gen >= 7);
          brw_F32TO16(p, dst, src[0]);
          break;
       case BRW_OPCODE_F16TO32:
-         assert(devinfo->gen >= 7);
          brw_F16TO32(p, dst, src[0]);
          break;
       case BRW_OPCODE_CMP:
-         if (inst->exec_size >= 16 && devinfo->gen == 7 && !devinfo->is_haswell &&
+         if (inst->exec_size >= 16 && devinfo->verx10 == 70 &&
              dst.file == BRW_ARCHITECTURE_REGISTER_FILE) {
             /* For unknown reasons the WaCMPInstFlagDepClearedEarly workaround
              * implemented in the compiler is not sufficient. Overriding the
              * type when the destination is the null register is necessary but
              * not sufficient by itself.
              */
-            assert(dst.nr == BRW_ARF_NULL);
             dst.type = BRW_REGISTER_TYPE_D;
          }
          brw_CMP(p, dst, inst->conditional_mod, src[0], src[1]);
 	 break;
+      case BRW_OPCODE_CMPN:
+         if (inst->exec_size >= 16 && devinfo->verx10 == 70 &&
+             dst.file == BRW_ARCHITECTURE_REGISTER_FILE) {
+            /* For unknown reasons the WaCMPInstFlagDepClearedEarly workaround
+             * implemented in the compiler is not sufficient. Overriding the
+             * type when the destination is the null register is necessary but
+             * not sufficient by itself.
+             */
+            dst.type = BRW_REGISTER_TYPE_D;
+         }
+         brw_CMPN(p, dst, inst->conditional_mod, src[0], src[1]);
+         break;
       case BRW_OPCODE_SEL:
 	 brw_SEL(p, dst, src[0], src[1]);
 	 break;
       case BRW_OPCODE_CSEL:
-         assert(devinfo->gen >= 8);
-         if (devinfo->gen < 10)
+         assert(devinfo->ver >= 8);
+         if (devinfo->ver < 10)
             brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_CSEL(p, dst, src[0], src[1], src[2]);
          break;
       case BRW_OPCODE_BFREV:
-         assert(devinfo->gen >= 7);
+         assert(devinfo->ver >= 7);
          brw_BFREV(p, retype(dst, BRW_REGISTER_TYPE_UD),
                    retype(src[0], BRW_REGISTER_TYPE_UD));
          break;
       case BRW_OPCODE_FBH:
-         assert(devinfo->gen >= 7);
+         assert(devinfo->ver >= 7);
          brw_FBH(p, retype(dst, src[0].type), src[0]);
          break;
       case BRW_OPCODE_FBL:
-         assert(devinfo->gen >= 7);
+         assert(devinfo->ver >= 7);
          brw_FBL(p, retype(dst, BRW_REGISTER_TYPE_UD),
                  retype(src[0], BRW_REGISTER_TYPE_UD));
          break;
@@ -2141,16 +1910,16 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
          brw_LZD(p, dst, src[0]);
          break;
       case BRW_OPCODE_CBIT:
-         assert(devinfo->gen >= 7);
+         assert(devinfo->ver >= 7);
          brw_CBIT(p, retype(dst, BRW_REGISTER_TYPE_UD),
                   retype(src[0], BRW_REGISTER_TYPE_UD));
          break;
       case BRW_OPCODE_ADDC:
-         assert(devinfo->gen >= 7);
+         assert(devinfo->ver >= 7);
          brw_ADDC(p, dst, src[0], src[1]);
          break;
       case BRW_OPCODE_SUBB:
-         assert(devinfo->gen >= 7);
+         assert(devinfo->ver >= 7);
          brw_SUBB(p, dst, src[0], src[1]);
          break;
       case BRW_OPCODE_MAC:
@@ -2158,28 +1927,28 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
          break;
 
       case BRW_OPCODE_BFE:
-         assert(devinfo->gen >= 7);
-         if (devinfo->gen < 10)
+         assert(devinfo->ver >= 7);
+         if (devinfo->ver < 10)
             brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_BFE(p, dst, src[0], src[1], src[2]);
          break;
 
       case BRW_OPCODE_BFI1:
-         assert(devinfo->gen >= 7);
+         assert(devinfo->ver >= 7);
          brw_BFI1(p, dst, src[0], src[1]);
          break;
       case BRW_OPCODE_BFI2:
-         assert(devinfo->gen >= 7);
-         if (devinfo->gen < 10)
+         assert(devinfo->ver >= 7);
+         if (devinfo->ver < 10)
             brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_BFI2(p, dst, src[0], src[1], src[2]);
          break;
 
       case BRW_OPCODE_IF:
 	 if (inst->src[0].file != BAD_FILE) {
-	    /* The instruction has an embedded compare (only allowed on gen6) */
-	    assert(devinfo->gen == 6);
-	    gen6_IF(p, inst->conditional_mod, src[0], src[1]);
+	    /* The instruction has an embedded compare (only allowed on gfx6) */
+	    assert(devinfo->ver == 6);
+	    gfx6_IF(p, inst->conditional_mod, src[0], src[1]);
 	 } else {
 	    brw_IF(p, brw_get_default_exec_size(p));
 	 }
@@ -2216,15 +1985,15 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
       case SHADER_OPCODE_SIN:
       case SHADER_OPCODE_COS:
          assert(inst->conditional_mod == BRW_CONDITIONAL_NONE);
-	 if (devinfo->gen >= 6) {
+	 if (devinfo->ver >= 6) {
             assert(inst->mlen == 0);
-            assert(devinfo->gen >= 7 || inst->exec_size == 8);
-            gen6_math(p, dst, brw_math_function(inst->opcode),
+            assert(devinfo->ver >= 7 || inst->exec_size == 8);
+            gfx6_math(p, dst, brw_math_function(inst->opcode),
                       src[0], brw_null_reg());
 	 } else {
             assert(inst->mlen >= 1);
-            assert(devinfo->gen == 5 || devinfo->is_g4x || inst->exec_size == 8);
-            gen4_math(p, dst,
+            assert(devinfo->ver == 5 || devinfo->platform == INTEL_PLATFORM_G4X || inst->exec_size == 8);
+            gfx4_math(p, dst,
                       brw_math_function(inst->opcode),
                       inst->base_mrf, src[0],
                       BRW_MATH_PRECISION_FULL);
@@ -2234,16 +2003,17 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
       case SHADER_OPCODE_INT_QUOTIENT:
       case SHADER_OPCODE_INT_REMAINDER:
       case SHADER_OPCODE_POW:
+         assert(devinfo->verx10 < 125);
          assert(inst->conditional_mod == BRW_CONDITIONAL_NONE);
-         if (devinfo->gen >= 6) {
+         if (devinfo->ver >= 6) {
             assert(inst->mlen == 0);
-            assert((devinfo->gen >= 7 && inst->opcode == SHADER_OPCODE_POW) ||
+            assert((devinfo->ver >= 7 && inst->opcode == SHADER_OPCODE_POW) ||
                    inst->exec_size == 8);
-            gen6_math(p, dst, brw_math_function(inst->opcode), src[0], src[1]);
+            gfx6_math(p, dst, brw_math_function(inst->opcode), src[0], src[1]);
          } else {
             assert(inst->mlen >= 1);
             assert(inst->exec_size == 8);
-            gen4_math(p, dst, brw_math_function(inst->opcode),
+            gfx4_math(p, dst, brw_math_function(inst->opcode),
                       inst->base_mrf, src[0],
                       BRW_MATH_PRECISION_FULL);
             send_count++;
@@ -2254,33 +2024,35 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
 	 break;
       case FS_OPCODE_PIXEL_X:
          assert(src[0].type == BRW_REGISTER_TYPE_UW);
+         assert(src[1].type == BRW_REGISTER_TYPE_UW);
          src[0].subnr = 0 * type_sz(src[0].type);
-         brw_MOV(p, dst, stride(src[0], 8, 4, 1));
+         if (src[1].file == BRW_IMMEDIATE_VALUE) {
+            assert(src[1].ud == 0);
+            brw_MOV(p, dst, stride(src[0], 8, 4, 1));
+         } else {
+            /* Coarse pixel case */
+            brw_ADD(p, dst, stride(src[0], 8, 4, 1), src[1]);
+         }
          break;
       case FS_OPCODE_PIXEL_Y:
          assert(src[0].type == BRW_REGISTER_TYPE_UW);
+         assert(src[1].type == BRW_REGISTER_TYPE_UW);
          src[0].subnr = 4 * type_sz(src[0].type);
-         brw_MOV(p, dst, stride(src[0], 8, 4, 1));
+         if (src[1].file == BRW_IMMEDIATE_VALUE) {
+            assert(src[1].ud == 0);
+            brw_MOV(p, dst, stride(src[0], 8, 4, 1));
+         } else {
+            /* Coarse pixel case */
+            brw_ADD(p, dst, stride(src[0], 8, 4, 1), src[1]);
+         }
          break;
 
       case SHADER_OPCODE_SEND:
          generate_send(inst, dst, src[0], src[1], src[2],
                        inst->ex_mlen > 0 ? src[3] : brw_null_reg());
-         if ((inst->desc & 0xff) == BRW_BTI_STATELESS ||
-             (inst->desc & 0xff) == GEN8_BTI_STATELESS_NON_COHERENT) {
-            if (inst->size_written)
-               fill_count++;
-            else
-               spill_count++;
-         } else {
-            send_count++;
-         }
-         break;
-
-      case SHADER_OPCODE_GET_BUFFER_SIZE:
-         generate_get_buffer_size(inst, dst, src[0], src[1]);
          send_count++;
          break;
+
       case SHADER_OPCODE_TEX:
       case FS_OPCODE_TXB:
       case SHADER_OPCODE_TXD:
@@ -2305,19 +2077,19 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
          generate_ddy(inst, dst, src[0]);
 	 break;
 
-      case SHADER_OPCODE_GEN4_SCRATCH_WRITE:
+      case SHADER_OPCODE_GFX4_SCRATCH_WRITE:
 	 generate_scratch_write(inst, src[0]);
-         spill_count++;
+         send_count++;
 	 break;
 
-      case SHADER_OPCODE_GEN4_SCRATCH_READ:
+      case SHADER_OPCODE_GFX4_SCRATCH_READ:
 	 generate_scratch_read(inst, dst);
-         fill_count++;
+         send_count++;
 	 break;
 
-      case SHADER_OPCODE_GEN7_SCRATCH_READ:
-	 generate_scratch_read_gen7(inst, dst);
-         fill_count++;
+      case SHADER_OPCODE_GFX7_SCRATCH_READ:
+	 generate_scratch_read_gfx7(inst, dst);
+         send_count++;
 	 break;
 
       case SHADER_OPCODE_SCRATCH_HEADER:
@@ -2333,34 +2105,16 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
          brw_MOV_reloc_imm(p, dst, dst.type, src[0].ud);
          break;
 
-      case SHADER_OPCODE_URB_READ_SIMD8:
-      case SHADER_OPCODE_URB_READ_SIMD8_PER_SLOT:
-         generate_urb_read(inst, dst, src[0]);
-         send_count++;
-         break;
-
-      case SHADER_OPCODE_URB_WRITE_SIMD8:
-      case SHADER_OPCODE_URB_WRITE_SIMD8_PER_SLOT:
-      case SHADER_OPCODE_URB_WRITE_SIMD8_MASKED:
-      case SHADER_OPCODE_URB_WRITE_SIMD8_MASKED_PER_SLOT:
-	 generate_urb_write(inst, src[0]);
-         send_count++;
-	 break;
-
       case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
          assert(inst->force_writemask_all);
-	 generate_uniform_pull_constant_load(inst, dst, src[0], src[1]);
+	 generate_uniform_pull_constant_load(inst, dst,
+                                             src[PULL_UNIFORM_CONSTANT_SRC_SURFACE],
+                                             src[PULL_UNIFORM_CONSTANT_SRC_OFFSET]);
          send_count++;
 	 break;
 
-      case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD_GEN7:
-         assert(inst->force_writemask_all);
-	 generate_uniform_pull_constant_load_gen7(inst, dst, src[0], src[1]);
-         send_count++;
-	 break;
-
-      case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN4:
-	 generate_varying_pull_constant_load_gen4(inst, dst, src[0]);
+      case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GFX4:
+	 generate_varying_pull_constant_load_gfx4(inst, dst, src[0]);
          send_count++;
 	 break;
 
@@ -2379,10 +2133,6 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
          generate_halt(inst);
          break;
 
-      case SHADER_OPCODE_SHADER_TIME_ADD:
-         generate_shader_time_add(inst, src[0], src[1], src[2]);
-         break;
-
       case SHADER_OPCODE_INTERLOCK:
       case SHADER_OPCODE_MEMORY_FENCE: {
          assert(src[1].file == BRW_IMMEDIATE_VALUE);
@@ -2393,6 +2143,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
 
          brw_memory_fence(p, dst, src[0], send_op,
                           brw_message_target(inst->sfid),
+                          inst->desc,
                           /* commit_enable */ src[1].ud,
                           /* bti */ src[2].ud);
          send_count++;
@@ -2400,14 +2151,14 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
       }
 
       case FS_OPCODE_SCHEDULING_FENCE:
-         if (inst->sources == 0 && inst->sched.regdist == 0 &&
-                                   inst->sched.mode == TGL_SBID_NULL) {
+         if (inst->sources == 0 && swsb.regdist == 0 &&
+                                   swsb.mode == TGL_SBID_NULL) {
             if (unlikely(debug_flag))
                disasm_info->use_tail = true;
             break;
          }
 
-         if (devinfo->gen >= 12) {
+         if (devinfo->ver >= 12) {
             /* Use the available SWSB information to stall.  A single SYNC is
              * sufficient since if there were multiple dependencies, the
              * scoreboard algorithm already injected other SYNCs before this
@@ -2429,17 +2180,15 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
 
          break;
 
-      case SHADER_OPCODE_FIND_LIVE_CHANNEL: {
-         const struct brw_reg mask =
-            brw_stage_has_packed_dispatch(devinfo, stage,
-                                          prog_data) ? brw_imm_ud(~0u) :
-            stage == MESA_SHADER_FRAGMENT ? brw_vmask_reg() :
-            brw_dmask_reg();
-         brw_find_live_channel(p, dst, mask);
+      case SHADER_OPCODE_FIND_LIVE_CHANNEL:
+         brw_find_live_channel(p, dst, false);
          break;
-      }
+      case SHADER_OPCODE_FIND_LAST_LIVE_CHANNEL:
+         brw_find_live_channel(p, dst, true);
+         break;
+
       case FS_OPCODE_LOAD_LIVE_CHANNELS: {
-         assert(devinfo->gen >= 8);
+         assert(devinfo->ver >= 8);
          assert(inst->force_writemask_all && inst->group == 0);
          assert(inst->dst.file == BAD_FILE);
          brw_set_default_exec_size(p, BRW_EXECUTE_1);
@@ -2459,6 +2208,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
 
       case SHADER_OPCODE_SEL_EXEC:
          assert(inst->force_writemask_all);
+         assert(devinfo->has_64bit_float || type_sz(dst.type) <= 4);
          brw_set_default_mask_control(p, BRW_MASK_DISABLE);
          brw_MOV(p, dst, src[1]);
          brw_set_default_mask_control(p, BRW_MASK_ENABLE);
@@ -2473,6 +2223,9 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
          break;
 
       case SHADER_OPCODE_CLUSTER_BROADCAST: {
+         assert((devinfo->platform != INTEL_PLATFORM_CHV &&
+                 !intel_device_info_is_9lp(devinfo) &&
+                 devinfo->has_64bit_float) || type_sz(src[0].type) <= 4);
          assert(!src[0].negate && !src[0].abs);
          assert(src[1].file == BRW_IMMEDIATE_VALUE);
          assert(src[1].type == BRW_REGISTER_TYPE_UD);
@@ -2480,7 +2233,9 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
          assert(src[2].type == BRW_REGISTER_TYPE_UD);
          const unsigned component = src[1].ud;
          const unsigned cluster_size = src[2].ud;
-         unsigned vstride = cluster_size;
+         assert(inst->src[0].file != ARF && inst->src[0].file != FIXED_GRF);
+         const unsigned s = inst->src[0].stride;
+         unsigned vstride = cluster_size * s;
          unsigned width = cluster_size;
 
          /* The maximum exec_size is 32, but the maximum width is only 16. */
@@ -2489,45 +2244,15 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
             width = 1;
          }
 
-         struct brw_reg strided = stride(suboffset(src[0], component),
+         struct brw_reg strided = stride(suboffset(src[0], component * s),
                                          vstride, width, 0);
-         if (type_sz(src[0].type) > 4 &&
-             (devinfo->is_cherryview || gen_device_info_is_9lp(devinfo))) {
-            /* IVB has an issue (which we found empirically) where it reads
-             * two address register components per channel for indirectly
-             * addressed 64-bit sources.
-             *
-             * From the Cherryview PRM Vol 7. "Register Region Restrictions":
-             *
-             *    "When source or destination datatype is 64b or operation is
-             *    integer DWord multiply, indirect addressing must not be
-             *    used."
-             *
-             * To work around both of these, we do two integer MOVs insead of
-             * one 64-bit MOV.  Because no double value should ever cross a
-             * register boundary, it's safe to use the immediate offset in the
-             * indirect here to handle adding 4 bytes to the offset and avoid
-             * the extra ADD to the register file.
-             */
-            assert(src[0].type == dst.type);
-            brw_MOV(p, subscript(dst, BRW_REGISTER_TYPE_D, 0),
-                       subscript(strided, BRW_REGISTER_TYPE_D, 0));
-            brw_set_default_swsb(p, tgl_swsb_null());
-            brw_MOV(p, subscript(dst, BRW_REGISTER_TYPE_D, 1),
-                       subscript(strided, BRW_REGISTER_TYPE_D, 1));
-         } else {
-            brw_MOV(p, dst, strided);
-         }
+         brw_MOV(p, dst, strided);
          break;
       }
 
       case FS_OPCODE_SET_SAMPLE_ID:
          generate_set_sample_id(inst, dst, src[0], src[1]);
          break;
-
-      case FS_OPCODE_PACK_HALF_2x16_SPLIT:
-          generate_pack_half_2x16_split(inst, dst, src[0], src[1]);
-          break;
 
       case SHADER_OPCODE_HALT_TARGET:
          /* This is the place where the final HALT needs to be inserted if
@@ -2538,24 +2263,6 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
                disasm_info->use_tail = true;
             }
          }
-         break;
-
-      case FS_OPCODE_INTERPOLATE_AT_SAMPLE:
-         generate_pixel_interpolator_query(inst, dst, src[0], src[1],
-                                           GEN7_PIXEL_INTERPOLATOR_LOC_SAMPLE);
-         send_count++;
-         break;
-
-      case FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET:
-         generate_pixel_interpolator_query(inst, dst, src[0], src[1],
-                                           GEN7_PIXEL_INTERPOLATOR_LOC_SHARED_OFFSET);
-         send_count++;
-         break;
-
-      case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
-         generate_pixel_interpolator_query(inst, dst, src[0], src[1],
-                                           GEN7_PIXEL_INTERPOLATOR_LOC_PER_SLOT_OFFSET);
-         send_count++;
          break;
 
       case CS_OPCODE_CS_TERMINATE:
@@ -2569,7 +2276,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
 	 break;
 
       case BRW_OPCODE_DIM:
-         assert(devinfo->is_haswell);
+         assert(devinfo->platform == INTEL_PLATFORM_HSW);
          assert(src[0].type == BRW_REGISTER_TYPE_DF);
          assert(dst.type == BRW_REGISTER_TYPE_DF);
          brw_DIM(p, dst, retype(src[0], BRW_REGISTER_TYPE_F));
@@ -2593,32 +2300,21 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
          brw_float_controls_mode(p, src[0].d, src[1].d);
          break;
 
-      case SHADER_OPCODE_GET_DSS_ID:
-         /* The Slice, Dual-SubSlice, SubSlice, EU, and Thread IDs are all
-          * stored in sr0.0.  Normally, for reading from HW regs, we'd just do
-          * this in the IR and let the back-end generate some code but these
-          * live in the state register which tends to have special rules.
-          *
-          * For convenience, we combine Slice ID and Dual-SubSlice ID into a
-          * single ID.
-          */
-         if (devinfo->gen == 12) {
+      case SHADER_OPCODE_READ_SR_REG:
+         if (devinfo->ver >= 12) {
             /* There is a SWSB restriction that requires that any time sr0 is
              * accessed both the instruction doing the access and the next one
              * have SWSB set to RegDist(1).
              */
             if (brw_get_default_swsb(p).mode != TGL_SBID_NULL)
                brw_SYNC(p, TGL_SYNC_NOP);
+            assert(src[0].file == BRW_IMMEDIATE_VALUE);
             brw_set_default_swsb(p, tgl_swsb_regdist(1));
-            brw_SHR(p, dst, brw_sr0_reg(0), brw_imm_ud(9));
+            brw_MOV(p, dst, brw_sr0_reg(src[0].ud));
             brw_set_default_swsb(p, tgl_swsb_regdist(1));
-            brw_AND(p, dst, dst, brw_imm_ud(0x1f));
+            brw_AND(p, dst, dst, brw_imm_ud(0xffffffff));
          } else {
-            /* These move around basically every hardware generation, so don't
-             * do any >= checks and fail if the platform hasn't explicitly
-             * been enabled here.
-             */
-            unreachable("Unsupported platform");
+            brw_MOV(p, dst, brw_sr0_reg(src[0].ud));
          }
          break;
 
@@ -2641,10 +2337,18 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
 
          if (inst->conditional_mod)
             brw_inst_set_cond_modifier(p->devinfo, last, inst->conditional_mod);
-         if (devinfo->gen < 12) {
+         if (devinfo->ver < 12) {
             brw_inst_set_no_dd_clear(p->devinfo, last, inst->no_dd_clear);
             brw_inst_set_no_dd_check(p->devinfo, last, inst->no_dd_check);
          }
+      }
+
+      /* When enabled, insert sync NOP after every instruction and make sure
+       * that current instruction depends on the previous instruction.
+       */
+      if (INTEL_DEBUG(DEBUG_SWSB_STALL) && devinfo->ver >= 12) {
+         brw_set_default_swsb(p, tgl_swsb_regdist(1));
+         brw_SYNC(p, TGL_SYNC_NOP);
       }
    }
 
@@ -2653,12 +2357,21 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
    /* end of program sentinel */
    disasm_new_inst_group(disasm_info, p->next_insn_offset);
 
+   /* `send_count` explicitly does not include spills or fills, as we'd
+    * like to use it as a metric for intentional memory access or other
+    * shared function use.  Otherwise, subtle changes to scheduling or
+    * register allocation could cause it to fluctuate wildly - and that
+    * effect is already counted in spill/fill counts.
+    */
+   send_count -= shader_stats.spill_count;
+   send_count -= shader_stats.fill_count;
+
 #ifndef NDEBUG
    bool validated =
 #else
    if (unlikely(debug_flag))
 #endif
-      brw_validate_instructions(devinfo, p->store,
+      brw_validate_instructions(&compiler->isa, p->store,
                                 start_offset,
                                 p->next_insn_offset,
                                 disasm_info);
@@ -2684,7 +2397,9 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
               shader_name, sha1buf,
               dispatch_width, before_size / 16,
               loop_count, perf.latency,
-              spill_count, fill_count, send_count,
+              shader_stats.spill_count,
+              shader_stats.fill_count,
+              send_count,
               shader_stats.scheduler_mode,
               shader_stats.promoted_constants,
               before_size, after_size,
@@ -2707,27 +2422,31 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
 #endif
    assert(validated);
 
-   compiler->shader_debug_log(log_data,
-                              "%s SIMD%d shader: %d inst, %d loops, %u cycles, "
-                              "%d:%d spills:fills, %u sends, "
-                              "scheduled with mode %s, "
-                              "Promoted %u constants, "
-                              "compacted %d to %d bytes.",
-                              _mesa_shader_stage_to_abbrev(stage),
-                              dispatch_width, before_size / 16 - nop_count,
-                              loop_count, perf.latency,
-                              spill_count, fill_count, send_count,
-                              shader_stats.scheduler_mode,
-                              shader_stats.promoted_constants,
-                              before_size, after_size);
+   brw_shader_debug_log(compiler, log_data,
+                        "%s SIMD%d shader: %d inst, %d loops, %u cycles, "
+                        "%d:%d spills:fills, %u sends, "
+                        "scheduled with mode %s, "
+                        "Promoted %u constants, "
+                        "compacted %d to %d bytes.\n",
+                        _mesa_shader_stage_to_abbrev(stage),
+                        dispatch_width, before_size / 16 - nop_count,
+                        loop_count, perf.latency,
+                        shader_stats.spill_count,
+                        shader_stats.fill_count,
+                        send_count,
+                        shader_stats.scheduler_mode,
+                        shader_stats.promoted_constants,
+                        before_size, after_size);
    if (stats) {
       stats->dispatch_width = dispatch_width;
+      stats->max_dispatch_width = dispatch_width;
       stats->instructions = before_size / 16 - nop_count;
       stats->sends = send_count;
       stats->loops = loop_count;
       stats->cycles = perf.latency;
-      stats->spills = spill_count;
-      stats->fills = fill_count;
+      stats->spills = shader_stats.spill_count;
+      stats->fills = shader_stats.fill_count;
+      stats->max_live_registers = shader_stats.max_register_pressure;
    }
 
    return start_offset;

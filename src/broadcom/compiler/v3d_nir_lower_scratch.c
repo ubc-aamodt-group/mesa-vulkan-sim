@@ -66,7 +66,7 @@ v3d_nir_lower_load_scratch(nir_builder *b, nir_intrinsic_instr *instr)
                         nir_intrinsic_instr_create(b->shader, instr->intrinsic);
                 chan_instr->num_components = 1;
                 nir_ssa_dest_init(&chan_instr->instr, &chan_instr->dest, 1,
-                                  instr->dest.ssa.bit_size, NULL);
+                                  instr->dest.ssa.bit_size);
 
                 chan_instr->src[0] = nir_src_for_ssa(chan_offset);
 
@@ -78,7 +78,7 @@ v3d_nir_lower_load_scratch(nir_builder *b, nir_intrinsic_instr *instr)
         }
 
         nir_ssa_def *result = nir_vec(b, chans, instr->num_components);
-        nir_ssa_def_rewrite_uses(&instr->dest.ssa, nir_src_for_ssa(result));
+        nir_ssa_def_rewrite_uses(&instr->dest.ssa, result);
         nir_instr_remove(&instr->instr);
 }
 
@@ -115,39 +115,35 @@ v3d_nir_lower_store_scratch(nir_builder *b, nir_intrinsic_instr *instr)
         nir_instr_remove(&instr->instr);
 }
 
-void
+static bool
+v3d_nir_lower_scratch_cb(nir_builder *b,
+                         nir_instr *instr,
+                         void *_state)
+{
+        if (instr->type != nir_instr_type_intrinsic)
+                return false;
+
+        nir_intrinsic_instr *intr =
+                nir_instr_as_intrinsic(instr);
+
+        switch (intr->intrinsic) {
+        case nir_intrinsic_load_scratch:
+                v3d_nir_lower_load_scratch(b, intr);
+                return true;
+        case nir_intrinsic_store_scratch:
+                v3d_nir_lower_store_scratch(b, intr);
+                return true;
+        default:
+                return false;
+        }
+
+        return false;
+}
+
+bool
 v3d_nir_lower_scratch(nir_shader *s)
 {
-        nir_foreach_function(function, s) {
-                if (!function->impl)
-                        continue;
-
-                nir_builder b;
-                nir_builder_init(&b, function->impl);
-
-                nir_foreach_block(block, function->impl) {
-                        nir_foreach_instr_safe(instr, block) {
-                                if (instr->type != nir_instr_type_intrinsic)
-                                        continue;
-
-                                nir_intrinsic_instr *intr =
-                                        nir_instr_as_intrinsic(instr);
-
-                                switch (intr->intrinsic) {
-                                case nir_intrinsic_load_scratch:
-                                        v3d_nir_lower_load_scratch(&b, intr);
-                                        break;
-                                case nir_intrinsic_store_scratch:
-                                        v3d_nir_lower_store_scratch(&b, intr);
-                                        break;
-                                default:
-                                        break;
-                                }
-                        }
-                }
-
-                nir_metadata_preserve(function->impl,
-                                      nir_metadata_block_index |
-                                      nir_metadata_dominance);
-        }
+        return nir_shader_instructions_pass(s, v3d_nir_lower_scratch_cb,
+                                            nir_metadata_block_index |
+                                            nir_metadata_dominance, NULL);
 }

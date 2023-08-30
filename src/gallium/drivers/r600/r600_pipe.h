@@ -261,13 +261,13 @@ struct r600_gs_rings_state {
 #define DBG_NO_CP_DMA		(1 << 30)
 /* shader backend */
 #define DBG_NO_SB		(1 << 21)
-#define DBG_SB_CS		(1 << 22)
 #define DBG_SB_DRY_RUN	(1 << 23)
 #define DBG_SB_STAT		(1 << 24)
 #define DBG_SB_DUMP		(1 << 25)
 #define DBG_SB_NO_FALLBACK	(1 << 26)
 #define DBG_SB_DISASM	(1 << 27)
 #define DBG_SB_SAFEMATH	(1 << 28)
+#define DBG_NIR_SB	(1 << 28)
 
 struct r600_screen {
 	struct r600_common_screen	b;
@@ -343,7 +343,11 @@ struct r600_pipe_shader_selector {
 	struct r600_pipe_shader *current;
 
 	struct tgsi_token       *tokens;
-        struct nir_shader       *nir;
+	struct nir_shader       *nir;
+
+	size_t  nir_blob_size;
+	void   *nir_blob;
+
 	struct pipe_stream_output_info  so;
 	struct tgsi_shader_info		info;
 
@@ -353,14 +357,13 @@ struct r600_pipe_shader_selector {
         enum pipe_shader_ir ir_type;
 
 	/* geometry shader properties */
-	enum pipe_prim_type	gs_output_prim;
+	enum mesa_prim	gs_output_prim;
 	unsigned		gs_max_out_vertices;
 	unsigned		gs_num_invocations;
 
 	/* TCS/VS */
 	uint64_t        lds_patch_outputs_written_mask;
 	uint64_t        lds_outputs_written_mask;
-	unsigned	nr_ps_max_color_exports;
 };
 
 struct r600_pipe_sampler_state {
@@ -587,9 +590,9 @@ struct r600_context {
 	struct list_head		texture_buffers;
 
 	/* Last draw state (-1 = unset). */
-	enum pipe_prim_type		last_primitive_type; /* Last primitive type used in draw_vbo. */
-	enum pipe_prim_type		current_rast_prim; /* primitive type after TES, GS */
-	enum pipe_prim_type		last_rast_prim;
+	enum mesa_prim		last_primitive_type; /* Last primitive type used in draw_vbo. */
+	enum mesa_prim		current_rast_prim; /* primitive type after TES, GS */
+	enum mesa_prim		last_rast_prim;
 	unsigned			last_start_instance;
 
 	void				*sb_context;
@@ -611,6 +614,7 @@ struct r600_context {
 	struct r600_resource	*trace_buf;
 	unsigned		trace_id;
 
+	uint8_t patch_vertices;
 	bool cmd_buf_is_compute;
 	struct pipe_resource *append_fence;
 	uint32_t append_fence_id;
@@ -682,11 +686,11 @@ evergreen_create_sampler_view_custom(struct pipe_context *ctx,
 				     unsigned force_level);
 void evergreen_init_common_regs(struct r600_context *ctx,
 				struct r600_command_buffer *cb,
-				enum chip_class ctx_chip_class,
+				enum amd_gfx_level ctx_chip_class,
 				enum radeon_family ctx_family,
 				int ctx_drm_minor);
 void cayman_init_common_regs(struct r600_command_buffer *cb,
-			     enum chip_class ctx_chip_class,
+			     enum amd_gfx_level ctx_chip_class,
 			     enum radeon_family ctx_family,
 			     int ctx_drm_minor);
 
@@ -848,7 +852,7 @@ uint32_t r600_translate_texformat(struct pipe_screen *screen, enum pipe_format f
 				  const unsigned char *swizzle_view,
 				  uint32_t *word4_p, uint32_t *yuv_format_p,
 				  bool do_endian_swap);
-uint32_t r600_translate_colorformat(enum chip_class chip, enum pipe_format format,
+uint32_t r600_translate_colorformat(enum amd_gfx_level chip, enum pipe_format format,
 				  bool do_endian_swap);
 uint32_t r600_colorformat_endian_swap(uint32_t colorformat, bool do_endian_swap);
 
@@ -1062,7 +1066,7 @@ struct r600_pipe_shader_selector *r600_create_shader_state_tokens(struct pipe_co
 								  unsigned pipe_shader_type);
 int r600_shader_select(struct pipe_context *ctx,
 		       struct r600_pipe_shader_selector* sel,
-		       bool *dirty);
+		       bool *dirty, bool precompile);
 
 void r600_delete_shader_selector(struct pipe_context *ctx,
 				 struct r600_pipe_shader_selector *sel);

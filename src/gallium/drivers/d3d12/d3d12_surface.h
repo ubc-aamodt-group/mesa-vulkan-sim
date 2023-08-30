@@ -26,8 +26,6 @@
 
 #include "pipe/p_state.h"
 
-#include <directx/d3d12.h>
-
 struct d3d12_descriptor_handle;
 struct pipe_context;
 
@@ -52,11 +50,13 @@ d3d12_surface(struct pipe_surface *psurf)
 }
 
 enum d3d12_surface_conversion_mode
-d3d12_surface_update_pre_draw(struct d3d12_surface *surface,
+d3d12_surface_update_pre_draw(struct pipe_context *pctx,
+                              struct d3d12_surface *surface,
                               DXGI_FORMAT format);
 
 void
-d3d12_surface_update_post_draw(struct d3d12_surface *surface,
+d3d12_surface_update_post_draw(struct pipe_context *pctx,
+                               struct d3d12_surface *surface,
                                enum d3d12_surface_conversion_mode mode);
 
 D3D12_CPU_DESCRIPTOR_HANDLE

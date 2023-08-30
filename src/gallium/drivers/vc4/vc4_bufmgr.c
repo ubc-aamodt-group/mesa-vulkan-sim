@@ -56,7 +56,7 @@ vc4_bo_label(struct vc4_screen *screen, struct vc4_bo *bo, const char *fmt, ...)
          * (for debugging a single app's allocation).
          */
 #ifndef DEBUG
-        if (!(vc4_debug & VC4_DEBUG_SURFACE))
+        if (!VC4_DBG(SURFACE))
                 return;
 #endif
         va_list va;
@@ -85,12 +85,12 @@ vc4_bo_dump_stats(struct vc4_screen *screen)
         fprintf(stderr, "  BOs cached size: %dkb\n", cache->bo_size / 1024);
 
         if (!list_is_empty(&cache->time_list)) {
-                struct vc4_bo *first = LIST_ENTRY(struct vc4_bo,
-                                                  cache->time_list.next,
+                struct vc4_bo *first = list_entry(cache->time_list.next,
+                                                  struct vc4_bo,
                                                   time_list);
-                struct vc4_bo *last = LIST_ENTRY(struct vc4_bo,
-                                                  cache->time_list.prev,
-                                                  time_list);
+                struct vc4_bo *last = list_entry(cache->time_list.prev,
+                                                 struct vc4_bo,
+                                                 time_list);
 
                 fprintf(stderr, "  oldest cache time: %ld\n",
                         (long)first->free_time);
@@ -382,9 +382,11 @@ vc4_bo_open_handle(struct vc4_screen *screen,
 {
         struct vc4_bo *bo;
 
-        assert(size);
+        /* Note: the caller is responsible for locking screen->bo_handles_mutex.
+         * This allows the lock to cover the actual BO import, avoiding a race.
+         */
 
-        mtx_lock(&screen->bo_handles_mutex);
+        assert(size);
 
         bo = util_hash_table_get(screen->bo_handles, (void*)(uintptr_t)handle);
         if (bo) {
@@ -418,10 +420,14 @@ vc4_bo_open_name(struct vc4_screen *screen, uint32_t name)
         struct drm_gem_open o = {
                 .name = name
         };
+
+        mtx_lock(&screen->bo_handles_mutex);
+
         int ret = vc4_ioctl(screen->fd, DRM_IOCTL_GEM_OPEN, &o);
         if (ret) {
                 fprintf(stderr, "Failed to open bo %d: %s\n",
                         name, strerror(errno));
+                mtx_unlock(&screen->bo_handles_mutex);
                 return NULL;
         }
 
@@ -432,10 +438,14 @@ struct vc4_bo *
 vc4_bo_open_dmabuf(struct vc4_screen *screen, int fd)
 {
         uint32_t handle;
+
+        mtx_lock(&screen->bo_handles_mutex);
+
         int ret = drmPrimeFDToHandle(screen->fd, fd, &handle);
         int size;
         if (ret) {
                 fprintf(stderr, "Failed to get vc4 handle for dmabuf %d\n", fd);
+                mtx_unlock(&screen->bo_handles_mutex);
                 return NULL;
         }
 
@@ -443,6 +453,7 @@ vc4_bo_open_dmabuf(struct vc4_screen *screen, int fd)
         size = lseek(fd, 0, SEEK_END);
         if (size == -1) {
                 fprintf(stderr, "Couldn't get size of dmabuf fd %d.\n", fd);
+                mtx_unlock(&screen->bo_handles_mutex);
                 return NULL;
         }
 
@@ -550,7 +561,7 @@ vc4_wait_seqno(struct vc4_screen *screen, uint64_t seqno, uint64_t timeout_ns,
         if (screen->finished_seqno >= seqno)
                 return true;
 
-        if (unlikely(vc4_debug & VC4_DEBUG_PERF) && timeout_ns && reason) {
+        if (VC4_DBG(PERF) && timeout_ns && reason) {
                 if (vc4_wait_seqno_ioctl(screen->fd, seqno, 0) == -ETIME) {
                         fprintf(stderr, "Blocking on seqno %lld for %s\n",
                                 (long long)seqno, reason);
@@ -590,7 +601,7 @@ vc4_bo_wait(struct vc4_bo *bo, uint64_t timeout_ns, const char *reason)
 {
         struct vc4_screen *screen = bo->screen;
 
-        if (unlikely(vc4_debug & VC4_DEBUG_PERF) && timeout_ns && reason) {
+        if (VC4_DBG(PERF) && timeout_ns && reason) {
                 if (vc4_wait_bo_ioctl(screen->fd, bo->handle, 0) == -ETIME) {
                         fprintf(stderr, "Blocking on %s BO for %s\n",
                                 bo->name, reason);
@@ -646,7 +657,7 @@ vc4_bo_map(struct vc4_bo *bo)
 {
         void *map = vc4_bo_map_unsynchronized(bo);
 
-        bool ok = vc4_bo_wait(bo, PIPE_TIMEOUT_INFINITE, "bo map");
+        bool ok = vc4_bo_wait(bo, OS_TIMEOUT_INFINITE, "bo map");
         if (!ok) {
                 fprintf(stderr, "BO wait for map failed\n");
                 abort();

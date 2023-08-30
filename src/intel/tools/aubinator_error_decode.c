@@ -38,14 +38,10 @@
 #include <getopt.h>
 #include <zlib.h>
 
-#include "common/gen_decoder.h"
-#include "dev/gen_debug.h"
+#include "common/intel_decoder.h"
+#include "compiler/brw_compiler.h"
+#include "dev/intel_debug.h"
 #include "util/macros.h"
-
-#define CSI "\e["
-#define BLUE_HEADER  CSI "0;44m"
-#define GREEN_HEADER CSI "1;42m"
-#define NORMAL       CSI "0m"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
@@ -54,6 +50,7 @@
 static bool option_full_decode = true;
 static bool option_print_all_bb = false;
 static bool option_print_offsets = true;
+static bool option_dump_kernels = false;
 static enum { COLOR_AUTO, COLOR_ALWAYS, COLOR_NEVER } option_color;
 static char *xml_path = NULL;
 
@@ -65,54 +62,54 @@ print_head(unsigned int reg)
 }
 
 static void
-print_register(struct gen_spec *spec, const char *name, uint32_t reg)
+print_register(struct intel_spec *spec, const char *name, uint32_t reg)
 {
-   struct gen_group *reg_spec =
-      name ? gen_spec_find_register_by_name(spec, name) : NULL;
+   struct intel_group *reg_spec =
+      name ? intel_spec_find_register_by_name(spec, name) : NULL;
 
    if (reg_spec) {
-      gen_print_group(stdout, reg_spec, 0, &reg, 0,
-                      option_color == COLOR_ALWAYS);
+      intel_print_group(stdout, reg_spec, 0, &reg, 0,
+                        option_color == COLOR_ALWAYS);
    }
 }
 
 struct ring_register_mapping {
-   enum drm_i915_gem_engine_class ring_class;
+   enum intel_engine_class ring_class;
    unsigned ring_instance;
    const char *register_name;
 };
 
 static const struct ring_register_mapping acthd_registers[] = {
-   { I915_ENGINE_CLASS_COPY, 0, "BCS_ACTHD_UDW" },
-   { I915_ENGINE_CLASS_VIDEO, 0, "VCS_ACTHD_UDW" },
-   { I915_ENGINE_CLASS_VIDEO, 1, "VCS2_ACTHD_UDW" },
-   { I915_ENGINE_CLASS_RENDER, 0, "ACTHD_UDW" },
-   { I915_ENGINE_CLASS_VIDEO_ENHANCE, 0, "VECS_ACTHD_UDW" },
+   { INTEL_ENGINE_CLASS_COPY, 0, "BCS_ACTHD_UDW" },
+   { INTEL_ENGINE_CLASS_VIDEO, 0, "VCS_ACTHD_UDW" },
+   { INTEL_ENGINE_CLASS_VIDEO, 1, "VCS2_ACTHD_UDW" },
+   { INTEL_ENGINE_CLASS_RENDER, 0, "ACTHD_UDW" },
+   { INTEL_ENGINE_CLASS_VIDEO_ENHANCE, 0, "VECS_ACTHD_UDW" },
 };
 
 static const struct ring_register_mapping ctl_registers[] = {
-   { I915_ENGINE_CLASS_COPY, 0, "BCS_RING_BUFFER_CTL" },
-   { I915_ENGINE_CLASS_VIDEO, 0, "VCS_RING_BUFFER_CTL" },
-   { I915_ENGINE_CLASS_VIDEO, 1, "VCS2_RING_BUFFER_CTL" },
-   { I915_ENGINE_CLASS_RENDER, 0, "RCS_RING_BUFFER_CTL" },
-   { I915_ENGINE_CLASS_VIDEO_ENHANCE, 0,  "VECS_RING_BUFFER_CTL" },
+   { INTEL_ENGINE_CLASS_COPY, 0, "BCS_RING_BUFFER_CTL" },
+   { INTEL_ENGINE_CLASS_VIDEO, 0, "VCS_RING_BUFFER_CTL" },
+   { INTEL_ENGINE_CLASS_VIDEO, 1, "VCS2_RING_BUFFER_CTL" },
+   { INTEL_ENGINE_CLASS_RENDER, 0, "RCS_RING_BUFFER_CTL" },
+   { INTEL_ENGINE_CLASS_VIDEO_ENHANCE, 0,  "VECS_RING_BUFFER_CTL" },
 };
 
 static const struct ring_register_mapping fault_registers[] = {
-   { I915_ENGINE_CLASS_COPY, 0, "BCS_FAULT_REG" },
-   { I915_ENGINE_CLASS_VIDEO, 0, "VCS_FAULT_REG" },
-   { I915_ENGINE_CLASS_RENDER, 0, "RCS_FAULT_REG" },
-   { I915_ENGINE_CLASS_VIDEO_ENHANCE, 0, "VECS_FAULT_REG" },
+   { INTEL_ENGINE_CLASS_COPY, 0, "BCS_FAULT_REG" },
+   { INTEL_ENGINE_CLASS_VIDEO, 0, "VCS_FAULT_REG" },
+   { INTEL_ENGINE_CLASS_RENDER, 0, "RCS_FAULT_REG" },
+   { INTEL_ENGINE_CLASS_VIDEO_ENHANCE, 0, "VECS_FAULT_REG" },
 };
 
 static int ring_name_to_class(const char *ring_name,
-                              enum drm_i915_gem_engine_class *class)
+                              enum intel_engine_class *class)
 {
    static const char *class_names[] = {
-      [I915_ENGINE_CLASS_RENDER] = "rcs",
-      [I915_ENGINE_CLASS_COPY] = "bcs",
-      [I915_ENGINE_CLASS_VIDEO] = "vcs",
-      [I915_ENGINE_CLASS_VIDEO_ENHANCE] = "vecs",
+      [INTEL_ENGINE_CLASS_RENDER] = "rcs",
+      [INTEL_ENGINE_CLASS_COPY] = "bcs",
+      [INTEL_ENGINE_CLASS_VIDEO] = "vcs",
+      [INTEL_ENGINE_CLASS_VIDEO_ENHANCE] = "vecs",
    };
    for (size_t i = 0; i < ARRAY_SIZE(class_names); i++) {
       if (strncmp(ring_name, class_names[i], strlen(class_names[i])))
@@ -127,11 +124,11 @@ static int ring_name_to_class(const char *ring_name,
       unsigned int class;
       int instance;
    } legacy_names[] = {
-      { "render", I915_ENGINE_CLASS_RENDER, 0 },
-      { "blt", I915_ENGINE_CLASS_COPY, 0 },
-      { "bsd", I915_ENGINE_CLASS_VIDEO, 0 },
-      { "bsd2", I915_ENGINE_CLASS_VIDEO, 1 },
-      { "vebox", I915_ENGINE_CLASS_VIDEO_ENHANCE, 0 },
+      { "render", INTEL_ENGINE_CLASS_RENDER, 0 },
+      { "blt", INTEL_ENGINE_CLASS_COPY, 0 },
+      { "bsd", INTEL_ENGINE_CLASS_VIDEO, 0 },
+      { "bsd2", INTEL_ENGINE_CLASS_VIDEO, 1 },
+      { "vebox", INTEL_ENGINE_CLASS_VIDEO_ENHANCE, 0 },
    };
    for (size_t i = 0; i < ARRAY_SIZE(legacy_names); i++) {
       if (strcmp(ring_name, legacy_names[i].name))
@@ -149,7 +146,7 @@ register_name_from_ring(const struct ring_register_mapping *mapping,
                         unsigned nb_mapping,
                         const char *ring_name)
 {
-   enum drm_i915_gem_engine_class class;
+   enum intel_engine_class class;
    int instance;
 
    instance = ring_name_to_class(ring_name, &class);
@@ -165,10 +162,10 @@ register_name_from_ring(const struct ring_register_mapping *mapping,
 }
 
 static const char *
-instdone_register_for_ring(const struct gen_device_info *devinfo,
+instdone_register_for_ring(const struct intel_device_info *devinfo,
                            const char *ring_name)
 {
-   enum drm_i915_gem_engine_class class;
+   enum intel_engine_class class;
    int instance;
 
    instance = ring_name_to_class(ring_name, &class);
@@ -176,16 +173,16 @@ instdone_register_for_ring(const struct gen_device_info *devinfo,
       return NULL;
 
    switch (class) {
-   case I915_ENGINE_CLASS_RENDER:
-      if (devinfo->gen == 6)
+   case INTEL_ENGINE_CLASS_RENDER:
+      if (devinfo->ver == 6)
          return "INSTDONE_2";
       else
          return "INSTDONE_1";
 
-   case I915_ENGINE_CLASS_COPY:
+   case INTEL_ENGINE_CLASS_COPY:
       return "BCS_INSTDONE";
 
-   case I915_ENGINE_CLASS_VIDEO:
+   case INTEL_ENGINE_CLASS_VIDEO:
       switch (instance) {
       case 0:
          return "VCS_INSTDONE";
@@ -195,7 +192,7 @@ instdone_register_for_ring(const struct gen_device_info *devinfo,
          return NULL;
       }
 
-   case I915_ENGINE_CLASS_VIDEO_ENHANCE:
+   case INTEL_ENGINE_CLASS_VIDEO_ENHANCE:
       return "VECS_INSTDONE";
 
    default:
@@ -206,7 +203,7 @@ instdone_register_for_ring(const struct gen_device_info *devinfo,
 }
 
 static void
-print_pgtbl_err(unsigned int reg, struct gen_device_info *devinfo)
+print_pgtbl_err(unsigned int reg, struct intel_device_info *devinfo)
 {
    if (reg & (1 << 26))
       printf("    Invalid Sampler Cache GTT entry\n");
@@ -237,7 +234,7 @@ print_pgtbl_err(unsigned int reg, struct gen_device_info *devinfo)
 }
 
 static void
-print_snb_fence(struct gen_device_info *devinfo, uint64_t fence)
+print_snb_fence(struct intel_device_info *devinfo, uint64_t fence)
 {
    printf("    %svalid, %c-tiled, pitch: %i, start: 0x%08x, size: %u\n",
           fence & 1 ? "" : "in",
@@ -248,7 +245,7 @@ print_snb_fence(struct gen_device_info *devinfo, uint64_t fence)
 }
 
 static void
-print_i965_fence(struct gen_device_info *devinfo, uint64_t fence)
+print_i965_fence(struct intel_device_info *devinfo, uint64_t fence)
 {
    printf("    %svalid, %c-tiled, pitch: %i, start: 0x%08x, size: %u\n",
           fence & 1 ? "" : "in",
@@ -259,21 +256,21 @@ print_i965_fence(struct gen_device_info *devinfo, uint64_t fence)
 }
 
 static void
-print_fence(struct gen_device_info *devinfo, uint64_t fence)
+print_fence(struct intel_device_info *devinfo, uint64_t fence)
 {
-   if (devinfo->gen == 6 || devinfo->gen == 7) {
+   if (devinfo->ver == 6 || devinfo->ver == 7) {
       return print_snb_fence(devinfo, fence);
-   } else if (devinfo->gen == 4 || devinfo->gen == 5) {
+   } else if (devinfo->ver == 4 || devinfo->ver == 5) {
       return print_i965_fence(devinfo, fence);
    }
 }
 
 static void
-print_fault_data(struct gen_device_info *devinfo, uint32_t data1, uint32_t data0)
+print_fault_data(struct intel_device_info *devinfo, uint32_t data1, uint32_t data0)
 {
    uint64_t address;
 
-   if (devinfo->gen < 8)
+   if (devinfo->ver < 8)
       return;
 
    address = ((uint64_t)(data0) << 12) | ((uint64_t)data1 & 0xf) << 44;
@@ -393,13 +390,13 @@ static int qsort_hw_context_first(const void *a, const void *b)
       return 0;
 }
 
-static struct gen_batch_decode_bo
-get_gen_batch_bo(void *user_data, bool ppgtt, uint64_t address)
+static struct intel_batch_decode_bo
+get_intel_batch_bo(void *user_data, bool ppgtt, uint64_t address)
 {
    for (int s = 0; s < num_sections; s++) {
       if (sections[s].gtt_offset <= address &&
           address < sections[s].gtt_offset + sections[s].dword_count * 4) {
-         return (struct gen_batch_decode_bo) {
+         return (struct intel_batch_decode_bo) {
             .addr = sections[s].gtt_offset,
             .map = sections[s].data,
             .size = sections[s].dword_count * 4,
@@ -407,13 +404,31 @@ get_gen_batch_bo(void *user_data, bool ppgtt, uint64_t address)
       }
    }
 
-   return (struct gen_batch_decode_bo) { .map = NULL };
+   return (struct intel_batch_decode_bo) { .map = NULL };
+}
+
+static void
+dump_shader_binary(void *user_data, const char *short_name,
+                   uint64_t address, const void *data,
+                   unsigned data_length)
+{
+   char filename[128];
+   snprintf(filename, sizeof(filename), "%s_0x%016"PRIx64".bin",
+            short_name, address);
+
+   FILE *f = fopen(filename, "w");
+   if (f == NULL) {
+      fprintf(stderr, "Unable to open %s\n", filename);
+      return;
+   }
+   fwrite(data, data_length, 1, f);
+   fclose(f);
 }
 
 static void
 read_data_file(FILE *file)
 {
-   struct gen_spec *spec = NULL;
+   struct intel_spec *spec = NULL;
    long long unsigned fence;
    int matched;
    char *line = NULL;
@@ -422,7 +437,9 @@ read_data_file(FILE *file)
    uint32_t ring_head = UINT32_MAX, ring_tail = UINT32_MAX;
    bool ring_wraps = false;
    char *ring_name = NULL;
-   struct gen_device_info devinfo;
+   struct intel_device_info devinfo;
+   struct brw_isa_info isa;
+   uint64_t acthd = 0;
 
    while (getline(&line, &line_size, file) > 0) {
       char *new_ring_name = NULL;
@@ -507,17 +524,19 @@ read_data_file(FILE *file)
                matched = sscanf(pci_id_start, "PCI ID: 0x%04x\n", &reg);
          }
          if (matched == 1) {
-            if (!gen_get_device_info_from_pci_id(reg, &devinfo)) {
+            if (!intel_get_device_info_from_pci_id(reg, &devinfo)) {
                printf("Unable to identify devid=%x\n", reg);
                exit(EXIT_FAILURE);
             }
 
-            printf("Detected GEN%i chipset\n", devinfo.gen);
+            printf("Detected GEN%i chipset\n", devinfo.ver);
+
+            brw_init_isa_info(&isa, &devinfo);
 
             if (xml_path == NULL)
-               spec = gen_spec_load(&devinfo);
+               spec = intel_spec_load(&devinfo);
             else
-               spec = gen_spec_load_from_path(&devinfo, xml_path);
+               spec = intel_spec_load_from_path(&devinfo, xml_path);
          }
 
          matched = sscanf(line, "  CTL: 0x%08x\n", &reg);
@@ -543,6 +562,18 @@ read_data_file(FILE *file)
                                                    ring_name), reg);
          }
 
+         matched = sscanf(line, "  ACTHD: 0x%08x %08x\n", &reg, &reg2);
+         if (matched == 2)
+            acthd = ((uint64_t)reg << 32) | reg2;
+
+         matched = sscanf(line, "  ACTHD_LDW: 0x%08x\n", &reg);
+         if (matched == 1)
+            acthd = reg;
+
+         matched = sscanf(line, "  ACTHD_UDW: 0x%08x\n", &reg);
+         if (matched == 1)
+            acthd |= (uint64_t)reg << 32;
+
          matched = sscanf(line, "  PGTBL_ER: 0x%08x\n", &reg);
          if (matched == 1 && reg)
             print_pgtbl_err(reg, &devinfo);
@@ -564,6 +595,14 @@ read_data_file(FILE *file)
          if (matched == 1)
             print_register(spec, "SC_INSTDONE", reg);
 
+         matched = sscanf(line, "  SC_INSTDONE_EXTRA: 0x%08x\n", &reg);
+         if (matched == 1)
+            print_register(spec, "SC_INSTDONE_EXTRA", reg);
+
+         matched = sscanf(line, "  SC_INSTDONE_EXTRA2: 0x%08x\n", &reg);
+         if (matched == 1)
+            print_register(spec, "SC_INSTDONE_EXTRA2", reg);
+
          matched = sscanf(line, "  SAMPLER_INSTDONE[%*d][%*d]: 0x%08x\n", &reg);
          if (matched == 1)
             print_register(spec, "SAMPLER_INSTDONE", reg);
@@ -571,6 +610,10 @@ read_data_file(FILE *file)
          matched = sscanf(line, "  ROW_INSTDONE[%*d][%*d]: 0x%08x\n", &reg);
          if (matched == 1)
             print_register(spec, "ROW_INSTDONE", reg);
+
+         matched = sscanf(line, "  GEOM_SVGUNIT_INSTDONE[%*d][%*d]: 0x%08x\n", &reg);
+         if (matched == 1)
+            print_register(spec, "INSTDONE_GEOM", reg);
 
          matched = sscanf(line, "  INSTDONE1: 0x%08x\n", &reg);
          if (matched == 1)
@@ -640,10 +683,10 @@ read_data_file(FILE *file)
       if (sections[s].dword_count * 4 > intel_debug_identifier_size() &&
           memcmp(sections[s].data, intel_debug_identifier(),
                  intel_debug_identifier_size()) == 0) {
-         const struct gen_debug_block_driver *driver_desc =
+         const struct intel_debug_block_driver *driver_desc =
             intel_debug_get_identifier_block(sections[s].data,
                                              sections[s].dword_count * 4,
-                                             GEN_DEBUG_BLOCK_TYPE_DRIVER);
+                                             INTEL_DEBUG_BLOCK_TYPE_DRIVER);
          if (driver_desc) {
             printf("Driver identifier: %s\n",
                    (const char *) driver_desc->description);
@@ -652,22 +695,26 @@ read_data_file(FILE *file)
       }
    }
 
-   enum gen_batch_decode_flags batch_flags = 0;
+   enum intel_batch_decode_flags batch_flags = 0;
    if (option_color == COLOR_ALWAYS)
-      batch_flags |= GEN_BATCH_DECODE_IN_COLOR;
+      batch_flags |= INTEL_BATCH_DECODE_IN_COLOR;
    if (option_full_decode)
-      batch_flags |= GEN_BATCH_DECODE_FULL;
+      batch_flags |= INTEL_BATCH_DECODE_FULL;
    if (option_print_offsets)
-      batch_flags |= GEN_BATCH_DECODE_OFFSETS;
-   batch_flags |= GEN_BATCH_DECODE_FLOATS;
+      batch_flags |= INTEL_BATCH_DECODE_OFFSETS;
+   batch_flags |= INTEL_BATCH_DECODE_FLOATS;
 
-   struct gen_batch_decode_ctx batch_ctx;
-   gen_batch_decode_ctx_init(&batch_ctx, &devinfo, stdout, batch_flags,
-                             xml_path, get_gen_batch_bo, NULL, NULL);
+   struct intel_batch_decode_ctx batch_ctx;
+   intel_batch_decode_ctx_init(&batch_ctx, &isa, &devinfo, stdout,
+                               batch_flags, xml_path, get_intel_batch_bo,
+                               NULL, NULL);
+   batch_ctx.acthd = acthd;
 
+   if (option_dump_kernels)
+      batch_ctx.shader_binary = dump_shader_binary;
 
    for (int s = 0; s < num_sections; s++) {
-      enum drm_i915_gem_engine_class class;
+      enum intel_engine_class class;
       ring_name_to_class(sections[s].ring_name, &class);
 
       printf("--- %s (%s) at 0x%08x %08x\n",
@@ -680,18 +727,18 @@ read_data_file(FILE *file)
           strcmp(sections[s].buffer_name, "batch buffer") == 0 ||
           strcmp(sections[s].buffer_name, "HW Context") == 0) {
          if (is_ring_buffer && ring_wraps)
-            batch_ctx.flags &= ~GEN_BATCH_DECODE_OFFSETS;
+            batch_ctx.flags &= ~INTEL_BATCH_DECODE_OFFSETS;
          batch_ctx.engine = class;
          uint8_t *data = (uint8_t *)sections[s].data + sections[s].data_offset;
          uint64_t batch_addr = sections[s].gtt_offset + sections[s].data_offset;
-         gen_print_batch(&batch_ctx, (uint32_t *)data,
-                         sections[s].dword_count * 4, batch_addr,
-                         is_ring_buffer);
+         intel_print_batch(&batch_ctx, (uint32_t *)data,
+                           sections[s].dword_count * 4, batch_addr,
+                           is_ring_buffer);
          batch_ctx.flags = batch_flags;
       }
    }
 
-   gen_batch_decode_ctx_finish(&batch_ctx);
+   intel_batch_decode_ctx_finish(&batch_ctx);
 
    for (int s = 0; s < num_sections; s++) {
       free(sections[s].ring_name);
@@ -742,7 +789,8 @@ print_help(const char *progname, FILE *file)
            "      --no-pager      don't launch pager\n"
            "      --no-offsets    don't print instruction offsets\n"
            "      --xml=DIR       load hardware xml description from directory DIR\n"
-           "      --all-bb        print out all batchbuffers\n",
+           "      --all-bb        print out all batchbuffers\n"
+           "      --kernels       dump out all kernels (in current directory)\n",
            progname);
 }
 
@@ -805,6 +853,7 @@ main(int argc, char *argv[])
       { "color",      optional_argument, NULL,                          'c' },
       { "xml",        required_argument, NULL,                          'x' },
       { "all-bb",     no_argument,       (int *) &option_print_all_bb,  true },
+      { "kernels",    no_argument,       (int *) &option_dump_kernels,  true },
       { NULL,         0,                 NULL,                          0 }
    };
 

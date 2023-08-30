@@ -177,7 +177,8 @@ can_coalesce_vars(const fs_live_variables &live, const cfg_t *cfg,
          /* See the big comment above */
          if (regions_overlap(scan_inst->dst, scan_inst->size_written,
                              inst->src[0], inst->size_read(0))) {
-            if (seen_copy || scan_block != block)
+            if (seen_copy || scan_block != block ||
+                (scan_inst->force_writemask_all && !inst->force_writemask_all))
                return false;
             seen_src_write = true;
          }
@@ -330,9 +331,11 @@ fs_visitor::register_coalesce()
    if (progress) {
       foreach_block_and_inst_safe (block, backend_instruction, inst, cfg) {
          if (inst->opcode == BRW_OPCODE_NOP) {
-            inst->remove(block);
+            inst->remove(block, true);
          }
       }
+
+      cfg->adjust_block_ips();
 
       invalidate_analysis(DEPENDENCY_INSTRUCTIONS);
    }

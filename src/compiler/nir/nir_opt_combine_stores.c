@@ -124,7 +124,7 @@ combine_stores(struct combine_stores_state *state,
    /* Build a new vec, to be used as source for the combined store.  As it
     * gets build, remove previous stores that are not needed anymore.
     */
-   nir_ssa_def *comps[NIR_MAX_VEC_COMPONENTS] = {0};
+   nir_ssa_scalar comps[NIR_MAX_VEC_COMPONENTS] = {0};
    unsigned num_components = glsl_get_vector_elements(combo->dst->type);
    unsigned bit_size = combo->latest->src[1].ssa->bit_size;
    for (unsigned i = 0; i < num_components; i++) {
@@ -137,19 +137,17 @@ combine_stores(struct combine_stores_state *state,
           * and store->src[1] is a scalar.  Otherwise, we're a regular vector
           * load and we have to pick off a component.
           */
-         comps[i] = store->num_components == 1 ?
-            store->src[1].ssa :
-            nir_channel(&state->b, store->src[1].ssa, i);
+         comps[i] = nir_get_ssa_scalar(store->src[1].ssa, store->num_components == 1 ? 0 : i);
 
          assert(store->instr.pass_flags > 0);
          if (--store->instr.pass_flags == 0 && store != combo->latest)
             nir_instr_remove(&store->instr);
       } else {
-         comps[i] = nir_ssa_undef(&state->b, 1, bit_size);
+         comps[i] = nir_get_ssa_scalar(nir_ssa_undef(&state->b, 1, bit_size), 0);
       }
    }
    assert(combo->latest->instr.pass_flags == 0);
-   nir_ssa_def *vec = nir_vec(&state->b, comps, num_components);
+   nir_ssa_def *vec = nir_vec_scalars(&state->b, comps, num_components);
 
    /* Fix the latest store with the combined information. */
    nir_intrinsic_instr *store = combo->latest;
@@ -316,28 +314,6 @@ combine_stores_block(struct combine_stores_state *state, nir_block *block)
          }
          break;
 
-      case nir_intrinsic_control_barrier:
-      case nir_intrinsic_group_memory_barrier:
-      case nir_intrinsic_memory_barrier:
-         combine_stores_with_modes(state, nir_var_shader_out |
-                                          nir_var_mem_ssbo |
-                                          nir_var_mem_shared |
-                                          nir_var_mem_global);
-         break;
-
-      case nir_intrinsic_memory_barrier_buffer:
-         combine_stores_with_modes(state, nir_var_mem_ssbo |
-                                          nir_var_mem_global);
-         break;
-
-      case nir_intrinsic_memory_barrier_shared:
-         combine_stores_with_modes(state, nir_var_mem_shared);
-         break;
-
-      case nir_intrinsic_memory_barrier_tcs_patch:
-         combine_stores_with_modes(state, nir_var_shader_out);
-         break;
-
       case nir_intrinsic_scoped_barrier:
          if (nir_intrinsic_memory_semantics(intrin) & NIR_MEMORY_RELEASE) {
             combine_stores_with_modes(state,
@@ -395,23 +371,17 @@ combine_stores_block(struct combine_stores_state *state, nir_block *block)
       }
 
       case nir_intrinsic_trace_ray:
-      case nir_intrinsic_execute_callable: {
+      case nir_intrinsic_execute_callable:
+      case nir_intrinsic_rt_trace_ray:
+      case nir_intrinsic_rt_execute_callable: {
          nir_deref_instr *payload =
             nir_src_as_deref(*nir_get_shader_call_payload_src(intrin));
          combine_stores_with_deref(state, payload);
          break;
       }
 
-      case nir_intrinsic_deref_atomic_add:
-      case nir_intrinsic_deref_atomic_imin:
-      case nir_intrinsic_deref_atomic_umin:
-      case nir_intrinsic_deref_atomic_imax:
-      case nir_intrinsic_deref_atomic_umax:
-      case nir_intrinsic_deref_atomic_and:
-      case nir_intrinsic_deref_atomic_or:
-      case nir_intrinsic_deref_atomic_xor:
-      case nir_intrinsic_deref_atomic_exchange:
-      case nir_intrinsic_deref_atomic_comp_swap: {
+      case nir_intrinsic_deref_atomic:
+      case nir_intrinsic_deref_atomic_swap: {
          nir_deref_instr *dst = nir_src_as_deref(intrin->src[0]);
          combine_stores_with_deref(state, dst);
          break;

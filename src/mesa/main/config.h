@@ -76,6 +76,10 @@
 
 /** Maximum Name stack depth */
 #define MAX_NAME_STACK_DEPTH 64
+/** Name stack buffer size */
+#define NAME_STACK_BUFFER_SIZE 2048
+/** Maximum name stack result number */
+#define MAX_NAME_STACK_RESULT_NUM 256
 
 /** Minimum point size */
 #define MIN_POINT_SIZE 1.0
@@ -104,13 +108,6 @@
  * Maximum number of layers in a 1D or 2D array texture - GL_MESA_texture_array
  */
 #define MAX_ARRAY_TEXTURE_LAYERS 64
-
-/**
- * Max number of texture coordinate units.  This mainly just applies to
- * the fixed-function vertex code.  This will be difficult to raise above
- * eight because of various vertex attribute bitvectors.
- */
-#define MAX_TEXTURE_COORD_UNITS 8
 
 /**
  * Max number of texture image units.  Also determines number of texture
@@ -171,8 +168,6 @@
 #define MAX_ATOMIC_COUNTERS            4096
 /* 6 is for vertex, hull, domain, geometry, fragment, and compute shader. */
 #define MAX_COMBINED_ATOMIC_BUFFERS    (MAX_UNIFORM_BUFFERS * 6)
-/* Size of an atomic counter in bytes according to ARB_shader_atomic_counters */
-#define ATOMIC_COUNTER_SIZE            4
 #define MAX_IMAGE_UNIFORMS             32
 /* 6 is for vertex, hull, domain, geometry, fragment, and compute shader. */
 #define MAX_IMAGE_UNITS                (MAX_IMAGE_UNIFORMS * 6)
@@ -213,7 +208,6 @@
 
 /** For GL_ARB_vertex_shader */
 /*@{*/
-#define MAX_VERTEX_GENERIC_ATTRIBS 16
 /* 6 is for vertex, hull, domain, geometry, fragment, and compute shader. */
 #define MAX_COMBINED_TEXTURE_IMAGE_UNITS (MAX_TEXTURE_IMAGE_UNITS * 6)
 /*@}*/
@@ -257,7 +251,6 @@
 #define MIN_FRAGMENT_INTERPOLATION_OFFSET   -0.5
 #define MAX_FRAGMENT_INTERPOLATION_OFFSET   0.5
 #define FRAGMENT_INTERPOLATION_OFFSET_BITS  4
-#define MAX_VERTEX_STREAMS                  4
 /*@}*/
 
 /** For GL_ARB_shader_subroutine */

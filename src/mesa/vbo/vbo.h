@@ -32,7 +32,7 @@
 #define _VBO_H
 
 #include <stdbool.h>
-#include "main/glheader.h"
+#include "util/glheader.h"
 #include "main/dd.h"
 #include "main/draw.h"
 #include "main/macros.h"
@@ -45,7 +45,7 @@ extern "C" {
 
 struct gl_context;
 struct pipe_draw_info;
-struct pipe_draw_start_count;
+struct pipe_draw_start_count_bias;
 
 /**
  * Max number of primitives (number of glBegin/End pairs) per VBO.
@@ -101,13 +101,10 @@ struct vbo_markers
 
 struct vbo_exec_context
 {
-   GLvertexformat vtxfmt;
-   GLvertexformat vtxfmt_noop;
-
    struct {
       /* Multi draw where the mode can vary between draws. */
       struct pipe_draw_info info;
-      struct pipe_draw_start_count draw[VBO_MAX_PRIM];
+      struct pipe_draw_start_count_bias draw[VBO_MAX_PRIM];
       GLubyte mode[VBO_MAX_PRIM];            /**< primitive modes per draw */
       struct vbo_markers markers[VBO_MAX_PRIM];
       unsigned prim_count;
@@ -151,15 +148,8 @@ struct vbo_exec_context
 #endif
 };
 
-struct vbo_save_copied_vtx {
-   fi_type buffer[VBO_ATTRIB_MAX * 4 * VBO_MAX_COPIED_VERTS];
-   GLuint nr;
-};
 
 struct vbo_save_context {
-   GLvertexformat vtxfmt;
-   GLvertexformat vtxfmt_noop;  /**< Used if out_of_memory is true */
-
    GLbitfield64 enabled; /**< mask of enabled vbo arrays. */
    GLubyte attrsz[VBO_ATTRIB_MAX];  /**< 1, 2, 3 or 4 */
    GLenum16 attrtype[VBO_ATTRIB_MAX];  /**< GL_FLOAT, GL_INT, etc */
@@ -167,55 +157,50 @@ struct vbo_save_context {
    GLuint vertex_size;  /**< size in GLfloats */
    struct gl_vertex_array_object *VAO[VP_MODE_MAX];
 
-   GLboolean out_of_memory;  /**< True if last VBO allocation failed */
-
-   GLbitfield replay_flags;
-
-   struct _mesa_prim *prims;
-   GLuint prim_count, prim_max;
-
-   bool no_current_update;
-
    struct vbo_save_vertex_store *vertex_store;
    struct vbo_save_primitive_store *prim_store;
-   struct gl_buffer_object *previous_ib;
-   unsigned ib_first_free_index;
+   struct gl_buffer_object *current_bo;
+   unsigned current_bo_bytes_used;
 
-   fi_type *buffer_map;            /**< Mapping of vertex_store's buffer */
-   fi_type *buffer_ptr;		   /**< cursor, points into buffer_map */
    fi_type vertex[VBO_ATTRIB_MAX*4];	   /* current values */
    fi_type *attrptr[VBO_ATTRIB_MAX];
-   GLuint vert_count;
-   GLuint max_vert;
-   GLboolean dangling_attr_ref;
 
-   GLuint opcode_vertex_list;
-
-   struct vbo_save_copied_vtx copied;
+   struct {
+      fi_type *buffer;
+      GLuint nr;
+   } copied;
 
    fi_type *current[VBO_ATTRIB_MAX]; /* points into ctx->ListState */
    GLubyte *currentsz[VBO_ATTRIB_MAX];
+
+   GLboolean dangling_attr_ref;
+   GLboolean out_of_memory;  /**< True if last VBO allocation failed */
+   bool no_current_update;
 };
 
 GLboolean
-_vbo_CreateContext(struct gl_context *ctx, bool use_buffer_objects);
+_mesa_using_noop_vtxfmt(const struct _glapi_table *dispatch);
+
+GLboolean
+_vbo_CreateContext(struct gl_context *ctx);
 
 void
 _vbo_DestroyContext(struct gl_context *ctx);
 
 void
+vbo_init_dispatch_begin_end(struct gl_context *ctx);
+
+void
+vbo_init_dispatch_hw_select_begin_end(struct gl_context *ctx);
+
+void
+vbo_install_exec_vtxfmt_noop(struct gl_context *ctx);
+
+void
+vbo_install_save_vtxfmt_noop(struct gl_context *ctx);
+
+void
 vbo_exec_update_eval_maps(struct gl_context *ctx);
-
-void
-_vbo_install_exec_vtxfmt(struct gl_context *ctx);
-
-void
-vbo_initialize_exec_dispatch(const struct gl_context *ctx,
-                             struct _glapi_table *exec);
-
-void
-vbo_initialize_save_dispatch(const struct gl_context *ctx,
-                             struct _glapi_table *exec);
 
 void
 vbo_exec_FlushVertices(struct gl_context *ctx, GLuint flags);
@@ -234,13 +219,6 @@ void
 vbo_save_EndList(struct gl_context *ctx);
 
 void
-vbo_save_BeginCallList(struct gl_context *ctx, struct gl_display_list *list);
-
-void
-vbo_save_EndCallList(struct gl_context *ctx);
-
-
-void
 vbo_delete_minmax_cache(struct gl_buffer_object *bufferObj);
 
 void
@@ -250,37 +228,20 @@ vbo_get_minmax_index_mapped(unsigned count, unsigned index_size,
                             unsigned *min_index, unsigned *max_index);
 
 void
-vbo_get_minmax_indices(struct gl_context *ctx, const struct _mesa_prim *prim,
-                       const struct _mesa_index_buffer *ib,
-                       GLuint *min_index, GLuint *max_index, GLuint nr_prims,
-                       bool primitive_restart,
-                       unsigned restart_index);
+vbo_get_minmax_index(struct gl_context *ctx, struct gl_buffer_object *obj,
+                     const void *ptr, GLintptr offset, unsigned count,
+                     unsigned index_size, bool primitive_restart,
+                     unsigned restart_index, GLuint *min_index,
+                     GLuint *max_index);
 
 bool
 vbo_get_minmax_indices_gallium(struct gl_context *ctx,
                                struct pipe_draw_info *info,
-                               const struct pipe_draw_start_count *draws,
+                               const struct pipe_draw_start_count_bias *draws,
                                unsigned num_draws);
-
-void
-vbo_sw_primitive_restart(struct gl_context *ctx,
-                         const struct _mesa_prim *prim,
-                         GLuint nr_prims,
-                         const struct _mesa_index_buffer *ib,
-                         GLuint num_instances, GLuint base_instance,
-                         struct gl_buffer_object *indirect,
-                         GLsizeiptr indirect_offset,
-                         bool primitive_restart,
-                         unsigned restart_index);
-
 
 const struct gl_array_attributes*
 _vbo_current_attrib(const struct gl_context *ctx, gl_vert_attrib attr);
-
-
-const struct gl_vertex_buffer_binding*
-_vbo_current_binding(const struct gl_context *ctx);
-
 
 void GLAPIENTRY
 _es_Color4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a);
@@ -296,30 +257,6 @@ _es_Materialfv(GLenum face, GLenum pname, const GLfloat *params);
 
 void GLAPIENTRY
 _es_Materialf(GLenum face, GLenum pname, GLfloat param);
-
-void GLAPIENTRY
-_es_VertexAttrib4f(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w);
-
-void GLAPIENTRY
-_es_VertexAttrib1f(GLuint indx, GLfloat x);
-
-void GLAPIENTRY
-_es_VertexAttrib1fv(GLuint indx, const GLfloat* values);
-
-void GLAPIENTRY
-_es_VertexAttrib2f(GLuint indx, GLfloat x, GLfloat y);
-
-void GLAPIENTRY
-_es_VertexAttrib2fv(GLuint indx, const GLfloat* values);
-
-void GLAPIENTRY
-_es_VertexAttrib3f(GLuint indx, GLfloat x, GLfloat y, GLfloat z);
-
-void GLAPIENTRY
-_es_VertexAttrib3fv(GLuint indx, const GLfloat* values);
-
-void GLAPIENTRY
-_es_VertexAttrib4fv(GLuint indx, const GLfloat* values);
 
 #ifdef __cplusplus
 } // extern "C"

@@ -1,24 +1,7 @@
 /*
  * Copyright 2014-2019 Advanced Micro Devices, Inc.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #ifndef AC_RTLD_H
@@ -26,6 +9,7 @@
 
 #include "compiler/shader_enums.h"
 #include "util/u_dynarray.h"
+#include "amd_family.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -56,6 +40,7 @@ struct ac_rtld_options {
 /* Lightweight wrapper around underlying ELF objects. */
 struct ac_rtld_binary {
    struct ac_rtld_options options;
+   enum amd_gfx_level gfx_level;
    unsigned wave_size;
 
    /* Required buffer sizes, currently read/executable only. */
@@ -82,7 +67,8 @@ struct ac_rtld_binary {
  * \param value to be filled in by the callback
  * \return whether the symbol was found successfully
  */
-typedef bool (*ac_rtld_get_external_symbol_cb)(void *cb_data, const char *symbol, uint64_t *value);
+typedef bool (*ac_rtld_get_external_symbol_cb)(enum amd_gfx_level gfx_level, void *cb_data,
+                                               const char *symbol, uint64_t *value);
 
 /**
  * Lifetimes of \ref info, in-memory ELF objects, and the names of
@@ -134,7 +120,7 @@ struct ac_rtld_upload_info {
    void *cb_data;
 };
 
-bool ac_rtld_upload(struct ac_rtld_upload_info *u);
+int ac_rtld_upload(struct ac_rtld_upload_info *u);
 
 #ifdef __cplusplus
 }

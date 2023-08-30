@@ -5,28 +5,28 @@ The Mesa project began as an open-source implementation of the
 `OpenGL`_ specification - a system for rendering interactive 3D graphics.
 
 Over the years the project has grown to implement more graphics APIs,
-including `OpenGL ES`_, `OpenCL`_, `OpenMAX`_, `VDPAU`_, `VA API`_,
-`XvMC`_, `Vulkan`_ and `EGL`_.
+including `OpenGL ES`_, `OpenCL`_, `OpenMAX`_, `VDPAU`_, `VA-API`_,
+`Vulkan`_ and `EGL`_.
 
 A variety of device drivers allows the Mesa libraries to be used in many
 different environments ranging from software emulation to complete
 hardware acceleration for modern GPUs.
 
 Mesa ties into several other open-source projects: the `Direct Rendering
-Infrastructure`_ and `X.org`_ to provide OpenGL support on Linux, FreeBSD
-and other operating systems.
+Infrastructure`_, `X.org`_, and `Wayland`_ to provide OpenGL support on
+Linux, FreeBSD, and other operating systems.
 
 .. _OpenGL: https://www.opengl.org/
 .. _OpenGL ES: https://www.khronos.org/opengles/
 .. _OpenCL: https://www.khronos.org/opencl/
 .. _OpenMAX: https://www.khronos.org/openmax/
 .. _VDPAU: https://en.wikipedia.org/wiki/VDPAU
-.. _VA API: https://en.wikipedia.org/wiki/Video_Acceleration_API
-.. _XvMC: https://en.wikipedia.org/wiki/X-Video_Motion_Compensation
-.. _Vulkan: https://www.khronos.org/vulkan/
+.. _VA-API: https://en.wikipedia.org/wiki/Video_Acceleration_API
+.. _Vulkan: https://www.vulkan.org/
 .. _EGL: https://www.khronos.org/egl/
 .. _Direct Rendering Infrastructure: https://dri.freedesktop.org/
 .. _X.org: https://x.org
+.. _Wayland: https://wayland.freedesktop.org
 
 .. toctree::
    :maxdepth: 1
@@ -35,12 +35,11 @@ and other operating systems.
 
    self
    history
-   developers
+   amber
    systems
    license
    faq
    relnotes
-   thanks
 
 .. toctree::
    :maxdepth: 2
@@ -71,8 +70,10 @@ and other operating systems.
    osmesa
    debugging
    perf
+   gpu-perf-tracing
    extensions
    application-issues
+   gallium-nine
    viewperf
    xlibdriver
 
@@ -81,14 +82,19 @@ and other operating systems.
    :caption: Drivers
    :hidden:
 
+   drivers/anv
+   drivers/asahi
    drivers/d3d12
    drivers/freedreno
+   drivers/lima
    drivers/llvmpipe
-   drivers/openswr
    drivers/panfrost
+   drivers/radv
+   drivers/svga3d
    drivers/v3d
    drivers/vc4
-   drivers/vmware-guest
+   drivers/venus
+   drivers/virgl
    drivers/zink
 
 .. toctree::
@@ -105,10 +111,14 @@ and other operating systems.
    submittingpatches
    releasing
    release-calendar
-   sourcedocs
    dispatch
    gallium/index
+   vulkan/index
+   nir/index
+   isl/index
+   rusticl
    android
+   macos
    Linux Kernel Drivers <https://www.kernel.org/doc/html/latest/gpu/>
 
 .. toctree::
@@ -127,10 +137,3 @@ and other operating systems.
    OpenGL Website <https://www.opengl.org>
    DRI Website <https://dri.freedesktop.org>
    Developer Blogs <https://planet.freedesktop.org>
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Hosted by:
-   :hidden:
-
-   freedesktop.org <https://www.freedesktop.org>

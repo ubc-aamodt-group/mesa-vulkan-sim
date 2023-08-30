@@ -67,8 +67,9 @@ lower_printf_instr(nir_builder *b, nir_instr *instr, void *_options)
                                   glsl_uint_type(), 0);
    counter->cast.align_mul = 4;
    nir_ssa_def *offset =
-      nir_deref_atomic_add(b, 32, &counter->dest.ssa,
-                           nir_imm_int(b, fmt_str_id_size + args_size));
+      nir_deref_atomic(b, 32, &counter->dest.ssa,
+                       nir_imm_int(b, fmt_str_id_size + args_size),
+                       .atomic_op = nir_atomic_op_iadd);
 
    /* Check if we're still in-bounds */
    const unsigned default_buffer_size = 1024 * 1024;
@@ -76,13 +77,13 @@ lower_printf_instr(nir_builder *b, nir_instr *instr, void *_options)
                           options->max_buffer_size : default_buffer_size;
    int max_valid_offset =
       buffer_size - args_size - fmt_str_id_size - counter_size;
-   nir_push_if(b, nir_ilt(b, offset, nir_imm_int(b, max_valid_offset)));
+   nir_push_if(b, nir_ilt_imm(b, offset, max_valid_offset));
 
    nir_ssa_def *printf_succ_val = nir_imm_int(b, 0);
 
    /* Write the format string ID */
    nir_ssa_def *fmt_str_id_offset =
-      nir_i2i(b, offset, ptr_bit_size);
+      nir_i2iN(b, offset, ptr_bit_size);
    nir_deref_instr *fmt_str_id_deref =
       nir_build_deref_array(b, buffer, fmt_str_id_offset);
    fmt_str_id_deref = nir_build_deref_cast(b, &fmt_str_id_deref->dest.ssa,
@@ -111,7 +112,7 @@ lower_printf_instr(nir_builder *b, nir_instr *instr, void *_options)
 
       unsigned field_offset = glsl_get_struct_field_offset(args->type, i);
       nir_ssa_def *arg_offset =
-         nir_i2i(b, nir_iadd_imm(b, offset,
+         nir_i2iN(b, nir_iadd_imm(b, offset,
                                  fmt_str_id_size + field_offset),
                  ptr_bit_size);
       nir_deref_instr *dst_arg_deref =
@@ -128,7 +129,7 @@ lower_printf_instr(nir_builder *b, nir_instr *instr, void *_options)
    nir_pop_if(b, NULL);
 
    nir_ssa_def *ret_val = nir_if_phi(b, printf_succ_val, printf_fail_val);
-   nir_ssa_def_rewrite_uses(&prntf->dest.ssa, nir_src_for_ssa(ret_val));
+   nir_ssa_def_rewrite_uses(&prntf->dest.ssa, ret_val);
    nir_instr_remove(&prntf->instr);
 
    return true;

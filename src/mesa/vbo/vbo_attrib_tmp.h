@@ -30,6 +30,9 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "vbo_util.h"
 #include "util/half_float.h"
 
+#ifdef SUPPRESS_STATIC
+#define static
+#endif
 
 /* ATTR */
 #define ATTRI( A, N, V0, V1, V2, V3 ) \
@@ -245,234 +248,6 @@ TAG(Vertex4fv)(const GLfloat * v)
    ATTR4FV(VBO_ATTRIB_POS, v);
 }
 
-
-
-static void GLAPIENTRY
-TAG(TexCoord1f)(GLfloat x)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_TEX0, x);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord1fv)(const GLfloat * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1FV(VBO_ATTRIB_TEX0, v);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord2f)(GLfloat x, GLfloat y)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR2F(VBO_ATTRIB_TEX0, x, y);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord2fv)(const GLfloat * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR2FV(VBO_ATTRIB_TEX0, v);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord3f)(GLfloat x, GLfloat y, GLfloat z)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_TEX0, x, y, z);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord3fv)(const GLfloat * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3FV(VBO_ATTRIB_TEX0, v);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord4f)(GLfloat x, GLfloat y, GLfloat z, GLfloat w)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_TEX0, x, y, z, w);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord4fv)(const GLfloat * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4FV(VBO_ATTRIB_TEX0, v);
-}
-
-
-
-static void GLAPIENTRY
-TAG(Normal3f)(GLfloat x, GLfloat y, GLfloat z)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_NORMAL, x, y, z);
-}
-
-static void GLAPIENTRY
-TAG(Normal3fv)(const GLfloat * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3FV(VBO_ATTRIB_NORMAL, v);
-}
-
-
-
-static void GLAPIENTRY
-TAG(FogCoordfEXT)(GLfloat x)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_FOG, x);
-}
-
-
-
-static void GLAPIENTRY
-TAG(FogCoordfvEXT)(const GLfloat * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1FV(VBO_ATTRIB_FOG, v);
-}
-
-static void GLAPIENTRY
-TAG(Color3f)(GLfloat x, GLfloat y, GLfloat z)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_COLOR0, x, y, z);
-}
-
-static void GLAPIENTRY
-TAG(Color3fv)(const GLfloat * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3FV(VBO_ATTRIB_COLOR0, v);
-}
-
-static void GLAPIENTRY
-TAG(Color4f)(GLfloat x, GLfloat y, GLfloat z, GLfloat w)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, x, y, z, w);
-}
-
-static void GLAPIENTRY
-TAG(Color4fv)(const GLfloat * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4FV(VBO_ATTRIB_COLOR0, v);
-}
-
-
-
-static void GLAPIENTRY
-TAG(SecondaryColor3fEXT)(GLfloat x, GLfloat y, GLfloat z)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_COLOR1, x, y, z);
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColor3fvEXT)(const GLfloat * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3FV(VBO_ATTRIB_COLOR1, v);
-}
-
-
-
-static void GLAPIENTRY
-TAG(EdgeFlag)(GLboolean b)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_EDGEFLAG, (GLfloat) b);
-}
-
-
-
-static void GLAPIENTRY
-TAG(Indexf)(GLfloat f)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_COLOR_INDEX, f);
-}
-
-static void GLAPIENTRY
-TAG(Indexfv)(const GLfloat * f)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1FV(VBO_ATTRIB_COLOR_INDEX, f);
-}
-
-
-
-static void GLAPIENTRY
-TAG(MultiTexCoord1f)(GLenum target, GLfloat x)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR1F(attr, x);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord1fv)(GLenum target, const GLfloat * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR1FV(attr, v);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord2f)(GLenum target, GLfloat x, GLfloat y)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR2F(attr, x, y);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord2fv)(GLenum target, const GLfloat * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR2FV(attr, v);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord3f)(GLenum target, GLfloat x, GLfloat y, GLfloat z)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR3F(attr, x, y, z);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord3fv)(GLenum target, const GLfloat * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR3FV(attr, v);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord4f)(GLenum target, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR4F(attr, x, y, z, w);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord4fv)(GLenum target, const GLfloat * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR4FV(attr, v);
-}
-
-
 static void GLAPIENTRY
 TAG(VertexAttrib1fARB)(GLuint index, GLfloat x)
 {
@@ -575,7 +350,7 @@ TAG(VertexAttrib4fvARB)(GLuint index, const GLfloat * v)
  * XXX: the integers just get converted to floats at this time
  */
 static void GLAPIENTRY
-TAG(VertexAttribI1i)(GLuint index, GLint x)
+TAG(VertexAttribI1iEXT)(GLuint index, GLint x)
 {
    GET_CURRENT_CONTEXT(ctx);
    if (is_vertex_position(ctx, index))
@@ -587,7 +362,7 @@ TAG(VertexAttribI1i)(GLuint index, GLint x)
 }
 
 static void GLAPIENTRY
-TAG(VertexAttribI2i)(GLuint index, GLint x, GLint y)
+TAG(VertexAttribI2iEXT)(GLuint index, GLint x, GLint y)
 {
    GET_CURRENT_CONTEXT(ctx);
    if (is_vertex_position(ctx, index))
@@ -599,7 +374,7 @@ TAG(VertexAttribI2i)(GLuint index, GLint x, GLint y)
 }
 
 static void GLAPIENTRY
-TAG(VertexAttribI3i)(GLuint index, GLint x, GLint y, GLint z)
+TAG(VertexAttribI3iEXT)(GLuint index, GLint x, GLint y, GLint z)
 {
    GET_CURRENT_CONTEXT(ctx);
    if (is_vertex_position(ctx, index))
@@ -611,7 +386,7 @@ TAG(VertexAttribI3i)(GLuint index, GLint x, GLint y, GLint z)
 }
 
 static void GLAPIENTRY
-TAG(VertexAttribI4i)(GLuint index, GLint x, GLint y, GLint z, GLint w)
+TAG(VertexAttribI4iEXT)(GLuint index, GLint x, GLint y, GLint z, GLint w)
 {
    GET_CURRENT_CONTEXT(ctx);
    if (is_vertex_position(ctx, index))
@@ -623,7 +398,7 @@ TAG(VertexAttribI4i)(GLuint index, GLint x, GLint y, GLint z, GLint w)
 }
 
 static void GLAPIENTRY
-TAG(VertexAttribI2iv)(GLuint index, const GLint *v)
+TAG(VertexAttribI2ivEXT)(GLuint index, const GLint *v)
 {
    GET_CURRENT_CONTEXT(ctx);
    if (is_vertex_position(ctx, index))
@@ -635,7 +410,7 @@ TAG(VertexAttribI2iv)(GLuint index, const GLint *v)
 }
 
 static void GLAPIENTRY
-TAG(VertexAttribI3iv)(GLuint index, const GLint *v)
+TAG(VertexAttribI3ivEXT)(GLuint index, const GLint *v)
 {
    GET_CURRENT_CONTEXT(ctx);
    if (is_vertex_position(ctx, index))
@@ -647,7 +422,7 @@ TAG(VertexAttribI3iv)(GLuint index, const GLint *v)
 }
 
 static void GLAPIENTRY
-TAG(VertexAttribI4iv)(GLuint index, const GLint *v)
+TAG(VertexAttribI4ivEXT)(GLuint index, const GLint *v)
 {
    GET_CURRENT_CONTEXT(ctx);
    if (is_vertex_position(ctx, index))
@@ -664,7 +439,7 @@ TAG(VertexAttribI4iv)(GLuint index, const GLint *v)
  * XXX: the integers just get converted to floats at this time
  */
 static void GLAPIENTRY
-TAG(VertexAttribI1ui)(GLuint index, GLuint x)
+TAG(VertexAttribI1uiEXT)(GLuint index, GLuint x)
 {
    GET_CURRENT_CONTEXT(ctx);
    if (is_vertex_position(ctx, index))
@@ -676,7 +451,7 @@ TAG(VertexAttribI1ui)(GLuint index, GLuint x)
 }
 
 static void GLAPIENTRY
-TAG(VertexAttribI2ui)(GLuint index, GLuint x, GLuint y)
+TAG(VertexAttribI2uiEXT)(GLuint index, GLuint x, GLuint y)
 {
    GET_CURRENT_CONTEXT(ctx);
    if (is_vertex_position(ctx, index))
@@ -688,7 +463,7 @@ TAG(VertexAttribI2ui)(GLuint index, GLuint x, GLuint y)
 }
 
 static void GLAPIENTRY
-TAG(VertexAttribI3ui)(GLuint index, GLuint x, GLuint y, GLuint z)
+TAG(VertexAttribI3uiEXT)(GLuint index, GLuint x, GLuint y, GLuint z)
 {
    GET_CURRENT_CONTEXT(ctx);
    if (is_vertex_position(ctx, index))
@@ -700,7 +475,7 @@ TAG(VertexAttribI3ui)(GLuint index, GLuint x, GLuint y, GLuint z)
 }
 
 static void GLAPIENTRY
-TAG(VertexAttribI4ui)(GLuint index, GLuint x, GLuint y, GLuint z, GLuint w)
+TAG(VertexAttribI4uiEXT)(GLuint index, GLuint x, GLuint y, GLuint z, GLuint w)
 {
    GET_CURRENT_CONTEXT(ctx);
    if (is_vertex_position(ctx, index))
@@ -712,7 +487,7 @@ TAG(VertexAttribI4ui)(GLuint index, GLuint x, GLuint y, GLuint z, GLuint w)
 }
 
 static void GLAPIENTRY
-TAG(VertexAttribI2uiv)(GLuint index, const GLuint *v)
+TAG(VertexAttribI2uivEXT)(GLuint index, const GLuint *v)
 {
    GET_CURRENT_CONTEXT(ctx);
    if (is_vertex_position(ctx, index))
@@ -724,7 +499,7 @@ TAG(VertexAttribI2uiv)(GLuint index, const GLuint *v)
 }
 
 static void GLAPIENTRY
-TAG(VertexAttribI3uiv)(GLuint index, const GLuint *v)
+TAG(VertexAttribI3uivEXT)(GLuint index, const GLuint *v)
 {
    GET_CURRENT_CONTEXT(ctx);
    if (is_vertex_position(ctx, index))
@@ -736,7 +511,7 @@ TAG(VertexAttribI3uiv)(GLuint index, const GLuint *v)
 }
 
 static void GLAPIENTRY
-TAG(VertexAttribI4uiv)(GLuint index, const GLuint *v)
+TAG(VertexAttribI4uivEXT)(GLuint index, const GLuint *v)
 {
    GET_CURRENT_CONTEXT(ctx);
    if (is_vertex_position(ctx, index))
@@ -865,206 +640,6 @@ TAG(VertexP4uiv)(GLenum type, const GLuint *value)
    GET_CURRENT_CONTEXT(ctx);
    ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glVertexP4uiv");
    ATTR_UI(ctx, 4, type, 0, VBO_ATTRIB_POS, value[0]);
-}
-
-static void GLAPIENTRY
-TAG(TexCoordP1ui)(GLenum type, GLuint coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glTexCoordP1ui");
-   ATTR_UI(ctx, 1, type, 0, VBO_ATTRIB_TEX0, coords);
-}
-
-static void GLAPIENTRY
-TAG(TexCoordP1uiv)(GLenum type, const GLuint *coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glTexCoordP1uiv");
-   ATTR_UI(ctx, 1, type, 0, VBO_ATTRIB_TEX0, coords[0]);
-}
-
-static void GLAPIENTRY
-TAG(TexCoordP2ui)(GLenum type, GLuint coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glTexCoordP2ui");
-   ATTR_UI(ctx, 2, type, 0, VBO_ATTRIB_TEX0, coords);
-}
-
-static void GLAPIENTRY
-TAG(TexCoordP2uiv)(GLenum type, const GLuint *coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glTexCoordP2uiv");
-   ATTR_UI(ctx, 2, type, 0, VBO_ATTRIB_TEX0, coords[0]);
-}
-
-static void GLAPIENTRY
-TAG(TexCoordP3ui)(GLenum type, GLuint coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glTexCoordP3ui");
-   ATTR_UI(ctx, 3, type, 0, VBO_ATTRIB_TEX0, coords);
-}
-
-static void GLAPIENTRY
-TAG(TexCoordP3uiv)(GLenum type, const GLuint *coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glTexCoordP3uiv");
-   ATTR_UI(ctx, 3, type, 0, VBO_ATTRIB_TEX0, coords[0]);
-}
-
-static void GLAPIENTRY
-TAG(TexCoordP4ui)(GLenum type, GLuint coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glTexCoordP4ui");
-   ATTR_UI(ctx, 4, type, 0, VBO_ATTRIB_TEX0, coords);
-}
-
-static void GLAPIENTRY
-TAG(TexCoordP4uiv)(GLenum type, const GLuint *coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glTexCoordP4uiv");
-   ATTR_UI(ctx, 4, type, 0, VBO_ATTRIB_TEX0, coords[0]);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoordP1ui)(GLenum target, GLenum type, GLuint coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glMultiTexCoordP1ui");
-   ATTR_UI(ctx, 1, type, 0, attr, coords);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoordP1uiv)(GLenum target, GLenum type, const GLuint *coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glMultiTexCoordP1uiv");
-   ATTR_UI(ctx, 1, type, 0, attr, coords[0]);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoordP2ui)(GLenum target, GLenum type, GLuint coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glMultiTexCoordP2ui");
-   ATTR_UI(ctx, 2, type, 0, attr, coords);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoordP2uiv)(GLenum target, GLenum type, const GLuint *coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glMultiTexCoordP2uiv");
-   ATTR_UI(ctx, 2, type, 0, attr, coords[0]);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoordP3ui)(GLenum target, GLenum type, GLuint coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glMultiTexCoordP3ui");
-   ATTR_UI(ctx, 3, type, 0, attr, coords);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoordP3uiv)(GLenum target, GLenum type, const GLuint *coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glMultiTexCoordP3uiv");
-   ATTR_UI(ctx, 3, type, 0, attr, coords[0]);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoordP4ui)(GLenum target, GLenum type, GLuint coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glMultiTexCoordP4ui");
-   ATTR_UI(ctx, 4, type, 0, attr, coords);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoordP4uiv)(GLenum target, GLenum type, const GLuint *coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glMultiTexCoordP4uiv");
-   ATTR_UI(ctx, 4, type, 0, attr, coords[0]);
-}
-
-static void GLAPIENTRY
-TAG(NormalP3ui)(GLenum type, GLuint coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glNormalP3ui");
-   ATTR_UI(ctx, 3, type, 1, VBO_ATTRIB_NORMAL, coords);
-}
-
-static void GLAPIENTRY
-TAG(NormalP3uiv)(GLenum type, const GLuint *coords)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glNormalP3uiv");
-   ATTR_UI(ctx, 3, type, 1, VBO_ATTRIB_NORMAL, coords[0]);
-}
-
-static void GLAPIENTRY
-TAG(ColorP3ui)(GLenum type, GLuint color)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glColorP3ui");
-   ATTR_UI(ctx, 3, type, 1, VBO_ATTRIB_COLOR0, color);
-}
-
-static void GLAPIENTRY
-TAG(ColorP3uiv)(GLenum type, const GLuint *color)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glColorP3uiv");
-   ATTR_UI(ctx, 3, type, 1, VBO_ATTRIB_COLOR0, color[0]);
-}
-
-static void GLAPIENTRY
-TAG(ColorP4ui)(GLenum type, GLuint color)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glColorP4ui");
-   ATTR_UI(ctx, 4, type, 1, VBO_ATTRIB_COLOR0, color);
-}
-
-static void GLAPIENTRY
-TAG(ColorP4uiv)(GLenum type, const GLuint *color)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glColorP4uiv");
-   ATTR_UI(ctx, 4, type, 1, VBO_ATTRIB_COLOR0, color[0]);
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColorP3ui)(GLenum type, GLuint color)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glSecondaryColorP3ui");
-   ATTR_UI(ctx, 3, type, 1, VBO_ATTRIB_COLOR1, color);
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColorP3uiv)(GLenum type, const GLuint *color)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glSecondaryColorP3uiv");
-   ATTR_UI(ctx, 3, type, 1, VBO_ATTRIB_COLOR1, color[0]);
 }
 
 static void GLAPIENTRY
@@ -1304,743 +879,137 @@ TAG(Vertex4hvNV)(const GLhalfNV * v)
    ATTR4HV(VBO_ATTRIB_POS, v);
 }
 
-
-
-static void GLAPIENTRY
-TAG(Normal3hNV)(GLhalfNV x, GLhalfNV y, GLhalfNV z)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3H(VBO_ATTRIB_NORMAL, x, y, z);
-}
-
-static void GLAPIENTRY
-TAG(Normal3hvNV)(const GLhalfNV * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3HV(VBO_ATTRIB_NORMAL, v);
-}
-
-
-
-static void GLAPIENTRY
-TAG(Color3hNV)(GLhalfNV x, GLhalfNV y, GLhalfNV z)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3H(VBO_ATTRIB_COLOR0, x, y, z);
-}
-
-static void GLAPIENTRY
-TAG(Color3hvNV)(const GLhalfNV * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3HV(VBO_ATTRIB_COLOR0, v);
-}
-
-static void GLAPIENTRY
-TAG(Color4hNV)(GLhalfNV x, GLhalfNV y, GLhalfNV z, GLhalfNV w)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4H(VBO_ATTRIB_COLOR0, x, y, z, w);
-}
-
-static void GLAPIENTRY
-TAG(Color4hvNV)(const GLhalfNV * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4HV(VBO_ATTRIB_COLOR0, v);
-}
-
-
-
-static void GLAPIENTRY
-TAG(TexCoord1hNV)(GLhalfNV x)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1H(VBO_ATTRIB_TEX0, x);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord1hvNV)(const GLhalfNV * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1HV(VBO_ATTRIB_TEX0, v);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord2hNV)(GLhalfNV x, GLhalfNV y)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR2H(VBO_ATTRIB_TEX0, x, y);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord2hvNV)(const GLhalfNV * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR2HV(VBO_ATTRIB_TEX0, v);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord3hNV)(GLhalfNV x, GLhalfNV y, GLhalfNV z)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3H(VBO_ATTRIB_TEX0, x, y, z);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord3hvNV)(const GLhalfNV * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3HV(VBO_ATTRIB_TEX0, v);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord4hNV)(GLhalfNV x, GLhalfNV y, GLhalfNV z, GLhalfNV w)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4H(VBO_ATTRIB_TEX0, x, y, z, w);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord4hvNV)(const GLhalfNV * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4HV(VBO_ATTRIB_TEX0, v);
-}
-
-
-
-static void GLAPIENTRY
-TAG(MultiTexCoord1hNV)(GLenum target, GLhalfNV x)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR1H(attr, x);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord1hvNV)(GLenum target, const GLhalfNV * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR1HV(attr, v);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord2hNV)(GLenum target, GLhalfNV x, GLhalfNV y)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR2H(attr, x, y);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord2hvNV)(GLenum target, const GLhalfNV * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR2HV(attr, v);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord3hNV)(GLenum target, GLhalfNV x, GLhalfNV y, GLhalfNV z)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR3H(attr, x, y, z);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord3hvNV)(GLenum target, const GLhalfNV * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR3HV(attr, v);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord4hNV)(GLenum target, GLhalfNV x, GLhalfNV y, GLhalfNV z, GLhalfNV w)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR4H(attr, x, y, z, w);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord4hvNV)(GLenum target, const GLhalfNV * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR4HV(attr, v);
-}
-
-
-
-static void GLAPIENTRY
-TAG(FogCoordhNV)(GLhalf x)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1H(VBO_ATTRIB_FOG, x);
-}
-
-static void GLAPIENTRY
-TAG(FogCoordhvNV)(const GLhalf * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1HV(VBO_ATTRIB_FOG, v);
-}
-
-
-
-static void GLAPIENTRY
-TAG(SecondaryColor3hNV)(GLhalfNV x, GLhalfNV y, GLhalfNV z)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3H(VBO_ATTRIB_COLOR1, x, y, z);
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColor3hvNV)(const GLhalfNV * v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3HV(VBO_ATTRIB_COLOR1, v);
-}
-
-
-static void GLAPIENTRY
-TAG(Color3b)(GLbyte red, GLbyte green, GLbyte blue)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, BYTE_TO_FLOAT(red),
-          BYTE_TO_FLOAT(green),
-          BYTE_TO_FLOAT(blue),
-          1.0);
-}
-
-static void GLAPIENTRY
-TAG(Color3d)(GLdouble red, GLdouble green, GLdouble blue)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, (GLfloat) red, (GLfloat) green, (GLfloat) blue, 1.0);
-}
-
-static void GLAPIENTRY
-TAG(Color3i)(GLint red, GLint green, GLint blue)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, INT_TO_FLOAT(red), INT_TO_FLOAT(green),
-          INT_TO_FLOAT(blue), 1.0);
-}
-
-static void GLAPIENTRY
-TAG(Color3s)(GLshort red, GLshort green, GLshort blue)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, SHORT_TO_FLOAT(red), SHORT_TO_FLOAT(green),
-          SHORT_TO_FLOAT(blue), 1.0);
-}
-
-static void GLAPIENTRY
-TAG(Color3ui)(GLuint red, GLuint green, GLuint blue)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, UINT_TO_FLOAT(red), UINT_TO_FLOAT(green),
-          UINT_TO_FLOAT(blue), 1.0);
-}
-
-static void GLAPIENTRY
-TAG(Color3us)(GLushort red, GLushort green, GLushort blue)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, USHORT_TO_FLOAT(red), USHORT_TO_FLOAT(green),
-          USHORT_TO_FLOAT(blue), 1.0);
-}
-
-static void GLAPIENTRY
-TAG(Color3ub)(GLubyte red, GLubyte green, GLubyte blue)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, UBYTE_TO_FLOAT(red), UBYTE_TO_FLOAT(green),
-          UBYTE_TO_FLOAT(blue), 1.0);
-}
-
-
-static void GLAPIENTRY
-TAG(Color3bv)(const GLbyte *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, BYTE_TO_FLOAT(v[0]), BYTE_TO_FLOAT(v[1]),
-         BYTE_TO_FLOAT(v[2]), 1.0);
-}
-
-static void GLAPIENTRY
-TAG(Color3dv)(const GLdouble *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2], 1.0);
-}
-
-static void GLAPIENTRY
-TAG(Color3iv)(const GLint *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, INT_TO_FLOAT(v[0]), INT_TO_FLOAT(v[1]),
-         INT_TO_FLOAT(v[2]), 1.0);
-}
-
-static void GLAPIENTRY
-TAG(Color3sv)(const GLshort *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, SHORT_TO_FLOAT(v[0]), SHORT_TO_FLOAT(v[1]),
-         SHORT_TO_FLOAT(v[2]), 1.0);
-}
-
-static void GLAPIENTRY
-TAG(Color3uiv)(const GLuint *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, UINT_TO_FLOAT(v[0]), UINT_TO_FLOAT(v[1]),
-         UINT_TO_FLOAT(v[2]), 1.0);
-}
-
-static void GLAPIENTRY
-TAG(Color3usv)(const GLushort *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, USHORT_TO_FLOAT(v[0]), USHORT_TO_FLOAT(v[1]),
-         USHORT_TO_FLOAT(v[2]), 1.0);
-}
-
-static void GLAPIENTRY
-TAG(Color3ubv)(const GLubyte *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, UBYTE_TO_FLOAT(v[0]), UBYTE_TO_FLOAT(v[1]),
-         UBYTE_TO_FLOAT(v[2]), 1.0);
-}
-
-
-static void GLAPIENTRY
-TAG(Color4b)(GLbyte red, GLbyte green, GLbyte blue,
-              GLbyte alpha)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, BYTE_TO_FLOAT(red), BYTE_TO_FLOAT(green),
-          BYTE_TO_FLOAT(blue), BYTE_TO_FLOAT(alpha));
-}
-
-static void GLAPIENTRY
-TAG(Color4d)(GLdouble red, GLdouble green, GLdouble blue,
-              GLdouble alpha)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, (GLfloat) red, (GLfloat) green, (GLfloat) blue, (GLfloat) alpha);
-}
-
-static void GLAPIENTRY
-TAG(Color4i)(GLint red, GLint green, GLint blue, GLint alpha)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, INT_TO_FLOAT(red), INT_TO_FLOAT(green),
-          INT_TO_FLOAT(blue), INT_TO_FLOAT(alpha));
-}
-
-static void GLAPIENTRY
-TAG(Color4s)(GLshort red, GLshort green, GLshort blue,
-              GLshort alpha)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, SHORT_TO_FLOAT(red), SHORT_TO_FLOAT(green),
-          SHORT_TO_FLOAT(blue), SHORT_TO_FLOAT(alpha));
-}
-
-static void GLAPIENTRY
-TAG(Color4ui)(GLuint red, GLuint green, GLuint blue, GLuint alpha)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, UINT_TO_FLOAT(red), UINT_TO_FLOAT(green),
-          UINT_TO_FLOAT(blue), UINT_TO_FLOAT(alpha));
-}
-
-static void GLAPIENTRY
-TAG(Color4us)(GLushort red, GLushort green, GLushort blue, GLushort alpha)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, USHORT_TO_FLOAT(red), USHORT_TO_FLOAT(green),
-          USHORT_TO_FLOAT(blue), USHORT_TO_FLOAT(alpha));
-}
-
-static void GLAPIENTRY
-TAG(Color4ub)(GLubyte red, GLubyte green, GLubyte blue, GLubyte alpha)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, UBYTE_TO_FLOAT(red), UBYTE_TO_FLOAT(green),
-          UBYTE_TO_FLOAT(blue), UBYTE_TO_FLOAT(alpha));
-}
-
-
-static void GLAPIENTRY
-TAG(Color4iv)(const GLint *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, INT_TO_FLOAT(v[0]), INT_TO_FLOAT(v[1]),
-         INT_TO_FLOAT(v[2]), INT_TO_FLOAT(v[3]));
-}
-
-
-static void GLAPIENTRY
-TAG(Color4bv)(const GLbyte *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, BYTE_TO_FLOAT(v[0]), BYTE_TO_FLOAT(v[1]),
-         BYTE_TO_FLOAT(v[2]), BYTE_TO_FLOAT(v[3]));
-}
-
-static void GLAPIENTRY
-TAG(Color4dv)(const GLdouble *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2], (GLfloat) v[3]);
-}
-
-
-static void GLAPIENTRY
-TAG(Color4sv)(const GLshort *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, SHORT_TO_FLOAT(v[0]), SHORT_TO_FLOAT(v[1]),
-         SHORT_TO_FLOAT(v[2]), SHORT_TO_FLOAT(v[3]));
-}
-
-
-static void GLAPIENTRY
-TAG(Color4uiv)(const GLuint *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, UINT_TO_FLOAT(v[0]), UINT_TO_FLOAT(v[1]),
-         UINT_TO_FLOAT(v[2]), UINT_TO_FLOAT(v[3]));
-}
-
-static void GLAPIENTRY
-TAG(Color4usv)(const GLushort *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, USHORT_TO_FLOAT(v[0]), USHORT_TO_FLOAT(v[1]),
-         USHORT_TO_FLOAT(v[2]), USHORT_TO_FLOAT(v[3]));
-}
-
-static void GLAPIENTRY
-TAG(Color4ubv)(const GLubyte *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_COLOR0, UBYTE_TO_FLOAT(v[0]), UBYTE_TO_FLOAT(v[1]),
-         UBYTE_TO_FLOAT(v[2]), UBYTE_TO_FLOAT(v[3]));
-}
-
-
-static void GLAPIENTRY
-TAG(FogCoordd)(GLdouble d)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_FOG, (GLfloat) d);
-}
-
-static void GLAPIENTRY
-TAG(FogCoorddv)(const GLdouble *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_FOG, (GLfloat) *v);
-}
-
-
-static void GLAPIENTRY
-TAG(Indexd)(GLdouble c)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_COLOR_INDEX, (GLfloat) c);
-}
-
-static void GLAPIENTRY
-TAG(Indexi)(GLint c)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_COLOR_INDEX, (GLfloat) c);
-}
-
-static void GLAPIENTRY
-TAG(Indexs)(GLshort c)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_COLOR_INDEX, (GLfloat) c);
-}
-
-static void GLAPIENTRY
-TAG(Indexub)(GLubyte c)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_COLOR_INDEX, (GLfloat) c);
-}
-
-static void GLAPIENTRY
-TAG(Indexdv)(const GLdouble *c)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_COLOR_INDEX, (GLfloat) *c);
-}
-
-static void GLAPIENTRY
-TAG(Indexiv)(const GLint *c)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_COLOR_INDEX, (GLfloat) *c);
-}
-
-static void GLAPIENTRY
-TAG(Indexsv)(const GLshort *c)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_COLOR_INDEX, (GLfloat) *c);
-}
-
-static void GLAPIENTRY
-TAG(Indexubv)(const GLubyte *c)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_COLOR_INDEX, (GLfloat) *c);
-}
-
-
-static void GLAPIENTRY
-TAG(EdgeFlagv)(const GLboolean *flag)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_EDGEFLAG, (GLfloat)*flag);
-}
-
-
-static void GLAPIENTRY
-TAG(Normal3b)(GLbyte nx, GLbyte ny, GLbyte nz)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_NORMAL, BYTE_TO_FLOAT(nx), BYTE_TO_FLOAT(ny), BYTE_TO_FLOAT(nz));
-}
-
-static void GLAPIENTRY
-TAG(Normal3d)(GLdouble nx, GLdouble ny, GLdouble nz)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_NORMAL, (GLfloat) nx, (GLfloat) ny, (GLfloat) nz);
-}
-
-static void GLAPIENTRY
-TAG(Normal3i)(GLint nx, GLint ny, GLint nz)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_NORMAL, INT_TO_FLOAT(nx), INT_TO_FLOAT(ny), INT_TO_FLOAT(nz));
-}
-
-static void GLAPIENTRY
-TAG(Normal3s)(GLshort nx, GLshort ny, GLshort nz)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_NORMAL, SHORT_TO_FLOAT(nx), SHORT_TO_FLOAT(ny), SHORT_TO_FLOAT(nz));
-}
-
-static void GLAPIENTRY
-TAG(Normal3bv)(const GLbyte *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_NORMAL, BYTE_TO_FLOAT(v[0]), BYTE_TO_FLOAT(v[1]), BYTE_TO_FLOAT(v[2]));
-}
-
-static void GLAPIENTRY
-TAG(Normal3dv)(const GLdouble *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_NORMAL, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2]);
-}
-
-static void GLAPIENTRY
-TAG(Normal3iv)(const GLint *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_NORMAL, INT_TO_FLOAT(v[0]), INT_TO_FLOAT(v[1]), INT_TO_FLOAT(v[2]));
-}
-
-static void GLAPIENTRY
-TAG(Normal3sv)(const GLshort *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_NORMAL, SHORT_TO_FLOAT(v[0]), SHORT_TO_FLOAT(v[1]), SHORT_TO_FLOAT(v[2]));
-}
-
-static void GLAPIENTRY
-TAG(TexCoord1d)(GLdouble s)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_TEX0, (GLfloat) s);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord1i)(GLint s)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_TEX0, (GLfloat) s);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord1s)(GLshort s)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_TEX0, (GLfloat) s);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord2d)(GLdouble s, GLdouble t)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR2F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord2s)(GLshort s, GLshort t)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR2F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord2i)(GLint s, GLint t)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR2F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord3d)(GLdouble s, GLdouble t, GLdouble r)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t,(GLfloat) r);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord3i)(GLint s, GLint t, GLint r)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t,(GLfloat) r);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord3s)(GLshort s, GLshort t, GLshort r)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t,(GLfloat) r);
-}
-
 static void GLAPIENTRY
-TAG(TexCoord4d)(GLdouble s, GLdouble t, GLdouble r, GLdouble q)
+TAG(VertexAttrib1hNV)(GLuint index, GLhalfNV x)
 {
    GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t,(GLfloat) r,(GLfloat) q);
+   if (is_vertex_position(ctx, index))
+      ATTR1H(0, x);
+   else if (index < MAX_VERTEX_GENERIC_ATTRIBS)
+      ATTR1H(VBO_ATTRIB_GENERIC0 + index, x);
+   else
+      ERROR(GL_INVALID_VALUE);
 }
 
 static void GLAPIENTRY
-TAG(TexCoord4i)(GLint s, GLint t, GLint r, GLint q)
+TAG(VertexAttrib2hNV)(GLuint index, GLhalfNV x, GLhalfNV y)
 {
    GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t,(GLfloat) r,(GLfloat) q);
+   if (is_vertex_position(ctx, index))
+      ATTR2H(0, x, y);
+   else if (index < MAX_VERTEX_GENERIC_ATTRIBS)
+      ATTR2H(VBO_ATTRIB_GENERIC0 + index, x, y);
+   else
+      ERROR(GL_INVALID_VALUE);
 }
 
 static void GLAPIENTRY
-TAG(TexCoord4s)(GLshort s, GLshort t, GLshort r, GLshort q)
+TAG(VertexAttrib3hNV)(GLuint index, GLhalfNV x, GLhalfNV y, GLhalfNV z)
 {
    GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t,(GLfloat) r,(GLfloat) q);
+   if (is_vertex_position(ctx, index))
+      ATTR3H(0, x, y, z);
+   else if (index < MAX_VERTEX_GENERIC_ATTRIBS)
+      ATTR3H(VBO_ATTRIB_GENERIC0 + index, x, y, z);
+   else
+      ERROR(GL_INVALID_VALUE);
 }
 
 static void GLAPIENTRY
-TAG(TexCoord1dv)(const GLdouble *v)
+TAG(VertexAttrib4hNV)(GLuint index, GLhalfNV x, GLhalfNV y, GLhalfNV z, GLhalfNV w)
 {
    GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_TEX0, (GLfloat) v[0]);
+   if (is_vertex_position(ctx, index))
+      ATTR4H(0, x, y, z, w);
+   else if (index < MAX_VERTEX_GENERIC_ATTRIBS)
+      ATTR4H(VBO_ATTRIB_GENERIC0 + index, x, y, z, w);
+   else
+      ERROR(GL_INVALID_VALUE);
 }
 
 static void GLAPIENTRY
-TAG(TexCoord1iv)(const GLint *v)
+TAG(VertexAttrib1hvNV)(GLuint index, const GLhalfNV * v)
 {
    GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_TEX0, (GLfloat) v[0]);
+   if (is_vertex_position(ctx, index))
+      ATTR1HV(0, v);
+   else if (index < MAX_VERTEX_GENERIC_ATTRIBS)
+      ATTR1HV(VBO_ATTRIB_GENERIC0 + index, v);
+   else
+      ERROR(GL_INVALID_VALUE);
 }
 
 static void GLAPIENTRY
-TAG(TexCoord1sv)(const GLshort *v)
+TAG(VertexAttrib2hvNV)(GLuint index, const GLhalfNV * v)
 {
    GET_CURRENT_CONTEXT(ctx);
-   ATTR1F(VBO_ATTRIB_TEX0, (GLfloat) v[0]);
+   if (is_vertex_position(ctx, index))
+      ATTR2HV(0, v);
+   else if (index < MAX_VERTEX_GENERIC_ATTRIBS)
+      ATTR2HV(VBO_ATTRIB_GENERIC0 + index, v);
+   else
+      ERROR(GL_INVALID_VALUE);
 }
 
 static void GLAPIENTRY
-TAG(TexCoord2dv)(const GLdouble *v)
+TAG(VertexAttrib3hvNV)(GLuint index, const GLhalfNV * v)
 {
    GET_CURRENT_CONTEXT(ctx);
-   ATTR2F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1]);
+   if (is_vertex_position(ctx, index))
+      ATTR3HV(0, v);
+   else if (index < MAX_VERTEX_GENERIC_ATTRIBS)
+      ATTR3HV(VBO_ATTRIB_GENERIC0 + index, v);
+   else
+      ERROR(GL_INVALID_VALUE);
 }
 
 static void GLAPIENTRY
-TAG(TexCoord2iv)(const GLint *v)
+TAG(VertexAttrib4hvNV)(GLuint index, const GLhalfNV * v)
 {
    GET_CURRENT_CONTEXT(ctx);
-   ATTR2F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1]);
+   if (is_vertex_position(ctx, index))
+      ATTR4HV(0, v);
+   else if (index < MAX_VERTEX_GENERIC_ATTRIBS)
+      ATTR4HV(VBO_ATTRIB_GENERIC0 + index, v);
+   else
+      ERROR(GL_INVALID_VALUE);
 }
 
 static void GLAPIENTRY
-TAG(TexCoord2sv)(const GLshort *v)
+TAG(VertexAttribs1hvNV)(GLuint index, GLsizei n, const GLhalfNV *v)
 {
    GET_CURRENT_CONTEXT(ctx);
-   ATTR2F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1]);
+   n = MIN2(n, VBO_ATTRIB_MAX - index);
+   for (GLint i = n - 1; i >= 0; i--)
+      ATTR1H(index + i, v[i]);
 }
 
 static void GLAPIENTRY
-TAG(TexCoord3dv)(const GLdouble *v)
+TAG(VertexAttribs2hvNV)(GLuint index, GLsizei n, const GLhalfNV *v)
 {
    GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1],(GLfloat) v[2]);
+   n = MIN2(n, VBO_ATTRIB_MAX - index);
+   for (GLint i = n - 1; i >= 0; i--)
+      ATTR2H(index + i, v[2 * i], v[2 * i + 1]);
 }
 
 static void GLAPIENTRY
-TAG(TexCoord3iv)(const GLint *v)
+TAG(VertexAttribs3hvNV)(GLuint index, GLsizei n, const GLhalfNV *v)
 {
    GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1],(GLfloat) v[2]);
+   n = MIN2(n, VBO_ATTRIB_MAX - index);
+   for (GLint i = n - 1; i >= 0; i--)
+      ATTR3H(index + i, v[3 * i], v[3 * i + 1], v[3 * i + 2]);
 }
 
-static void GLAPIENTRY
-TAG(TexCoord3sv)(const GLshort *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1],(GLfloat) v[2]);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord4dv)(const GLdouble *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1],(GLfloat) v[2],(GLfloat) v[3]);
-}
-
-static void GLAPIENTRY
-TAG(TexCoord4iv)(const GLint *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1],(GLfloat) v[2],(GLfloat) v[3]);
-}
 
 static void GLAPIENTRY
-TAG(TexCoord4sv)(const GLshort *v)
+TAG(VertexAttribs4hvNV)(GLuint index, GLsizei n, const GLhalfNV *v)
 {
    GET_CURRENT_CONTEXT(ctx);
-   ATTR4F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1],(GLfloat) v[2],(GLfloat) v[3]);
+   n = MIN2(n, VBO_ATTRIB_MAX - index);
+   for (GLint i = n - 1; i >= 0; i--)
+      ATTR4H(index + i, v[4 * i], v[4 * i + 1], v[4 * i + 2], v[4 * i + 3]);
 }
 
 static void GLAPIENTRY
@@ -2171,393 +1140,6 @@ TAG(Vertex4sv)(const GLshort *v)
    ATTR4F(VBO_ATTRIB_POS, (GLfloat) v[0], (GLfloat) v[1],
          (GLfloat) v[2], (GLfloat) v[3]);
 }
-
-static void GLAPIENTRY
-TAG(MultiTexCoord1d)(GLenum target, GLdouble s)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR1F(attr, (GLfloat) s);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord1dv)(GLenum target, const GLdouble *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR1F(attr, (GLfloat) v[0]);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord1i)(GLenum target, GLint s)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR1F(attr, (GLfloat) s);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord1iv)(GLenum target, const GLint *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR1F(attr, (GLfloat) v[0]);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord1s)(GLenum target, GLshort s)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR1F(attr, (GLfloat) s);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord1sv)(GLenum target, const GLshort *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR1F(attr, (GLfloat) v[0]);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord2d)(GLenum target, GLdouble s, GLdouble t)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR2F(attr, (GLfloat) s, (GLfloat) t);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord2dv)(GLenum target, const GLdouble *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR2F(attr, (GLfloat) v[0], (GLfloat) v[1]);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord2i)(GLenum target, GLint s, GLint t)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR2F(attr, (GLfloat) s, (GLfloat) t);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord2iv)(GLenum target, const GLint *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR2F(attr, (GLfloat) v[0], (GLfloat) v[1]);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord2s)(GLenum target, GLshort s, GLshort t)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR2F(attr, (GLfloat) s, (GLfloat) t);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord2sv)(GLenum target, const GLshort *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR2F(attr, (GLfloat) v[0], (GLfloat) v[1]);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord3d)(GLenum target, GLdouble s, GLdouble t, GLdouble r)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR3F(attr, (GLfloat) s, (GLfloat) t, (GLfloat) r);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord3dv)(GLenum target, const GLdouble *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR3F(attr, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2]);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord3i)(GLenum target, GLint s, GLint t, GLint r)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR3F(attr, (GLfloat) s, (GLfloat) t, (GLfloat) r);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord3iv)(GLenum target, const GLint *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR3F(attr, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2]);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord3s)(GLenum target, GLshort s, GLshort t, GLshort r)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR3F(attr, (GLfloat) s, (GLfloat) t, (GLfloat) r);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord3sv)(GLenum target, const GLshort *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR3F(attr, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2]);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord4d)(GLenum target, GLdouble s, GLdouble t, GLdouble r, GLdouble q)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR4F(attr, (GLfloat) s, (GLfloat) t, (GLfloat) r, (GLfloat) q);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord4dv)(GLenum target, const GLdouble *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR4F(attr, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2], (GLfloat) v[3]);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord4i)(GLenum target, GLint s, GLint t, GLint r, GLint q)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR4F(attr, (GLfloat) s, (GLfloat) t, (GLfloat) r, (GLfloat) q);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord4iv)(GLenum target, const GLint *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR4F(attr, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2], (GLfloat) v[3]);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord4s)(GLenum target, GLshort s, GLshort t, GLshort r, GLshort q)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR4F(attr, (GLfloat) s, (GLfloat) t, (GLfloat) r, (GLfloat) q);
-}
-
-static void GLAPIENTRY
-TAG(MultiTexCoord4sv)(GLenum target, const GLshort *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
-   ATTR4F(attr, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2], (GLfloat) v[3]);
-}
-
-
-static void GLAPIENTRY
-TAG(EvalCoord2dv)(const GLdouble *u)
-{
-   TAG(EvalCoord2f)((GLfloat) u[0], (GLfloat) u[1]);
-}
-
-static void GLAPIENTRY
-TAG(EvalCoord2d)(GLdouble u, GLdouble v)
-{
-   TAG(EvalCoord2f)((GLfloat) u, (GLfloat) v);
-}
-
-static void GLAPIENTRY
-TAG(EvalCoord1dv)(const GLdouble *u)
-{
-   TAG(EvalCoord1f)((GLfloat) *u);
-}
-
-static void GLAPIENTRY
-TAG(EvalCoord1d)(GLdouble u)
-{
-   TAG(EvalCoord1f)((GLfloat) u);
-}
-
-
-static void GLAPIENTRY
-TAG(Materialf)(GLenum face, GLenum pname, GLfloat param)
-{
-   GLfloat fparam[4];
-   fparam[0] = param;
-   TAG(Materialfv)(face, pname, fparam);
-}
-
-static void GLAPIENTRY
-TAG(Materiali)(GLenum face, GLenum pname, GLint param)
-{
-   GLfloat p[4];
-   p[0] = (GLfloat) param;
-   TAG(Materialfv)(face, pname, p);
-}
-
-static void GLAPIENTRY
-TAG(Materialiv)(GLenum face, GLenum pname, const GLint *params)
-{
-   GLfloat fparam[4];
-   switch (pname) {
-   case GL_AMBIENT:
-   case GL_DIFFUSE:
-   case GL_SPECULAR:
-   case GL_EMISSION:
-   case GL_AMBIENT_AND_DIFFUSE:
-      fparam[0] = INT_TO_FLOAT(params[0]);
-      fparam[1] = INT_TO_FLOAT(params[1]);
-      fparam[2] = INT_TO_FLOAT(params[2]);
-      fparam[3] = INT_TO_FLOAT(params[3]);
-      break;
-   case GL_SHININESS:
-      fparam[0] = (GLfloat) params[0];
-      break;
-   case GL_COLOR_INDEXES:
-      fparam[0] = (GLfloat) params[0];
-      fparam[1] = (GLfloat) params[1];
-      fparam[2] = (GLfloat) params[2];
-      break;
-   default:
-      ;
-   }
-   TAG(Materialfv)(face, pname, fparam);
-}
-
-
-static void GLAPIENTRY
-TAG(SecondaryColor3b)(GLbyte red, GLbyte green, GLbyte blue)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_COLOR1, BYTE_TO_FLOAT(red),
-          BYTE_TO_FLOAT(green),
-          BYTE_TO_FLOAT(blue));
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColor3d)(GLdouble red, GLdouble green, GLdouble blue)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_COLOR1, (GLfloat) red, (GLfloat) green, (GLfloat) blue);
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColor3i)(GLint red, GLint green, GLint blue)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_COLOR1, INT_TO_FLOAT(red),
-          INT_TO_FLOAT(green),
-          INT_TO_FLOAT(blue));
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColor3s)(GLshort red, GLshort green, GLshort blue)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_COLOR1, SHORT_TO_FLOAT(red),
-          SHORT_TO_FLOAT(green),
-          SHORT_TO_FLOAT(blue));
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColor3ui)(GLuint red, GLuint green, GLuint blue)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_COLOR1, UINT_TO_FLOAT(red),
-          UINT_TO_FLOAT(green),
-          UINT_TO_FLOAT(blue));
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColor3us)(GLushort red, GLushort green, GLushort blue)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_COLOR1, USHORT_TO_FLOAT(red),
-          USHORT_TO_FLOAT(green),
-          USHORT_TO_FLOAT(blue));
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColor3ub)(GLubyte red, GLubyte green, GLubyte blue)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_COLOR1, UBYTE_TO_FLOAT(red),
-          UBYTE_TO_FLOAT(green),
-          UBYTE_TO_FLOAT(blue));
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColor3bv)(const GLbyte *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_COLOR1, BYTE_TO_FLOAT(v[0]),
-         BYTE_TO_FLOAT(v[1]),
-         BYTE_TO_FLOAT(v[2]));
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColor3dv)(const GLdouble *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_COLOR1, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2]);
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColor3iv)(const GLint *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_COLOR1, INT_TO_FLOAT(v[0]),
-         INT_TO_FLOAT(v[1]),
-         INT_TO_FLOAT(v[2]));
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColor3sv)(const GLshort *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_COLOR1, SHORT_TO_FLOAT(v[0]),
-         SHORT_TO_FLOAT(v[1]),
-         SHORT_TO_FLOAT(v[2]));
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColor3uiv)(const GLuint *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_COLOR1, UINT_TO_FLOAT(v[0]),
-         UINT_TO_FLOAT(v[1]),
-         UINT_TO_FLOAT(v[2]));
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColor3usv)(const GLushort *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_COLOR1, USHORT_TO_FLOAT(v[0]),
-         USHORT_TO_FLOAT(v[1]),
-         USHORT_TO_FLOAT(v[2]));
-}
-
-static void GLAPIENTRY
-TAG(SecondaryColor3ubv)(const GLubyte *v)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   ATTR3F(VBO_ATTRIB_COLOR1, UBYTE_TO_FLOAT(v[0]),
-         UBYTE_TO_FLOAT(v[1]),
-         UBYTE_TO_FLOAT(v[2]));
-}
-
 
 /*
  * GL_NV_vertex_program:
@@ -3167,8 +1749,6 @@ TAG(VertexAttrib4Nuiv)(GLuint index, const GLuint * v)
       ERROR(GL_INVALID_VALUE);
 }
 
-
-
 /**
  * GL_EXT_gpu_shader / GL 3.0 signed/unsigned integer-valued attributes.
  * Note that attribute indexes do NOT alias conventional attributes.
@@ -3246,6 +1826,1558 @@ TAG(VertexAttribI4usv)(GLuint index, const GLushort *v)
       ERROR(GL_INVALID_VALUE);
 }
 
+/* define this macro to exclude folllowing none-vertex functions */
+#ifndef HW_SELECT_MODE
+
+static void GLAPIENTRY
+TAG(TexCoord1f)(GLfloat x)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_TEX0, x);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord1fv)(const GLfloat * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1FV(VBO_ATTRIB_TEX0, v);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord2f)(GLfloat x, GLfloat y)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR2F(VBO_ATTRIB_TEX0, x, y);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord2fv)(const GLfloat * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR2FV(VBO_ATTRIB_TEX0, v);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord3f)(GLfloat x, GLfloat y, GLfloat z)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_TEX0, x, y, z);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord3fv)(const GLfloat * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3FV(VBO_ATTRIB_TEX0, v);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord4f)(GLfloat x, GLfloat y, GLfloat z, GLfloat w)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_TEX0, x, y, z, w);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord4fv)(const GLfloat * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4FV(VBO_ATTRIB_TEX0, v);
+}
+
+
+
+static void GLAPIENTRY
+TAG(Normal3f)(GLfloat x, GLfloat y, GLfloat z)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_NORMAL, x, y, z);
+}
+
+static void GLAPIENTRY
+TAG(Normal3fv)(const GLfloat * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3FV(VBO_ATTRIB_NORMAL, v);
+}
+
+
+
+static void GLAPIENTRY
+TAG(FogCoordfEXT)(GLfloat x)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_FOG, x);
+}
+
+
+
+static void GLAPIENTRY
+TAG(FogCoordfvEXT)(const GLfloat * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1FV(VBO_ATTRIB_FOG, v);
+}
+
+static void GLAPIENTRY
+TAG(Color3f)(GLfloat x, GLfloat y, GLfloat z)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_COLOR0, x, y, z);
+}
+
+static void GLAPIENTRY
+TAG(Color3fv)(const GLfloat * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3FV(VBO_ATTRIB_COLOR0, v);
+}
+
+static void GLAPIENTRY
+TAG(Color4f)(GLfloat x, GLfloat y, GLfloat z, GLfloat w)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, x, y, z, w);
+}
+
+static void GLAPIENTRY
+TAG(Color4fv)(const GLfloat * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4FV(VBO_ATTRIB_COLOR0, v);
+}
+
+
+
+static void GLAPIENTRY
+TAG(SecondaryColor3fEXT)(GLfloat x, GLfloat y, GLfloat z)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_COLOR1, x, y, z);
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColor3fvEXT)(const GLfloat * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3FV(VBO_ATTRIB_COLOR1, v);
+}
+
+
+
+static void GLAPIENTRY
+TAG(EdgeFlag)(GLboolean b)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_EDGEFLAG, (GLfloat) b);
+}
+
+
+
+static void GLAPIENTRY
+TAG(Indexf)(GLfloat f)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_COLOR_INDEX, f);
+}
+
+static void GLAPIENTRY
+TAG(Indexfv)(const GLfloat * f)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1FV(VBO_ATTRIB_COLOR_INDEX, f);
+}
+
+
+
+static void GLAPIENTRY
+TAG(MultiTexCoord1fARB)(GLenum target, GLfloat x)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR1F(attr, x);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord1fvARB)(GLenum target, const GLfloat * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR1FV(attr, v);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord2fARB)(GLenum target, GLfloat x, GLfloat y)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR2F(attr, x, y);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord2fvARB)(GLenum target, const GLfloat * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR2FV(attr, v);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord3fARB)(GLenum target, GLfloat x, GLfloat y, GLfloat z)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR3F(attr, x, y, z);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord3fvARB)(GLenum target, const GLfloat * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR3FV(attr, v);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord4fARB)(GLenum target, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR4F(attr, x, y, z, w);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord4fvARB)(GLenum target, const GLfloat * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR4FV(attr, v);
+}
+
+static void GLAPIENTRY
+TAG(TexCoordP1ui)(GLenum type, GLuint coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glTexCoordP1ui");
+   ATTR_UI(ctx, 1, type, 0, VBO_ATTRIB_TEX0, coords);
+}
+
+static void GLAPIENTRY
+TAG(TexCoordP1uiv)(GLenum type, const GLuint *coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glTexCoordP1uiv");
+   ATTR_UI(ctx, 1, type, 0, VBO_ATTRIB_TEX0, coords[0]);
+}
+
+static void GLAPIENTRY
+TAG(TexCoordP2ui)(GLenum type, GLuint coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glTexCoordP2ui");
+   ATTR_UI(ctx, 2, type, 0, VBO_ATTRIB_TEX0, coords);
+}
+
+static void GLAPIENTRY
+TAG(TexCoordP2uiv)(GLenum type, const GLuint *coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glTexCoordP2uiv");
+   ATTR_UI(ctx, 2, type, 0, VBO_ATTRIB_TEX0, coords[0]);
+}
+
+static void GLAPIENTRY
+TAG(TexCoordP3ui)(GLenum type, GLuint coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glTexCoordP3ui");
+   ATTR_UI(ctx, 3, type, 0, VBO_ATTRIB_TEX0, coords);
+}
+
+static void GLAPIENTRY
+TAG(TexCoordP3uiv)(GLenum type, const GLuint *coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glTexCoordP3uiv");
+   ATTR_UI(ctx, 3, type, 0, VBO_ATTRIB_TEX0, coords[0]);
+}
+
+static void GLAPIENTRY
+TAG(TexCoordP4ui)(GLenum type, GLuint coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glTexCoordP4ui");
+   ATTR_UI(ctx, 4, type, 0, VBO_ATTRIB_TEX0, coords);
+}
+
+static void GLAPIENTRY
+TAG(TexCoordP4uiv)(GLenum type, const GLuint *coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glTexCoordP4uiv");
+   ATTR_UI(ctx, 4, type, 0, VBO_ATTRIB_TEX0, coords[0]);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoordP1ui)(GLenum target, GLenum type, GLuint coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glMultiTexCoordP1ui");
+   ATTR_UI(ctx, 1, type, 0, attr, coords);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoordP1uiv)(GLenum target, GLenum type, const GLuint *coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glMultiTexCoordP1uiv");
+   ATTR_UI(ctx, 1, type, 0, attr, coords[0]);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoordP2ui)(GLenum target, GLenum type, GLuint coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glMultiTexCoordP2ui");
+   ATTR_UI(ctx, 2, type, 0, attr, coords);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoordP2uiv)(GLenum target, GLenum type, const GLuint *coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glMultiTexCoordP2uiv");
+   ATTR_UI(ctx, 2, type, 0, attr, coords[0]);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoordP3ui)(GLenum target, GLenum type, GLuint coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glMultiTexCoordP3ui");
+   ATTR_UI(ctx, 3, type, 0, attr, coords);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoordP3uiv)(GLenum target, GLenum type, const GLuint *coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glMultiTexCoordP3uiv");
+   ATTR_UI(ctx, 3, type, 0, attr, coords[0]);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoordP4ui)(GLenum target, GLenum type, GLuint coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glMultiTexCoordP4ui");
+   ATTR_UI(ctx, 4, type, 0, attr, coords);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoordP4uiv)(GLenum target, GLenum type, const GLuint *coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glMultiTexCoordP4uiv");
+   ATTR_UI(ctx, 4, type, 0, attr, coords[0]);
+}
+
+static void GLAPIENTRY
+TAG(NormalP3ui)(GLenum type, GLuint coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glNormalP3ui");
+   ATTR_UI(ctx, 3, type, 1, VBO_ATTRIB_NORMAL, coords);
+}
+
+static void GLAPIENTRY
+TAG(NormalP3uiv)(GLenum type, const GLuint *coords)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glNormalP3uiv");
+   ATTR_UI(ctx, 3, type, 1, VBO_ATTRIB_NORMAL, coords[0]);
+}
+
+static void GLAPIENTRY
+TAG(ColorP3ui)(GLenum type, GLuint color)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glColorP3ui");
+   ATTR_UI(ctx, 3, type, 1, VBO_ATTRIB_COLOR0, color);
+}
+
+static void GLAPIENTRY
+TAG(ColorP3uiv)(GLenum type, const GLuint *color)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glColorP3uiv");
+   ATTR_UI(ctx, 3, type, 1, VBO_ATTRIB_COLOR0, color[0]);
+}
+
+static void GLAPIENTRY
+TAG(ColorP4ui)(GLenum type, GLuint color)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glColorP4ui");
+   ATTR_UI(ctx, 4, type, 1, VBO_ATTRIB_COLOR0, color);
+}
+
+static void GLAPIENTRY
+TAG(ColorP4uiv)(GLenum type, const GLuint *color)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glColorP4uiv");
+   ATTR_UI(ctx, 4, type, 1, VBO_ATTRIB_COLOR0, color[0]);
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColorP3ui)(GLenum type, GLuint color)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glSecondaryColorP3ui");
+   ATTR_UI(ctx, 3, type, 1, VBO_ATTRIB_COLOR1, color);
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColorP3uiv)(GLenum type, const GLuint *color)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ERROR_IF_NOT_PACKED_TYPE(ctx, type, "glSecondaryColorP3uiv");
+   ATTR_UI(ctx, 3, type, 1, VBO_ATTRIB_COLOR1, color[0]);
+}
+
+static void GLAPIENTRY
+TAG(Normal3hNV)(GLhalfNV x, GLhalfNV y, GLhalfNV z)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3H(VBO_ATTRIB_NORMAL, x, y, z);
+}
+
+static void GLAPIENTRY
+TAG(Normal3hvNV)(const GLhalfNV * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3HV(VBO_ATTRIB_NORMAL, v);
+}
+
+
+
+static void GLAPIENTRY
+TAG(Color3hNV)(GLhalfNV x, GLhalfNV y, GLhalfNV z)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3H(VBO_ATTRIB_COLOR0, x, y, z);
+}
+
+static void GLAPIENTRY
+TAG(Color3hvNV)(const GLhalfNV * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3HV(VBO_ATTRIB_COLOR0, v);
+}
+
+static void GLAPIENTRY
+TAG(Color4hNV)(GLhalfNV x, GLhalfNV y, GLhalfNV z, GLhalfNV w)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4H(VBO_ATTRIB_COLOR0, x, y, z, w);
+}
+
+static void GLAPIENTRY
+TAG(Color4hvNV)(const GLhalfNV * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4HV(VBO_ATTRIB_COLOR0, v);
+}
+
+
+
+static void GLAPIENTRY
+TAG(TexCoord1hNV)(GLhalfNV x)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1H(VBO_ATTRIB_TEX0, x);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord1hvNV)(const GLhalfNV * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1HV(VBO_ATTRIB_TEX0, v);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord2hNV)(GLhalfNV x, GLhalfNV y)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR2H(VBO_ATTRIB_TEX0, x, y);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord2hvNV)(const GLhalfNV * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR2HV(VBO_ATTRIB_TEX0, v);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord3hNV)(GLhalfNV x, GLhalfNV y, GLhalfNV z)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3H(VBO_ATTRIB_TEX0, x, y, z);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord3hvNV)(const GLhalfNV * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3HV(VBO_ATTRIB_TEX0, v);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord4hNV)(GLhalfNV x, GLhalfNV y, GLhalfNV z, GLhalfNV w)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4H(VBO_ATTRIB_TEX0, x, y, z, w);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord4hvNV)(const GLhalfNV * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4HV(VBO_ATTRIB_TEX0, v);
+}
+
+
+
+static void GLAPIENTRY
+TAG(MultiTexCoord1hNV)(GLenum target, GLhalfNV x)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR1H(attr, x);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord1hvNV)(GLenum target, const GLhalfNV * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR1HV(attr, v);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord2hNV)(GLenum target, GLhalfNV x, GLhalfNV y)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR2H(attr, x, y);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord2hvNV)(GLenum target, const GLhalfNV * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR2HV(attr, v);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord3hNV)(GLenum target, GLhalfNV x, GLhalfNV y, GLhalfNV z)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR3H(attr, x, y, z);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord3hvNV)(GLenum target, const GLhalfNV * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR3HV(attr, v);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord4hNV)(GLenum target, GLhalfNV x, GLhalfNV y, GLhalfNV z, GLhalfNV w)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR4H(attr, x, y, z, w);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord4hvNV)(GLenum target, const GLhalfNV * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR4HV(attr, v);
+}
+
+
+static void GLAPIENTRY
+TAG(FogCoordhNV)(GLhalf x)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1H(VBO_ATTRIB_FOG, x);
+}
+
+static void GLAPIENTRY
+TAG(FogCoordhvNV)(const GLhalf * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1HV(VBO_ATTRIB_FOG, v);
+}
+
+
+
+static void GLAPIENTRY
+TAG(SecondaryColor3hNV)(GLhalfNV x, GLhalfNV y, GLhalfNV z)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3H(VBO_ATTRIB_COLOR1, x, y, z);
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColor3hvNV)(const GLhalfNV * v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3HV(VBO_ATTRIB_COLOR1, v);
+}
+
+
+static void GLAPIENTRY
+TAG(Color3b)(GLbyte red, GLbyte green, GLbyte blue)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, BYTE_TO_FLOAT(red),
+          BYTE_TO_FLOAT(green),
+          BYTE_TO_FLOAT(blue),
+          1.0);
+}
+
+static void GLAPIENTRY
+TAG(Color3d)(GLdouble red, GLdouble green, GLdouble blue)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, (GLfloat) red, (GLfloat) green, (GLfloat) blue, 1.0);
+}
+
+static void GLAPIENTRY
+TAG(Color3i)(GLint red, GLint green, GLint blue)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, INT_TO_FLOAT(red), INT_TO_FLOAT(green),
+          INT_TO_FLOAT(blue), 1.0);
+}
+
+static void GLAPIENTRY
+TAG(Color3s)(GLshort red, GLshort green, GLshort blue)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, SHORT_TO_FLOAT(red), SHORT_TO_FLOAT(green),
+          SHORT_TO_FLOAT(blue), 1.0);
+}
+
+static void GLAPIENTRY
+TAG(Color3ui)(GLuint red, GLuint green, GLuint blue)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, UINT_TO_FLOAT(red), UINT_TO_FLOAT(green),
+          UINT_TO_FLOAT(blue), 1.0);
+}
+
+static void GLAPIENTRY
+TAG(Color3us)(GLushort red, GLushort green, GLushort blue)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, USHORT_TO_FLOAT(red), USHORT_TO_FLOAT(green),
+          USHORT_TO_FLOAT(blue), 1.0);
+}
+
+static void GLAPIENTRY
+TAG(Color3ub)(GLubyte red, GLubyte green, GLubyte blue)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, UBYTE_TO_FLOAT(red), UBYTE_TO_FLOAT(green),
+          UBYTE_TO_FLOAT(blue), 1.0);
+}
+
+
+static void GLAPIENTRY
+TAG(Color3bv)(const GLbyte *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, BYTE_TO_FLOAT(v[0]), BYTE_TO_FLOAT(v[1]),
+         BYTE_TO_FLOAT(v[2]), 1.0);
+}
+
+static void GLAPIENTRY
+TAG(Color3dv)(const GLdouble *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2], 1.0);
+}
+
+static void GLAPIENTRY
+TAG(Color3iv)(const GLint *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, INT_TO_FLOAT(v[0]), INT_TO_FLOAT(v[1]),
+         INT_TO_FLOAT(v[2]), 1.0);
+}
+
+static void GLAPIENTRY
+TAG(Color3sv)(const GLshort *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, SHORT_TO_FLOAT(v[0]), SHORT_TO_FLOAT(v[1]),
+         SHORT_TO_FLOAT(v[2]), 1.0);
+}
+
+static void GLAPIENTRY
+TAG(Color3uiv)(const GLuint *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, UINT_TO_FLOAT(v[0]), UINT_TO_FLOAT(v[1]),
+         UINT_TO_FLOAT(v[2]), 1.0);
+}
+
+static void GLAPIENTRY
+TAG(Color3usv)(const GLushort *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, USHORT_TO_FLOAT(v[0]), USHORT_TO_FLOAT(v[1]),
+         USHORT_TO_FLOAT(v[2]), 1.0);
+}
+
+static void GLAPIENTRY
+TAG(Color3ubv)(const GLubyte *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, UBYTE_TO_FLOAT(v[0]), UBYTE_TO_FLOAT(v[1]),
+         UBYTE_TO_FLOAT(v[2]), 1.0);
+}
+
+
+static void GLAPIENTRY
+TAG(Color4b)(GLbyte red, GLbyte green, GLbyte blue,
+              GLbyte alpha)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, BYTE_TO_FLOAT(red), BYTE_TO_FLOAT(green),
+          BYTE_TO_FLOAT(blue), BYTE_TO_FLOAT(alpha));
+}
+
+static void GLAPIENTRY
+TAG(Color4d)(GLdouble red, GLdouble green, GLdouble blue,
+              GLdouble alpha)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, (GLfloat) red, (GLfloat) green, (GLfloat) blue, (GLfloat) alpha);
+}
+
+static void GLAPIENTRY
+TAG(Color4i)(GLint red, GLint green, GLint blue, GLint alpha)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, INT_TO_FLOAT(red), INT_TO_FLOAT(green),
+          INT_TO_FLOAT(blue), INT_TO_FLOAT(alpha));
+}
+
+static void GLAPIENTRY
+TAG(Color4s)(GLshort red, GLshort green, GLshort blue,
+              GLshort alpha)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, SHORT_TO_FLOAT(red), SHORT_TO_FLOAT(green),
+          SHORT_TO_FLOAT(blue), SHORT_TO_FLOAT(alpha));
+}
+
+static void GLAPIENTRY
+TAG(Color4ui)(GLuint red, GLuint green, GLuint blue, GLuint alpha)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, UINT_TO_FLOAT(red), UINT_TO_FLOAT(green),
+          UINT_TO_FLOAT(blue), UINT_TO_FLOAT(alpha));
+}
+
+static void GLAPIENTRY
+TAG(Color4us)(GLushort red, GLushort green, GLushort blue, GLushort alpha)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, USHORT_TO_FLOAT(red), USHORT_TO_FLOAT(green),
+          USHORT_TO_FLOAT(blue), USHORT_TO_FLOAT(alpha));
+}
+
+static void GLAPIENTRY
+TAG(Color4ub)(GLubyte red, GLubyte green, GLubyte blue, GLubyte alpha)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, UBYTE_TO_FLOAT(red), UBYTE_TO_FLOAT(green),
+          UBYTE_TO_FLOAT(blue), UBYTE_TO_FLOAT(alpha));
+}
+
+
+static void GLAPIENTRY
+TAG(Color4iv)(const GLint *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, INT_TO_FLOAT(v[0]), INT_TO_FLOAT(v[1]),
+         INT_TO_FLOAT(v[2]), INT_TO_FLOAT(v[3]));
+}
+
+
+static void GLAPIENTRY
+TAG(Color4bv)(const GLbyte *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, BYTE_TO_FLOAT(v[0]), BYTE_TO_FLOAT(v[1]),
+         BYTE_TO_FLOAT(v[2]), BYTE_TO_FLOAT(v[3]));
+}
+
+static void GLAPIENTRY
+TAG(Color4dv)(const GLdouble *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2], (GLfloat) v[3]);
+}
+
+
+static void GLAPIENTRY
+TAG(Color4sv)(const GLshort *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, SHORT_TO_FLOAT(v[0]), SHORT_TO_FLOAT(v[1]),
+         SHORT_TO_FLOAT(v[2]), SHORT_TO_FLOAT(v[3]));
+}
+
+
+static void GLAPIENTRY
+TAG(Color4uiv)(const GLuint *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, UINT_TO_FLOAT(v[0]), UINT_TO_FLOAT(v[1]),
+         UINT_TO_FLOAT(v[2]), UINT_TO_FLOAT(v[3]));
+}
+
+static void GLAPIENTRY
+TAG(Color4usv)(const GLushort *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, USHORT_TO_FLOAT(v[0]), USHORT_TO_FLOAT(v[1]),
+         USHORT_TO_FLOAT(v[2]), USHORT_TO_FLOAT(v[3]));
+}
+
+static void GLAPIENTRY
+TAG(Color4ubv)(const GLubyte *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_COLOR0, UBYTE_TO_FLOAT(v[0]), UBYTE_TO_FLOAT(v[1]),
+         UBYTE_TO_FLOAT(v[2]), UBYTE_TO_FLOAT(v[3]));
+}
+
+
+static void GLAPIENTRY
+TAG(FogCoordd)(GLdouble d)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_FOG, (GLfloat) d);
+}
+
+static void GLAPIENTRY
+TAG(FogCoorddv)(const GLdouble *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_FOG, (GLfloat) *v);
+}
+
+
+static void GLAPIENTRY
+TAG(Indexd)(GLdouble c)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_COLOR_INDEX, (GLfloat) c);
+}
+
+static void GLAPIENTRY
+TAG(Indexi)(GLint c)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_COLOR_INDEX, (GLfloat) c);
+}
+
+static void GLAPIENTRY
+TAG(Indexs)(GLshort c)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_COLOR_INDEX, (GLfloat) c);
+}
+
+static void GLAPIENTRY
+TAG(Indexub)(GLubyte c)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_COLOR_INDEX, (GLfloat) c);
+}
+
+static void GLAPIENTRY
+TAG(Indexdv)(const GLdouble *c)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_COLOR_INDEX, (GLfloat) *c);
+}
+
+static void GLAPIENTRY
+TAG(Indexiv)(const GLint *c)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_COLOR_INDEX, (GLfloat) *c);
+}
+
+static void GLAPIENTRY
+TAG(Indexsv)(const GLshort *c)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_COLOR_INDEX, (GLfloat) *c);
+}
+
+static void GLAPIENTRY
+TAG(Indexubv)(const GLubyte *c)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_COLOR_INDEX, (GLfloat) *c);
+}
+
+
+static void GLAPIENTRY
+TAG(EdgeFlagv)(const GLboolean *flag)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_EDGEFLAG, (GLfloat)*flag);
+}
+
+
+static void GLAPIENTRY
+TAG(Normal3b)(GLbyte nx, GLbyte ny, GLbyte nz)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_NORMAL, BYTE_TO_FLOAT(nx), BYTE_TO_FLOAT(ny), BYTE_TO_FLOAT(nz));
+}
+
+static void GLAPIENTRY
+TAG(Normal3d)(GLdouble nx, GLdouble ny, GLdouble nz)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_NORMAL, (GLfloat) nx, (GLfloat) ny, (GLfloat) nz);
+}
+
+static void GLAPIENTRY
+TAG(Normal3i)(GLint nx, GLint ny, GLint nz)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_NORMAL, INT_TO_FLOAT(nx), INT_TO_FLOAT(ny), INT_TO_FLOAT(nz));
+}
+
+static void GLAPIENTRY
+TAG(Normal3s)(GLshort nx, GLshort ny, GLshort nz)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_NORMAL, SHORT_TO_FLOAT(nx), SHORT_TO_FLOAT(ny), SHORT_TO_FLOAT(nz));
+}
+
+static void GLAPIENTRY
+TAG(Normal3bv)(const GLbyte *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_NORMAL, BYTE_TO_FLOAT(v[0]), BYTE_TO_FLOAT(v[1]), BYTE_TO_FLOAT(v[2]));
+}
+
+static void GLAPIENTRY
+TAG(Normal3dv)(const GLdouble *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_NORMAL, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2]);
+}
+
+static void GLAPIENTRY
+TAG(Normal3iv)(const GLint *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_NORMAL, INT_TO_FLOAT(v[0]), INT_TO_FLOAT(v[1]), INT_TO_FLOAT(v[2]));
+}
+
+static void GLAPIENTRY
+TAG(Normal3sv)(const GLshort *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_NORMAL, SHORT_TO_FLOAT(v[0]), SHORT_TO_FLOAT(v[1]), SHORT_TO_FLOAT(v[2]));
+}
+
+static void GLAPIENTRY
+TAG(TexCoord1d)(GLdouble s)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_TEX0, (GLfloat) s);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord1i)(GLint s)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_TEX0, (GLfloat) s);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord1s)(GLshort s)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_TEX0, (GLfloat) s);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord2d)(GLdouble s, GLdouble t)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR2F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord2s)(GLshort s, GLshort t)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR2F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord2i)(GLint s, GLint t)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR2F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord3d)(GLdouble s, GLdouble t, GLdouble r)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t,(GLfloat) r);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord3i)(GLint s, GLint t, GLint r)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t,(GLfloat) r);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord3s)(GLshort s, GLshort t, GLshort r)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t,(GLfloat) r);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord4d)(GLdouble s, GLdouble t, GLdouble r, GLdouble q)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t,(GLfloat) r,(GLfloat) q);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord4i)(GLint s, GLint t, GLint r, GLint q)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t,(GLfloat) r,(GLfloat) q);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord4s)(GLshort s, GLshort t, GLshort r, GLshort q)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_TEX0, (GLfloat) s,(GLfloat) t,(GLfloat) r,(GLfloat) q);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord1dv)(const GLdouble *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_TEX0, (GLfloat) v[0]);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord1iv)(const GLint *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_TEX0, (GLfloat) v[0]);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord1sv)(const GLshort *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR1F(VBO_ATTRIB_TEX0, (GLfloat) v[0]);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord2dv)(const GLdouble *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR2F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1]);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord2iv)(const GLint *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR2F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1]);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord2sv)(const GLshort *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR2F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1]);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord3dv)(const GLdouble *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1],(GLfloat) v[2]);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord3iv)(const GLint *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1],(GLfloat) v[2]);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord3sv)(const GLshort *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1],(GLfloat) v[2]);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord4dv)(const GLdouble *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1],(GLfloat) v[2],(GLfloat) v[3]);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord4iv)(const GLint *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1],(GLfloat) v[2],(GLfloat) v[3]);
+}
+
+static void GLAPIENTRY
+TAG(TexCoord4sv)(const GLshort *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR4F(VBO_ATTRIB_TEX0, (GLfloat) v[0],(GLfloat) v[1],(GLfloat) v[2],(GLfloat) v[3]);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord1d)(GLenum target, GLdouble s)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR1F(attr, (GLfloat) s);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord1dv)(GLenum target, const GLdouble *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR1F(attr, (GLfloat) v[0]);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord1i)(GLenum target, GLint s)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR1F(attr, (GLfloat) s);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord1iv)(GLenum target, const GLint *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR1F(attr, (GLfloat) v[0]);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord1s)(GLenum target, GLshort s)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR1F(attr, (GLfloat) s);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord1sv)(GLenum target, const GLshort *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR1F(attr, (GLfloat) v[0]);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord2d)(GLenum target, GLdouble s, GLdouble t)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR2F(attr, (GLfloat) s, (GLfloat) t);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord2dv)(GLenum target, const GLdouble *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR2F(attr, (GLfloat) v[0], (GLfloat) v[1]);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord2i)(GLenum target, GLint s, GLint t)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR2F(attr, (GLfloat) s, (GLfloat) t);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord2iv)(GLenum target, const GLint *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR2F(attr, (GLfloat) v[0], (GLfloat) v[1]);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord2s)(GLenum target, GLshort s, GLshort t)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR2F(attr, (GLfloat) s, (GLfloat) t);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord2sv)(GLenum target, const GLshort *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR2F(attr, (GLfloat) v[0], (GLfloat) v[1]);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord3d)(GLenum target, GLdouble s, GLdouble t, GLdouble r)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR3F(attr, (GLfloat) s, (GLfloat) t, (GLfloat) r);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord3dv)(GLenum target, const GLdouble *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR3F(attr, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2]);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord3i)(GLenum target, GLint s, GLint t, GLint r)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR3F(attr, (GLfloat) s, (GLfloat) t, (GLfloat) r);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord3iv)(GLenum target, const GLint *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR3F(attr, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2]);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord3s)(GLenum target, GLshort s, GLshort t, GLshort r)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR3F(attr, (GLfloat) s, (GLfloat) t, (GLfloat) r);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord3sv)(GLenum target, const GLshort *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR3F(attr, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2]);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord4d)(GLenum target, GLdouble s, GLdouble t, GLdouble r, GLdouble q)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR4F(attr, (GLfloat) s, (GLfloat) t, (GLfloat) r, (GLfloat) q);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord4dv)(GLenum target, const GLdouble *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR4F(attr, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2], (GLfloat) v[3]);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord4i)(GLenum target, GLint s, GLint t, GLint r, GLint q)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR4F(attr, (GLfloat) s, (GLfloat) t, (GLfloat) r, (GLfloat) q);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord4iv)(GLenum target, const GLint *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR4F(attr, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2], (GLfloat) v[3]);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord4s)(GLenum target, GLshort s, GLshort t, GLshort r, GLshort q)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR4F(attr, (GLfloat) s, (GLfloat) t, (GLfloat) r, (GLfloat) q);
+}
+
+static void GLAPIENTRY
+TAG(MultiTexCoord4sv)(GLenum target, const GLshort *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint attr = (target & 0x7) + VBO_ATTRIB_TEX0;
+   ATTR4F(attr, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2], (GLfloat) v[3]);
+}
+
+
+static void GLAPIENTRY
+TAG(EvalCoord2dv)(const GLdouble *u)
+{
+   TAG(EvalCoord2f)((GLfloat) u[0], (GLfloat) u[1]);
+}
+
+static void GLAPIENTRY
+TAG(EvalCoord2d)(GLdouble u, GLdouble v)
+{
+   TAG(EvalCoord2f)((GLfloat) u, (GLfloat) v);
+}
+
+static void GLAPIENTRY
+TAG(EvalCoord1dv)(const GLdouble *u)
+{
+   TAG(EvalCoord1f)((GLfloat) *u);
+}
+
+static void GLAPIENTRY
+TAG(EvalCoord1d)(GLdouble u)
+{
+   TAG(EvalCoord1f)((GLfloat) u);
+}
+
+
+static void GLAPIENTRY
+TAG(Materialf)(GLenum face, GLenum pname, GLfloat param)
+{
+   GLfloat fparam[4];
+   fparam[0] = param;
+   TAG(Materialfv)(face, pname, fparam);
+}
+
+static void GLAPIENTRY
+TAG(Materiali)(GLenum face, GLenum pname, GLint param)
+{
+   GLfloat p[4];
+   p[0] = (GLfloat) param;
+   TAG(Materialfv)(face, pname, p);
+}
+
+static void GLAPIENTRY
+TAG(Materialiv)(GLenum face, GLenum pname, const GLint *params)
+{
+   GLfloat fparam[4];
+   switch (pname) {
+   case GL_AMBIENT:
+   case GL_DIFFUSE:
+   case GL_SPECULAR:
+   case GL_EMISSION:
+   case GL_AMBIENT_AND_DIFFUSE:
+      fparam[0] = INT_TO_FLOAT(params[0]);
+      fparam[1] = INT_TO_FLOAT(params[1]);
+      fparam[2] = INT_TO_FLOAT(params[2]);
+      fparam[3] = INT_TO_FLOAT(params[3]);
+      break;
+   case GL_SHININESS:
+      fparam[0] = (GLfloat) params[0];
+      break;
+   case GL_COLOR_INDEXES:
+      fparam[0] = (GLfloat) params[0];
+      fparam[1] = (GLfloat) params[1];
+      fparam[2] = (GLfloat) params[2];
+      break;
+   default:
+      ;
+   }
+   TAG(Materialfv)(face, pname, fparam);
+}
+
+
+static void GLAPIENTRY
+TAG(SecondaryColor3b)(GLbyte red, GLbyte green, GLbyte blue)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_COLOR1, BYTE_TO_FLOAT(red),
+          BYTE_TO_FLOAT(green),
+          BYTE_TO_FLOAT(blue));
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColor3d)(GLdouble red, GLdouble green, GLdouble blue)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_COLOR1, (GLfloat) red, (GLfloat) green, (GLfloat) blue);
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColor3i)(GLint red, GLint green, GLint blue)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_COLOR1, INT_TO_FLOAT(red),
+          INT_TO_FLOAT(green),
+          INT_TO_FLOAT(blue));
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColor3s)(GLshort red, GLshort green, GLshort blue)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_COLOR1, SHORT_TO_FLOAT(red),
+          SHORT_TO_FLOAT(green),
+          SHORT_TO_FLOAT(blue));
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColor3ui)(GLuint red, GLuint green, GLuint blue)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_COLOR1, UINT_TO_FLOAT(red),
+          UINT_TO_FLOAT(green),
+          UINT_TO_FLOAT(blue));
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColor3us)(GLushort red, GLushort green, GLushort blue)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_COLOR1, USHORT_TO_FLOAT(red),
+          USHORT_TO_FLOAT(green),
+          USHORT_TO_FLOAT(blue));
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColor3ub)(GLubyte red, GLubyte green, GLubyte blue)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_COLOR1, UBYTE_TO_FLOAT(red),
+          UBYTE_TO_FLOAT(green),
+          UBYTE_TO_FLOAT(blue));
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColor3bv)(const GLbyte *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_COLOR1, BYTE_TO_FLOAT(v[0]),
+         BYTE_TO_FLOAT(v[1]),
+         BYTE_TO_FLOAT(v[2]));
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColor3dv)(const GLdouble *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_COLOR1, (GLfloat) v[0], (GLfloat) v[1], (GLfloat) v[2]);
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColor3iv)(const GLint *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_COLOR1, INT_TO_FLOAT(v[0]),
+         INT_TO_FLOAT(v[1]),
+         INT_TO_FLOAT(v[2]));
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColor3sv)(const GLshort *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_COLOR1, SHORT_TO_FLOAT(v[0]),
+         SHORT_TO_FLOAT(v[1]),
+         SHORT_TO_FLOAT(v[2]));
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColor3uiv)(const GLuint *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_COLOR1, UINT_TO_FLOAT(v[0]),
+         UINT_TO_FLOAT(v[1]),
+         UINT_TO_FLOAT(v[2]));
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColor3usv)(const GLushort *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_COLOR1, USHORT_TO_FLOAT(v[0]),
+         USHORT_TO_FLOAT(v[1]),
+         USHORT_TO_FLOAT(v[2]));
+}
+
+static void GLAPIENTRY
+TAG(SecondaryColor3ubv)(const GLubyte *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ATTR3F(VBO_ATTRIB_COLOR1, UBYTE_TO_FLOAT(v[0]),
+         UBYTE_TO_FLOAT(v[1]),
+         UBYTE_TO_FLOAT(v[2]));
+}
+
+#endif /* HW_SELECT_MODE */
+
 #undef ATTR1FV
 #undef ATTR2FV
 #undef ATTR3FV
@@ -3257,5 +3389,9 @@ TAG(VertexAttribI4usv)(GLuint index, const GLushort *v)
 #undef ATTR4F
 
 #undef ATTR_UI
+
+#ifdef SUPPRESS_STATIC
+#undef static
+#endif
 
 #undef MAT

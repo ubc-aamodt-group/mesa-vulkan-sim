@@ -26,12 +26,13 @@
 
 #include "pipe/p_state.h"
 
-#ifndef _WIN32
-#include <wsl/winadapter.h>
-#endif
+#include "d3d12_common.h"
 
-#define D3D12_IGNORE_SDK_LAYERS
-#include <directx/d3d12.h>
+#ifdef _GAMING_XBOX
+typedef D3D12_DEPTH_STENCIL_DESC1 d3d12_depth_stencil_desc_type;
+#else
+typedef D3D12_DEPTH_STENCIL_DESC2 d3d12_depth_stencil_desc_type;
+#endif
 
 struct d3d12_context;
 struct d3d12_root_signature;
@@ -57,7 +58,8 @@ struct d3d12_blend_state {
 };
 
 struct d3d12_depth_stencil_alpha_state {
-   D3D12_DEPTH_STENCIL_DESC desc;
+   d3d12_depth_stencil_desc_type desc;
+   bool backface_enabled;
 };
 
 struct d3d12_gfx_pipeline_state {
@@ -78,7 +80,12 @@ struct d3d12_gfx_pipeline_state {
    DXGI_FORMAT rtv_formats[8];
    DXGI_FORMAT dsv_format;
    D3D12_INDEX_BUFFER_STRIP_CUT_VALUE ib_strip_cut_value;
-   enum pipe_prim_type prim_type;
+   enum mesa_prim prim_type;
+};
+
+struct d3d12_compute_pipeline_state {
+   ID3D12RootSignature *root_signature;
+   struct d3d12_shader *stage;
 };
 
 DXGI_FORMAT
@@ -100,5 +107,18 @@ void
 d3d12_gfx_pipeline_state_cache_invalidate_shader(struct d3d12_context *ctx,
                                                  enum pipe_shader_type stage,
                                                  struct d3d12_shader_selector *selector);
+
+void
+d3d12_compute_pipeline_state_cache_init(struct d3d12_context *ctx);
+
+void
+d3d12_compute_pipeline_state_cache_destroy(struct d3d12_context *ctx);
+
+ID3D12PipelineState *
+d3d12_get_compute_pipeline_state(struct d3d12_context *ctx);
+
+void
+d3d12_compute_pipeline_state_cache_invalidate_shader(struct d3d12_context *ctx,
+                                                     struct d3d12_shader_selector *selector);
 
 #endif

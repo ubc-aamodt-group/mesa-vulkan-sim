@@ -30,95 +30,75 @@
 
 #include "pipe/p_context.h"
 
-#include "freedreno_texture.h"
 #include "freedreno_resource.h"
+#include "freedreno_texture.h"
 
 #include "fd6_context.h"
-#include "fd6_format.h"
+#include "fdl/fd6_format_table.h"
+
+
+BEGINC;
+
+/* Border color layout is diff from a4xx/a5xx.. if it turns out to be
+ * the same as a6xx then move this somewhere common ;-)
+ *
+ * Entry layout looks like (total size, 0x80 bytes):
+ */
+
+struct PACKED fd6_bcolor_entry {
+   uint32_t fp32[4];
+   uint16_t ui16[4];
+   int16_t si16[4];
+   uint16_t fp16[4];
+   uint16_t rgb565;
+   uint16_t rgb5a1;
+   uint16_t rgba4;
+   uint8_t __pad0[2];
+   uint8_t ui8[4];
+   int8_t si8[4];
+   uint32_t rgb10a2;
+   uint32_t z24;
+   uint16_t srgb[4]; /* appears to duplicate fp16[], but clamped, used for srgb */
+   uint8_t __pad1[56];
+};
+
+#define FD6_BORDER_COLOR_SIZE sizeof(struct fd6_bcolor_entry)
+#define FD6_MAX_BORDER_COLORS 256
 
 struct fd6_sampler_stateobj {
-	struct pipe_sampler_state base;
-	uint32_t texsamp0, texsamp1, texsamp2, texsamp3;
-	bool saturate_s, saturate_t, saturate_r;
-	bool needs_border;
-	uint16_t seqno;
+   struct pipe_sampler_state base;
+   uint32_t texsamp0, texsamp1, texsamp2, texsamp3;
+   uint16_t seqno;
 };
 
 static inline struct fd6_sampler_stateobj *
 fd6_sampler_stateobj(struct pipe_sampler_state *samp)
 {
-	return (struct fd6_sampler_stateobj *)samp;
+   return (struct fd6_sampler_stateobj *)samp;
 }
 
 struct fd6_pipe_sampler_view {
-	struct pipe_sampler_view base;
-	uint32_t texconst0, texconst1, texconst2, texconst3, texconst5;
-	uint32_t texconst6, texconst7, texconst8, texconst9, texconst10, texconst11;
-	uint32_t offset1, offset2;
-	struct fd_resource *ptr1, *ptr2;
-	uint16_t seqno;
+   struct pipe_sampler_view base;
+   struct fd_resource *ptr1, *ptr2;
+   uint16_t seqno;
+
+   /* TEX_CONST descriptor, with just offsets from the BOs in the iova dwords. */
+   uint32_t descriptor[FDL6_TEX_CONST_DWORDS];
+
+   /* For detecting when a resource has transitioned from UBWC compressed
+    * to uncompressed, which means the sampler state needs to be updated
+    */
+   uint16_t rsc_seqno;
 };
 
 static inline struct fd6_pipe_sampler_view *
 fd6_pipe_sampler_view(struct pipe_sampler_view *pview)
 {
-	return (struct fd6_pipe_sampler_view *)pview;
+   return (struct fd6_pipe_sampler_view *)pview;
 }
 
 void fd6_texture_init(struct pipe_context *pctx);
 void fd6_texture_fini(struct pipe_context *pctx);
-
-static inline enum a6xx_tex_type
-fd6_tex_type(unsigned target)
-{
-	switch (target) {
-	default:
-		assert(0);
-	case PIPE_BUFFER:
-	case PIPE_TEXTURE_1D:
-	case PIPE_TEXTURE_1D_ARRAY:
-		return A6XX_TEX_1D;
-	case PIPE_TEXTURE_RECT:
-	case PIPE_TEXTURE_2D:
-	case PIPE_TEXTURE_2D_ARRAY:
-		return A6XX_TEX_2D;
-	case PIPE_TEXTURE_3D:
-		return A6XX_TEX_3D;
-	case PIPE_TEXTURE_CUBE:
-	case PIPE_TEXTURE_CUBE_ARRAY:
-		return A6XX_TEX_CUBE;
-	}
-}
-
-static inline unsigned
-fd6_border_color_offset(struct fd_context *ctx, enum pipe_shader_type type,
-		struct fd_texture_stateobj *tex)
-{
-	/* Currently we put the FS border-color state after VS.  Possibly
-	 * we could swap the order.
-	 *
-	 * This will need update for HS/DS/GS
-	 */
-	if (type != PIPE_SHADER_FRAGMENT)
-		return 0;
-
-	unsigned needs_border = false;
-
-	for (unsigned i = 0; i < tex->num_samplers; i++) {
-		if (!tex->samplers[i])
-			continue;
-
-		struct fd6_sampler_stateobj *sampler =
-			fd6_sampler_stateobj(tex->samplers[i]);
-
-		needs_border |= sampler->needs_border;
-	}
-
-	if (!needs_border)
-		return 0;
-
-	return ctx->tex[PIPE_SHADER_VERTEX].num_samplers;
-}
 
 /*
  * Texture stateobj:
@@ -130,46 +110,26 @@ fd6_border_color_offset(struct fd_context *ctx, enum pipe_shader_type type,
  */
 
 struct fd6_texture_key {
-	struct {
-		/* We need to track the seqno of the rsc as well as of the
-		 * sampler view, because resource shadowing/etc can result
-		 * that the underlying bo changes (which means the previous
-		 * state was no longer valid.
-		 */
-		uint16_t rsc_seqno;
-		uint16_t seqno;
-	} view[16];
-	struct {
-		uint16_t seqno;
-	} samp[16];
-	uint8_t type;
-	uint8_t bcolor_offset;
+   uint16_t view_seqno[16];
+   uint16_t samp_seqno[16];
+   uint8_t type;
 };
 
 struct fd6_texture_state {
-	struct pipe_reference reference;
-	struct fd6_texture_key key;
-	struct fd_ringbuffer *stateobj;
-	bool needs_border;
+   struct fd6_texture_key key;
+   struct fd_ringbuffer *stateobj;
+   /**
+    * Track the rsc seqno's associated with the texture views so
+    * we know what to invalidate when a rsc is rebound when the
+    * underlying bo changes.  (For example, demotion from UBWC.)
+    */
+   uint16_t view_rsc_seqno[16];
+   bool invalidate;
 };
 
-struct fd6_texture_state * fd6_texture_state(struct fd_context *ctx,
-		enum pipe_shader_type type, struct fd_texture_stateobj *tex);
+struct fd6_texture_state *
+fd6_texture_state(struct fd_context *ctx, enum pipe_shader_type type) assert_dt;
 
-/* not called directly: */
-void __fd6_texture_state_describe(char* buf, const struct fd6_texture_state *tex);
-void __fd6_texture_state_destroy(struct fd6_texture_state *tex);
-
-static inline void
-fd6_texture_state_reference(struct fd6_texture_state **ptr, struct fd6_texture_state *tex)
-{
-	struct fd6_texture_state *old_tex = *ptr;
-
-	if (pipe_reference_described(&(*ptr)->reference, &tex->reference,
-			(debug_reference_descriptor)__fd6_texture_state_describe))
-		__fd6_texture_state_destroy(old_tex);
-
-	*ptr = tex;
-}
+ENDC;
 
 #endif /* FD6_TEXTURE_H_ */

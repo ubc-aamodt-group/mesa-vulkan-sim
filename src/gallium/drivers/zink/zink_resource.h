@@ -24,55 +24,22 @@
 #ifndef ZINK_RESOURCE_H
 #define ZINK_RESOURCE_H
 
-struct pipe_screen;
-struct sw_displaytarget;
-struct zink_batch;
+#include "zink_types.h"
 
-#include "util/u_transfer.h"
+#define ZINK_MAP_TEMPORARY (PIPE_MAP_DRV_PRV << 0)
+#define ZINK_BIND_SAMPLER_DESCRIPTOR (1u << 26)
+#define ZINK_BIND_RESOURCE_DESCRIPTOR (1u << 27)
+#define ZINK_BIND_DESCRIPTOR (ZINK_BIND_SAMPLER_DESCRIPTOR | ZINK_BIND_RESOURCE_DESCRIPTOR)
+#define ZINK_BIND_MUTABLE (1u << 28)
+#define ZINK_BIND_DMABUF (1u << 29)
+#define ZINK_BIND_TRANSIENT (1u << 30) //transient fb attachment
+#define ZINK_BIND_VIDEO (1u << 31)
 
-#include <vulkan/vulkan.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-#define ZINK_RESOURCE_ACCESS_READ 1
-#define ZINK_RESOURCE_ACCESS_WRITE 16
-
-struct zink_resource {
-   struct pipe_resource base;
-
-   enum pipe_format internal_format:16;
-
-   union {
-      VkBuffer buffer;
-      struct {
-         VkFormat format;
-         VkImage image;
-         VkImageLayout layout;
-         VkImageAspectFlags aspect;
-         bool optimal_tiling;
-      };
-   };
-   VkDeviceMemory mem;
-   VkDeviceSize offset, size;
-
-   struct sw_displaytarget *dt;
-   unsigned dt_stride;
-
-   /* this has to be atomic for fence access, so we can't use a bitmask and make everything neat */
-   uint8_t batch_uses[4];
-   bool needs_xfb_barrier;
-};
-
-struct zink_transfer {
-   struct pipe_transfer base;
-   struct pipe_resource *staging_res;
-};
-
-static inline struct zink_resource *
-zink_resource(struct pipe_resource *r)
-{
-   return (struct zink_resource *)r;
-}
-
-void
+bool
 zink_screen_resource_init(struct pipe_screen *pscreen);
 
 void
@@ -82,7 +49,153 @@ void
 zink_get_depth_stencil_resources(struct pipe_resource *res,
                                  struct zink_resource **out_z,
                                  struct zink_resource **out_s);
+VkMappedMemoryRange
+zink_resource_init_mem_range(struct zink_screen *screen, struct zink_resource_object *obj, VkDeviceSize offset, VkDeviceSize size);
+void
+zink_resource_setup_transfer_layouts(struct zink_context *ctx, struct zink_resource *src, struct zink_resource *dst);
 
 void
-zink_resource_setup_transfer_layouts(struct zink_batch *batch, struct zink_resource *src, struct zink_resource *dst);
+zink_destroy_resource_object(struct zink_screen *screen, struct zink_resource_object *resource_object);
+
+void
+debug_describe_zink_resource_object(char *buf, const struct zink_resource_object *ptr);
+
+static inline void
+zink_resource_object_reference(struct zink_screen *screen,
+                             struct zink_resource_object **dst,
+                             struct zink_resource_object *src)
+{
+   struct zink_resource_object *old_dst = dst ? *dst : NULL;
+
+   if (pipe_reference_described(old_dst ? &old_dst->reference : NULL, &src->reference,
+                                (debug_reference_descriptor)debug_describe_zink_resource_object))
+      zink_destroy_resource_object(screen, old_dst);
+   if (dst) *dst = src;
+}
+
+bool
+zink_resource_object_init_storage(struct zink_context *ctx, struct zink_resource *res);
+bool
+zink_resource_object_init_mutable(struct zink_context *ctx, struct zink_resource *res);
+
+VkDeviceAddress
+zink_resource_get_address(struct zink_screen *screen, struct zink_resource *res);
+
+static ALWAYS_INLINE bool
+zink_resource_has_binds(const struct zink_resource *res)
+{
+   return res->all_binds > 0;
+}
+
+static ALWAYS_INLINE  bool
+zink_is_swapchain(const struct zink_resource *res)
+{
+   return res->swapchain;
+}
+
+bool
+zink_resource_copy_box_intersects(struct zink_resource *res, unsigned level, const struct pipe_box *box);
+void
+zink_resource_copy_box_add(struct zink_context *ctx, struct zink_resource *res, unsigned level, const struct pipe_box *box);
+void
+zink_resource_copies_reset(struct zink_resource *res);
+
+#include "zink_batch.h"
+#include "zink_bo.h"
+#include "zink_kopper.h"
+
+static inline bool
+zink_resource_usage_is_unflushed(const struct zink_resource *res)
+{
+   return zink_bo_has_unflushed_usage(res->obj->bo);
+}
+
+static inline bool
+zink_resource_usage_is_unflushed_write(const struct zink_resource *res)
+{
+   return zink_batch_usage_is_unflushed(res->obj->bo->writes.u);
+}
+
+
+static inline bool
+zink_resource_usage_matches(const struct zink_resource *res, const struct zink_batch_state *bs)
+{
+   return zink_bo_usage_matches(res->obj->bo, bs);
+}
+
+static inline bool
+zink_resource_has_usage(const struct zink_resource *res)
+{
+   return zink_bo_has_usage(res->obj->bo);
+}
+
+static inline bool
+zink_resource_has_unflushed_usage(const struct zink_resource *res)
+{
+   return zink_bo_has_unflushed_usage(res->obj->bo);
+}
+
+static inline bool
+zink_resource_usage_check_completion(struct zink_screen *screen, struct zink_resource *res, enum zink_resource_access access)
+{
+   return zink_bo_usage_check_completion(screen, res->obj->bo, access);
+}
+
+static inline bool
+zink_resource_usage_check_completion_fast(struct zink_screen *screen, struct zink_resource *res, enum zink_resource_access access)
+{
+   return zink_bo_usage_check_completion_fast(screen, res->obj->bo, access);
+}
+
+static inline void
+zink_resource_usage_try_wait(struct zink_context *ctx, struct zink_resource *res, enum zink_resource_access access)
+{
+   zink_bo_usage_try_wait(ctx, res->obj->bo, access);
+}
+
+static inline void
+zink_resource_usage_wait(struct zink_context *ctx, struct zink_resource *res, enum zink_resource_access access)
+{
+   zink_bo_usage_wait(ctx, res->obj->bo, access);
+}
+
+static inline void
+zink_resource_usage_set(struct zink_resource *res, struct zink_batch_state *bs, bool write)
+{
+   zink_bo_usage_set(res->obj->bo, bs, write);
+}
+
+static inline bool
+zink_resource_object_usage_unset(struct zink_resource_object *obj, struct zink_batch_state *bs)
+{
+   return zink_bo_usage_unset(obj->bo, bs);
+}
+
+static inline void
+zink_batch_resource_usage_set(struct zink_batch *batch, struct zink_resource *res, bool write, bool is_buffer)
+{
+   if (!is_buffer) {
+      if (res->obj->dt) {
+         VkSemaphore acquire = zink_kopper_acquire_submit(zink_screen(batch->state->ctx->base.screen), res);
+         if (acquire)
+            util_dynarray_append(&batch->state->acquires, VkSemaphore, acquire);
+      }
+      if (write && !res->obj->is_buffer) {
+         if (!res->valid && res->fb_bind_count)
+            batch->state->ctx->rp_loadop_changed = true;
+         res->valid = true;
+      }
+   }
+   zink_resource_usage_set(res, batch->state, write);
+
+   batch->has_work = true;
+}
+
+void
+zink_debug_mem_print_stats(struct zink_screen *screen);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif

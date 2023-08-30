@@ -36,6 +36,9 @@
 #include "shaderimage.h"
 #include "texcompress.h"
 #include "textureview.h"
+#include "api_exec_decl.h"
+
+#include "state_tracker/st_format.h"
 
 static bool
 _is_renderable(struct gl_context *ctx, GLenum internalformat)
@@ -129,6 +132,36 @@ _legal_parameters(struct gl_context *ctx, GLenum target, GLenum internalformat,
    switch(pname){
    case GL_SAMPLES:
    case GL_NUM_SAMPLE_COUNTS:
+      break;
+
+   case GL_TEXTURE_REDUCTION_MODE_ARB:
+      if (!_mesa_has_ARB_texture_filter_minmax(ctx)) {
+         _mesa_error(ctx, GL_INVALID_ENUM,
+                     "glGetInternalformativ(pname=%s)",
+                     _mesa_enum_to_string(pname));
+         return false;
+      }
+      break;
+
+   case GL_NUM_VIRTUAL_PAGE_SIZES_ARB:
+   case GL_VIRTUAL_PAGE_SIZE_X_ARB:
+   case GL_VIRTUAL_PAGE_SIZE_Y_ARB:
+   case GL_VIRTUAL_PAGE_SIZE_Z_ARB:
+      if (!_mesa_has_ARB_sparse_texture(ctx)) {
+         _mesa_error(ctx, GL_INVALID_ENUM,
+                     "glGetInternalformativ(pname=%s)",
+                     _mesa_enum_to_string(pname));
+         return false;
+      }
+      break;
+
+   case GL_CLEAR_TEXTURE:
+      if (!_mesa_has_ARB_clear_texture(ctx)) {
+         _mesa_error(ctx, GL_INVALID_ENUM,
+                     "glGetInternalformativ(pname=%s)",
+                     _mesa_enum_to_string(pname));
+         return false;
+      }
       break;
 
    case GL_SRGB_DECODE_ARB:
@@ -313,6 +346,10 @@ _set_default_response(GLenum pname, GLint buffer[16])
    case GL_TEXTURE_COMPRESSED_BLOCK_HEIGHT:
    case GL_TEXTURE_COMPRESSED_BLOCK_SIZE:
    case GL_NUM_TILING_TYPES_EXT:
+   case GL_NUM_VIRTUAL_PAGE_SIZES_ARB:
+   case GL_VIRTUAL_PAGE_SIZE_X_ARB:
+   case GL_VIRTUAL_PAGE_SIZE_Y_ARB:
+   case GL_VIRTUAL_PAGE_SIZE_Z_ARB:
       buffer[0] = 0;
       break;
 
@@ -361,6 +398,7 @@ _set_default_response(GLenum pname, GLint buffer[16])
    case GL_SIMULTANEOUS_TEXTURE_AND_DEPTH_WRITE:
    case GL_SIMULTANEOUS_TEXTURE_AND_STENCIL_WRITE:
    case GL_CLEAR_BUFFER:
+   case GL_CLEAR_TEXTURE:
    case GL_TEXTURE_VIEW:
    case GL_VIEW_COMPATIBILITY_CLASS:
       buffer[0] = GL_NONE;
@@ -375,6 +413,7 @@ _set_default_response(GLenum pname, GLint buffer[16])
    case GL_STENCIL_RENDERABLE:
    case GL_MIPMAP:
    case GL_TEXTURE_COMPRESSED:
+   case GL_TEXTURE_REDUCTION_MODE_ARB:
       buffer[0] = GL_FALSE;
       break;
 
@@ -411,7 +450,7 @@ _is_target_supported(struct gl_context *ctx, GLenum target)
       break;
 
    case GL_TEXTURE_CUBE_MAP:
-      if (ctx->API != API_OPENGL_CORE && !_mesa_has_ARB_texture_cube_map(ctx))
+      if (!_mesa_is_desktop_gl(ctx))
          return false;
       break;
 
@@ -496,7 +535,8 @@ _is_resource_supported(struct gl_context *ctx, GLenum target,
          return false;
 
       /* additional checks for depth textures */
-      if (!_mesa_legal_texture_base_format_for_target(ctx, target, internalformat))
+      if (!_mesa_legal_texture_base_format_for_target(ctx, target, internalformat) &&
+          !(pname == GL_CLEAR_TEXTURE && _mesa_is_depth_or_stencil_format(internalformat)))
          return false;
 
       /* additional checks for compressed textures */
@@ -582,8 +622,8 @@ _is_internalformat_supported(struct gl_context *ctx, GLenum target,
    }
 
    /* Let the driver have the final word */
-   ctx->Driver.QueryInternalFormat(ctx, target, internalformat,
-                                   GL_INTERNALFORMAT_SUPPORTED, buffer);
+   st_QueryInternalFormat(ctx, target, internalformat,
+                          GL_INTERNALFORMAT_SUPPORTED, buffer);
 
    return (buffer[0] == GL_TRUE);
 }
@@ -705,6 +745,7 @@ _mesa_query_internal_format_default(struct gl_context *ctx, GLenum target,
    case GL_SIMULTANEOUS_TEXTURE_AND_DEPTH_WRITE:
    case GL_SIMULTANEOUS_TEXTURE_AND_STENCIL_WRITE:
    case GL_CLEAR_BUFFER:
+   case GL_CLEAR_TEXTURE:
    case GL_TEXTURE_VIEW:
    case GL_TEXTURE_SHADOW:
    case GL_TEXTURE_GATHER:
@@ -830,12 +871,35 @@ _get_min_dimensions(GLenum pname)
    }
 }
 
+static bool
+_is_generic_compressed_format(const struct gl_context *ctx,
+                              GLenum intFormat)
+{
+   switch (intFormat) {
+   case GL_COMPRESSED_SRGB:
+   case GL_COMPRESSED_SRGB_ALPHA:
+   case GL_COMPRESSED_SLUMINANCE:
+   case GL_COMPRESSED_SLUMINANCE_ALPHA:
+      return _mesa_has_EXT_texture_sRGB(ctx);
+   case GL_COMPRESSED_RG:
+   case GL_COMPRESSED_RED:
+      return _mesa_is_gles(ctx) ?
+             _mesa_has_EXT_texture_rg(ctx) :
+             _mesa_has_ARB_texture_rg(ctx);
+   case GL_COMPRESSED_RGB:
+   case GL_COMPRESSED_RGBA:
+      return true;
+   default:
+      return false;
+   }
+}
+
 /*
  * Similar to teximage.c:check_multisample_target, but independent of the
  * dimensions.
  */
-static bool
-_is_multisample_target(GLenum target)
+bool
+_mesa_is_multisample_target(GLenum target)
 {
    switch(target) {
    case GL_TEXTURE_2D_MULTISAMPLE:
@@ -862,8 +926,6 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
       _mesa_error(ctx, GL_INVALID_OPERATION, "glGetInternalformativ");
       return;
    }
-
-   assert(ctx->Driver.QueryInternalFormat != NULL);
 
    if (!_legal_parameters(ctx, target, internalformat, pname, bufSize, params))
       return;
@@ -909,13 +971,13 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
        * Since OpenGL ES 3.1 adds support for multisampled integer formats, we
        * have to check the version for 30 exactly.
        */
-      if (pname == GL_NUM_SAMPLE_COUNTS && ctx->API == API_OPENGLES2 &&
+      if (pname == GL_NUM_SAMPLE_COUNTS && _mesa_is_gles2(ctx) &&
           ctx->Version == 30 && _mesa_is_enum_format_integer(internalformat)) {
          goto end;
       }
 
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                      buffer);
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
       break;
 
    case GL_INTERNALFORMAT_SUPPORTED:
@@ -938,8 +1000,8 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
        * is called just to try to get a preferred format. If not supported,
        * GL_NONE was already returned and the driver is not called.
        */
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                      buffer);
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
       break;
 
    case GL_INTERNALFORMAT_RED_SIZE:
@@ -969,8 +1031,8 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
        * Disclaimer: I am considering that drivers use for renderbuffers the
        * same format-choice logic as for textures.
        */
-      texformat = ctx->Driver.ChooseTextureFormat(ctx, target, internalformat,
-                                                  GL_NONE /*format */, GL_NONE /* type */);
+      texformat = st_ChooseTextureFormat(ctx, target, internalformat,
+                                         GL_NONE /*format */, GL_NONE /* type */);
 
       if (texformat == MESA_FORMAT_NONE || baseformat <= 0)
          goto end;
@@ -990,8 +1052,7 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
 
       switch (pname) {
       case GL_INTERNALFORMAT_DEPTH_SIZE:
-         if (ctx->API != API_OPENGL_CORE &&
-             !_mesa_has_ARB_depth_texture(ctx) &&
+         if (!_mesa_is_desktop_gl(ctx) &&
              target != GL_RENDERBUFFER &&
              target != GL_TEXTURE_BUFFER)
             goto end;
@@ -1077,7 +1138,7 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
        * returned as MAX_HEIGHT or MAX_DEPTH */
       for (i = 0; i < 4; i++) {
          if (max_dimensions_pnames[i] == GL_SAMPLES &&
-             !_is_multisample_target(target))
+             !_mesa_is_multisample_target(target))
             continue;
 
          _mesa_GetInternalformativ(target, internalformat,
@@ -1169,23 +1230,23 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
           !_is_renderable(ctx, internalformat))
          goto end;
 
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                      buffer);
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
       break;
 
    case GL_READ_PIXELS:
    case GL_READ_PIXELS_FORMAT:
    case GL_READ_PIXELS_TYPE:
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                      buffer);
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
       break;
 
    case GL_TEXTURE_IMAGE_FORMAT:
    case GL_GET_TEXTURE_IMAGE_FORMAT:
    case GL_TEXTURE_IMAGE_TYPE:
    case GL_GET_TEXTURE_IMAGE_TYPE:
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                      buffer);
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
       break;
 
    case GL_MIPMAP:
@@ -1216,8 +1277,8 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
             goto end;
       }
 
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                      buffer);
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
       break;
 
    case GL_COLOR_ENCODING:
@@ -1236,8 +1297,8 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
          goto end;
       }
 
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                      buffer);
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
       break;
 
    case GL_SRGB_WRITE:
@@ -1246,8 +1307,8 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
          goto end;
       }
 
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                      buffer);
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
       break;
 
    case GL_SRGB_DECODE_ARB:
@@ -1258,8 +1319,8 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
          goto end;
       }
 
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                      buffer);
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
       break;
 
    case GL_FILTER:
@@ -1279,8 +1340,8 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
        * need to call the driver to know if it is CAVEAT_SUPPORT or
        * FULL_SUPPORT.
        */
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                      buffer);
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
       break;
 
    case GL_VERTEX_TEXTURE:
@@ -1303,8 +1364,8 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
       if (pname == GL_COMPUTE_TEXTURE && !_mesa_has_compute_shaders(ctx))
          goto end;
 
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                      buffer);
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
       break;
 
    case GL_TEXTURE_GATHER:
@@ -1341,8 +1402,8 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
          goto end;
       }
 
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                      buffer);
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
       break;
 
    case GL_SHADER_IMAGE_LOAD:
@@ -1360,16 +1421,16 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
           !_mesa_is_shader_image_format_supported(ctx, internalformat))
          goto end;
 
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                      buffer);
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
       break;
 
    case GL_SHADER_IMAGE_ATOMIC:
       if (!_mesa_has_ARB_shader_image_load_store(ctx))
          goto end;
 
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                      buffer);
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
       break;
 
    case GL_IMAGE_TEXEL_SIZE: {
@@ -1458,7 +1519,7 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
        * just with the purpose of getting the value.
        */
       struct gl_texture_object *tex_obj = _mesa_new_texture_object(ctx, 0, target);
-      buffer[0] = tex_obj->ImageFormatCompatibilityType;
+      buffer[0] = tex_obj->Attrib.ImageFormatCompatibilityType;
       _mesa_delete_texture_object(ctx, tex_obj);
 
       break;
@@ -1481,8 +1542,8 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
             goto end;
       }
 
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                      buffer);
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
       break;
 
    case GL_TEXTURE_COMPRESSED:
@@ -1523,9 +1584,22 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
       if (target != GL_TEXTURE_BUFFER)
          goto end;
 
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
                                       buffer);
       break;
+   case GL_CLEAR_TEXTURE: {
+      if (target == GL_TEXTURE_BUFFER ||
+          target == GL_RENDERBUFFER)
+         goto end;
+
+      if (_mesa_is_compressed_format(ctx, internalformat) ||
+          _is_generic_compressed_format(ctx, internalformat))
+         goto end;
+
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
+      break;
+   }
 
    case GL_TEXTURE_VIEW:
    case GL_VIEW_COMPATIBILITY_CLASS:
@@ -1535,8 +1609,8 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
          goto end;
 
       if (pname == GL_TEXTURE_VIEW) {
-         ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                         buffer);
+         st_QueryInternalFormat(ctx, target, internalformat, pname,
+                                buffer);
       } else {
          GLenum view_class = _mesa_texture_view_lookup_view_class(ctx,
                                                                   internalformat);
@@ -1549,8 +1623,25 @@ _mesa_GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname,
 
    case GL_NUM_TILING_TYPES_EXT:
    case GL_TILING_TYPES_EXT:
-      ctx->Driver.QueryInternalFormat(ctx, target, internalformat, pname,
-                                      buffer);
+      st_QueryInternalFormat(ctx, target, internalformat, pname,
+                             buffer);
+      break;
+
+   case GL_TEXTURE_REDUCTION_MODE_ARB:
+      if (ctx->Extensions.EXT_texture_filter_minmax)
+         buffer[0] = (GLint)1;
+      else if (ctx->Extensions.ARB_texture_filter_minmax)
+         st_QueryInternalFormat(ctx, target, internalformat, pname,
+                                buffer);
+      else
+         buffer[0] = (GLint)0;
+      break;
+
+   case GL_NUM_VIRTUAL_PAGE_SIZES_ARB:
+   case GL_VIRTUAL_PAGE_SIZE_X_ARB:
+   case GL_VIRTUAL_PAGE_SIZE_Y_ARB:
+   case GL_VIRTUAL_PAGE_SIZE_Z_ARB:
+      st_QueryInternalFormat(ctx, target, internalformat, pname, buffer);
       break;
 
    default:

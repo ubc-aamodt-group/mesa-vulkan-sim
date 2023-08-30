@@ -46,6 +46,7 @@ static int to_llvm_address_space(SpvStorageClass mode)
    case SpvStorageClassUniform:
    case SpvStorageClassUniformConstant: return 2;
    case SpvStorageClassWorkgroup: return 3;
+   case SpvStorageClassGeneric: return 4;
    default: return -1;
    }
 }
@@ -138,24 +139,15 @@ static nir_function *mangle_and_find(struct vtn_builder *b,
                                      struct vtn_type **src_types)
 {
    char *mname;
-   nir_function *found = NULL;
 
    vtn_opencl_mangle(name, const_mask, num_srcs, src_types, &mname);
+
    /* try and find in current shader first. */
-   nir_foreach_function(funcs, b->shader) {
-      if (!strcmp(funcs->name, mname)) {
-         found = funcs;
-         break;
-      }
-   }
+   nir_function *found = nir_shader_get_function_for_name(b->shader, mname);
+
    /* if not found here find in clc shader and create a decl mirroring it */
    if (!found && b->options->clc_shader && b->options->clc_shader != b->shader) {
-      nir_foreach_function(funcs, b->options->clc_shader) {
-         if (!strcmp(funcs->name, mname)) {
-            found = funcs;
-            break;
-         }
-      }
+      found = nir_shader_get_function_for_name(b->options->clc_shader, mname);
       if (found) {
          nir_function *decl = nir_function_create(b->shader, mname);
          decl->num_params = found->num_params;
@@ -287,7 +279,7 @@ handle_alu(struct vtn_builder *b, uint32_t opcode,
    nir_ssa_def *ret = nir_build_alu(&b->nb, nir_alu_op_for_opencl_opcode(b, (enum OpenCLstd_Entrypoints)opcode),
                                     srcs[0], srcs[1], srcs[2], NULL);
    if (opcode == OpenCLstd_Popcount)
-      ret = nir_u2u(&b->nb, ret, glsl_get_bit_size(dest_type->type));
+      ret = nir_u2uN(&b->nb, ret, glsl_get_bit_size(dest_type->type));
    return ret;
 }
 
@@ -495,13 +487,13 @@ handle_special(struct vtn_builder *b, uint32_t opcode,
    case OpenCLstd_UMad_hi:
       return nir_umad_hi(nb, srcs[0], srcs[1], srcs[2]);
    case OpenCLstd_SMul24:
-      return nir_imul24(nb, srcs[0], srcs[1]);
+      return nir_imul24_relaxed(nb, srcs[0], srcs[1]);
    case OpenCLstd_UMul24:
-      return nir_umul24(nb, srcs[0], srcs[1]);
+      return nir_umul24_relaxed(nb, srcs[0], srcs[1]);
    case OpenCLstd_SMad24:
-      return nir_imad24(nb, srcs[0], srcs[1], srcs[2]);
+      return nir_iadd(nb, nir_imul24_relaxed(nb, srcs[0], srcs[1]), srcs[2]);
    case OpenCLstd_UMad24:
-      return nir_umad24(nb, srcs[0], srcs[1], srcs[2]);
+      return nir_umad24_relaxed(nb, srcs[0], srcs[1], srcs[2]);
    case OpenCLstd_FClamp:
       return nir_fclamp(nb, srcs[0], srcs[1], srcs[2]);
    case OpenCLstd_SClamp:
@@ -602,9 +594,16 @@ handle_core(struct vtn_builder *b, uint32_t opcode,
       break;
    }
    case SpvOpGroupWaitEvents: {
-      src_types[0] = get_vtn_type_for_glsl_type(b, glsl_int_type());
-      if (!call_mangled_function(b, "wait_group_events", 0, num_srcs, src_types, dest_type, srcs, &ret_deref))
-         return NULL;
+      /* libclc and clang don't agree on the mangling of this function.
+       * The libclc we have uses a __local pointer but clang gives us generic
+       * pointers.  Fortunately, the whole function is just a barrier.
+       */
+      nir_scoped_barrier(&b->nb, .execution_scope = SCOPE_WORKGROUP,
+                                 .memory_scope = SCOPE_WORKGROUP,
+                                 .memory_semantics = NIR_MEMORY_ACQUIRE |
+                                                     NIR_MEMORY_RELEASE,
+                                 .memory_modes = nir_var_mem_shared |
+                                                 nir_var_mem_global);
       break;
    }
    default:
@@ -725,7 +724,7 @@ vtn_handle_opencl_vstore_half_r(struct vtn_builder *b, enum OpenCLstd_Entrypoint
 }
 
 static unsigned
-vtn_add_printf_string(struct vtn_builder *b, uint32_t id, nir_printf_info *info)
+vtn_add_printf_string(struct vtn_builder *b, uint32_t id, u_printf_info *info)
 {
    nir_deref_instr *deref = vtn_nir_deref(b, id);
 
@@ -782,8 +781,8 @@ handle_printf(struct vtn_builder *b, uint32_t opcode,
    unsigned info_idx = b->shader->printf_info_count;
 
    b->shader->printf_info = reralloc(b->shader, b->shader->printf_info,
-                                     nir_printf_info, info_idx);
-   nir_printf_info *info = &b->shader->printf_info[info_idx - 1];
+                                     u_printf_info, info_idx);
+   u_printf_info *info = &b->shader->printf_info[info_idx - 1];
 
    info->strings = NULL;
    info->string_size = 0;
@@ -811,7 +810,7 @@ handle_printf(struct vtn_builder *b, uint32_t opcode,
       glsl_struct_type(fields, num_srcs - 1, "printf", true);
 
    /* Step 3, create a variable of that type and populate its fields */
-   nir_variable *var = nir_local_variable_create(b->func->impl, struct_type, NULL);
+   nir_variable *var = nir_local_variable_create(b->nb.impl, struct_type, NULL);
    nir_deref_instr *deref_var = nir_build_deref_var(&b->nb, var);
    size_t fmt_pos = 0;
    for (unsigned i = 1; i < num_srcs; ++i) {
@@ -892,7 +891,7 @@ handle_shuffle2(struct vtn_builder *b, uint32_t opcode,
       nir_ssa_def *vmask = nir_iand(&b->nb, this_mask, nir_imm_intN_t(&b->nb, half_mask, mask->bit_size));
       nir_ssa_def *val0 = nir_vector_extract(&b->nb, input0, vmask);
       nir_ssa_def *val1 = nir_vector_extract(&b->nb, input1, vmask);
-      nir_ssa_def *sel = nir_ilt(&b->nb, this_mask, nir_imm_intN_t(&b->nb, in_elems, mask->bit_size));
+      nir_ssa_def *sel = nir_ilt_imm(&b->nb, this_mask, in_elems);
       outres[i] = nir_bcsel(&b->nb, sel, val0, val1);
    }
    return nir_vec(&b->nb, outres, out_elems);

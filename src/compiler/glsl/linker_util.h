@@ -25,8 +25,10 @@
 #define GLSL_LINKER_UTIL_H
 
 #include "util/bitset.h"
+#include "util/glheader.h"
+#include "compiler/glsl/list.h"
 
-struct gl_context;
+struct gl_constants;
 struct gl_shader_program;
 struct gl_uniform_storage;
 
@@ -70,6 +72,10 @@ linker_error(struct gl_shader_program *prog, const char *fmt, ...);
 void
 linker_warning(struct gl_shader_program *prog, const char *fmt, ...);
 
+long
+link_util_parse_program_resource_name(const GLchar *name, const size_t len,
+                                      const GLchar **out_base_name_end);
+
 bool
 link_util_should_add_buffer_variable(struct gl_shader_program *prog,
                                      struct gl_uniform_storage *uniform,
@@ -94,7 +100,7 @@ void
 link_util_check_subroutine_resources(struct gl_shader_program *prog);
 
 void
-link_util_check_uniform_resources(struct gl_context *ctx,
+link_util_check_uniform_resources(const struct gl_constants *consts,
                                   struct gl_shader_program *prog);
 
 void

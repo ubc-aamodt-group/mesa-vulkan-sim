@@ -32,31 +32,23 @@
 
 #include <xf86drm.h>
 #include "renderonly/renderonly.h"
-#include "util/u_dynarray.h"
 #include "util/bitset.h"
 #include "util/list.h"
 #include "util/sparse_array.h"
+#include "util/u_dynarray.h"
 
-#include <midgard_pack.h>
+#include "panfrost/util/pan_ir.h"
+#include "pan_pool.h"
+#include "pan_util.h"
+
+#include <genxml/gen_macros.h>
+
+#if defined(__cplusplus)
+extern "C" {
+#endif
 
 /* Driver limits */
 #define PAN_MAX_CONST_BUFFERS 16
-
-/* Transient slab size. This is a balance between fragmentation against cache
- * locality and ease of bookkeeping */
-
-#define TRANSIENT_SLAB_PAGES (16) /* 64kb */
-#define TRANSIENT_SLAB_SIZE (4096 * TRANSIENT_SLAB_PAGES)
-
-/* Maximum number of transient slabs so we don't need dynamic arrays. Most
- * interesting Mali boards are 4GB RAM max, so if the entire RAM was filled
- * with transient slabs, you could never exceed (4GB / TRANSIENT_SLAB_SIZE)
- * allocations anyway. By capping, we can use a fixed-size bitset for tracking
- * free slabs, eliminating quite a bit of complexity. We can pack the free
- * state of 8 slabs into a single byte, so for 128kb transient slabs the bitset
- * occupies a cheap 4kb of memory */
-
-#define MAX_TRANSIENT_SLABS (1024*1024 / TRANSIENT_SLAB_PAGES)
 
 /* How many power-of-two levels in the BO cache do we want? 2^12
  * minimum chosen as it is the page size that all allocations are
@@ -68,104 +60,187 @@
 /* Fencepost problem, hence the off-by-one */
 #define NR_BO_CACHE_BUCKETS (MAX_BO_CACHE_BUCKET - MIN_BO_CACHE_BUCKET + 1)
 
-/* Cache for blit shaders. Defined here so they can be cached with the device */
-
-enum pan_blit_type {
-        PAN_BLIT_FLOAT = 0,
-        PAN_BLIT_UINT,
-        PAN_BLIT_INT,
-        PAN_BLIT_NUM_TYPES,
+struct pan_blitter {
+   struct {
+      struct pan_pool *pool;
+      struct hash_table *blit;
+      struct hash_table *blend;
+      pthread_mutex_t lock;
+   } shaders;
+   struct {
+      struct pan_pool *pool;
+      struct hash_table *rsds;
+      pthread_mutex_t lock;
+   } rsds;
 };
 
-#define PAN_BLIT_NUM_TARGETS (12)
-
-struct pan_blit_shader {
-        mali_ptr shader;
-        uint32_t blend_ret_addr;
+struct pan_blend_shaders {
+   struct hash_table *shaders;
+   pthread_mutex_t lock;
 };
 
-struct pan_blit_shaders {
-        struct panfrost_bo *bo;
-        struct pan_blit_shader loads[PAN_BLIT_NUM_TARGETS][PAN_BLIT_NUM_TYPES][2];
+struct pan_indirect_dispatch {
+   struct panfrost_ubo_push push;
+   struct panfrost_bo *bin;
+   struct panfrost_bo *descs;
 };
 
-typedef uint32_t mali_pixel_format;
+/** Implementation-defined tiler features */
+struct panfrost_tiler_features {
+   /** Number of bytes per tiler bin */
+   unsigned bin_size;
 
-struct panfrost_format {
-        mali_pixel_format hw;
-        unsigned bind;
+   /** Maximum number of levels that may be simultaneously enabled.
+    * Invariant: bitcount(hierarchy_mask) <= max_levels */
+   unsigned max_levels;
+};
+
+struct panfrost_model {
+   /* GPU ID */
+   uint32_t gpu_id;
+
+   /* Marketing name for the GPU, used as the GL_RENDERER */
+   const char *name;
+
+   /* Set of associated performance counters */
+   const char *performance_counters;
+
+   /* Minimum GPU revision required for anisotropic filtering. ~0 and 0
+    * means "no revisions support anisotropy" and "all revisions support
+    * anistropy" respectively -- so checking for anisotropy is simply
+    * comparing the reivsion.
+    */
+   uint32_t min_rev_anisotropic;
+
+   /* Default tilebuffer size in bytes for the model. */
+   unsigned tilebuffer_size;
+
+   struct {
+      /* The GPU lacks the capability for hierarchical tiling, without
+       * an "Advanced Tiling Unit", instead requiring a single bin
+       * size for the entire framebuffer be selected by the driver
+       */
+      bool no_hierarchical_tiling;
+   } quirks;
 };
 
 struct panfrost_device {
-        /* For ralloc */
-        void *memctx;
+   /* For ralloc */
+   void *memctx;
 
-        int fd;
+   int fd;
 
-        /* Properties of the GPU in use */
-        unsigned arch;
-        unsigned gpu_id;
-        unsigned core_count;
-        unsigned thread_tls_alloc;
-        unsigned quirks;
+   /* Properties of the GPU in use */
+   unsigned arch;
+   unsigned gpu_id;
+   unsigned revision;
 
-        /* Table of formats, indexed by a PIPE format */
-        const struct panfrost_format *formats;
+   /* Number of shader cores */
+   unsigned core_count;
 
-        /* Bitmask of supported compressed texture formats */
-        uint32_t compressed_formats;
+   /* Range of core IDs, equal to the maximum core ID + 1. Satisfies
+    * core_id_range >= core_count.
+    */
+   unsigned core_id_range;
 
-        /* debug flags, see pan_util.h how to interpret */
-        unsigned debug;
+   /* Maximum tilebuffer size in bytes for optimal performance. */
+   unsigned optimal_tib_size;
 
-        drmVersionPtr kernel_version;
+   unsigned thread_tls_alloc;
+   struct panfrost_tiler_features tiler_features;
+   const struct panfrost_model *model;
+   bool has_afbc;
 
-        struct renderonly *ro;
+   /* Table of formats, indexed by a PIPE format */
+   const struct panfrost_format *formats;
 
-        pthread_mutex_t bo_map_lock;
-        struct util_sparse_array bo_map;
+   /* Bitmask of supported compressed texture formats */
+   uint32_t compressed_formats;
 
-        struct {
-                pthread_mutex_t lock;
+   /* debug flags, see pan_util.h how to interpret */
+   unsigned debug;
 
-                /* List containing all cached BOs sorted in LRU (Least
-                 * Recently Used) order. This allows us to quickly evict BOs
-                 * that are more than 1 second old.
-                 */
-                struct list_head lru;
+   drmVersionPtr kernel_version;
 
-                /* The BO cache is a set of buckets with power-of-two sizes
-                 * ranging from 2^12 (4096, the page size) to
-                 * 2^(12 + MAX_BO_CACHE_BUCKETS).
-                 * Each bucket is a linked list of free panfrost_bo objects. */
+   struct renderonly *ro;
 
-                struct list_head buckets[NR_BO_CACHE_BUCKETS];
-        } bo_cache;
+   pthread_mutex_t bo_map_lock;
+   struct util_sparse_array bo_map;
 
-        struct pan_blit_shaders blit_shaders;
+   struct {
+      pthread_mutex_t lock;
 
-        /* Tiler heap shared across all tiler jobs, allocated against the
-         * device since there's only a single tiler. Since this is invisible to
-         * the CPU, it's okay for multiple contexts to reference it
-         * simultaneously; by keeping on the device struct, we eliminate a
-         * costly per-context allocation. */
+      /* List containing all cached BOs sorted in LRU (Least
+       * Recently Used) order. This allows us to quickly evict BOs
+       * that are more than 1 second old.
+       */
+      struct list_head lru;
 
-        struct panfrost_bo *tiler_heap;
+      /* The BO cache is a set of buckets with power-of-two sizes
+       * ranging from 2^12 (4096, the page size) to
+       * 2^(12 + MAX_BO_CACHE_BUCKETS).
+       * Each bucket is a linked list of free panfrost_bo objects. */
+
+      struct list_head buckets[NR_BO_CACHE_BUCKETS];
+   } bo_cache;
+
+   struct pan_blitter blitter;
+   struct pan_blend_shaders blend_shaders;
+   struct pan_indirect_dispatch indirect_dispatch;
+
+   /* Tiler heap shared across all tiler jobs, allocated against the
+    * device since there's only a single tiler. Since this is invisible to
+    * the CPU, it's okay for multiple contexts to reference it
+    * simultaneously; by keeping on the device struct, we eliminate a
+    * costly per-context allocation. */
+
+   struct panfrost_bo *tiler_heap;
+
+   /* The tiler heap is shared by all contexts, and is written by tiler
+    * jobs and read by fragment job. We need to ensure that a
+    * vertex/tiler job chain from one context is not inserted between
+    * the vertex/tiler and fragment job of another context, otherwise
+    * we end up with tiler heap corruption.
+    */
+   pthread_mutex_t submit_lock;
+
+   /* Sample positions are preloaded into a write-once constant buffer,
+    * such that they can be referenced fore free later. Needed
+    * unconditionally on Bifrost, and useful for sharing with Midgard */
+
+   struct panfrost_bo *sample_positions;
 };
 
-void
-panfrost_open_device(void *memctx, int fd, struct panfrost_device *dev);
+void panfrost_open_device(void *memctx, int fd, struct panfrost_device *dev);
 
-void
-panfrost_close_device(struct panfrost_device *dev);
+void panfrost_close_device(struct panfrost_device *dev);
 
-bool
-panfrost_supports_compressed_format(struct panfrost_device *dev, unsigned fmt);
+bool panfrost_supports_compressed_format(struct panfrost_device *dev,
+                                         unsigned fmt);
+
+void panfrost_upload_sample_positions(struct panfrost_device *dev);
+
+mali_ptr panfrost_sample_positions(const struct panfrost_device *dev,
+                                   enum mali_sample_pattern pattern);
+
+unsigned panfrost_query_l2_slices(const struct panfrost_device *dev);
 
 static inline struct panfrost_bo *
 pan_lookup_bo(struct panfrost_device *dev, uint32_t gem_handle)
 {
-        return util_sparse_array_get(&dev->bo_map, gem_handle);
+   return (struct panfrost_bo *)util_sparse_array_get(&dev->bo_map, gem_handle);
 }
+
+static inline bool
+pan_is_bifrost(const struct panfrost_device *dev)
+{
+   return dev->arch >= 6 && dev->arch <= 7;
+}
+
+const struct panfrost_model *panfrost_get_model(uint32_t gpu_id);
+
+#if defined(__cplusplus)
+} // extern "C"
+#endif
 
 #endif

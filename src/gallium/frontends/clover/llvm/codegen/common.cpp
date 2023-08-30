@@ -25,14 +25,16 @@
 ///
 /// \file
 /// Codegen back-end-independent part of the construction of an executable
-/// clover::module, including kernel argument metadata extraction and
+/// clover::binary, including kernel argument metadata extraction and
 /// formatting of the pre-generated binary code in a form that can be
 /// understood by pipe drivers.
 ///
 
+#include <llvm/IR/Type.h>
 #include <llvm/Support/Allocator.h>
 
 #include "llvm/codegen.hpp"
+#include "llvm/compat.hpp"
 #include "llvm/metadata.hpp"
 
 #include "CL/cl.h"
@@ -42,7 +44,7 @@
 
 #include <clang/Basic/TargetInfo.h>
 
-using clover::module;
+using clover::binary;
 using clover::detokenize;
 using namespace clover::llvm;
 
@@ -54,22 +56,20 @@ using ::llvm::cast;
 using ::llvm::dyn_cast;
 
 namespace {
-   enum module::argument::type
+   enum binary::argument::type
    get_image_type(const std::string &type,
                   const std::string &qual) {
-      if (type == "image2d_t" && qual == "read_only")
-         return module::argument::image2d_rd;
-      else if (type == "image2d_t" && qual == "write_only")
-         return module::argument::image2d_wr;
-      else if (type == "image3d_t" && qual == "read_only")
-         return module::argument::image3d_rd;
-      else if (type == "image3d_t" && qual == "write_only")
-         return module::argument::image3d_wr;
-      else
-         unreachable("Unknown image type");
+      if (type == "image1d_t" || type == "image2d_t" || type == "image3d_t") {
+         if (qual == "read_only")
+            return binary::argument::image_rd;
+         else if (qual == "write_only")
+            return binary::argument::image_wr;
+      }
+
+      unreachable("Unsupported image type");
    }
 
-   module::arg_info create_arg_info(const std::string &arg_name,
+   binary::arg_info create_arg_info(const std::string &arg_name,
                                     const std::string &type_name,
                                     const std::string &type_qualifier,
                                     const uint64_t address_qualifier,
@@ -102,7 +102,7 @@ namespace {
       else if (access_qualifier == "read_write")
          cl_access_qualifier = CL_KERNEL_ARG_ACCESS_READ_WRITE;
 
-      return module::arg_info(arg_name, type_name, cl_type_qualifier,
+      return binary::arg_info(arg_name, type_name, cl_type_qualifier,
                               cl_address_qualifier, cl_access_qualifier);
    }
 
@@ -149,14 +149,56 @@ namespace {
       return detokenize(attributes, " ");
    }
 
-   std::vector<module::argument>
+   // Parse the type which are pointers to CL vector types with no prefix.
+   // so e.g. char/uchar, short/ushort, int/uint, long/ulong
+   // half/float/double, followed by the vector length, followed by *.
+   // uint8 is 8x32-bit integer, short4 is 4x16-bit integer etc.
+   // Since this is a pointer only path, assert the * is on the end.
+   ::llvm::Type *
+   ptr_arg_to_llvm_type(const Module &mod, std::string type_name) {
+      int len = type_name.length();
+      assert (type_name[len-1] == '*');
+      ::llvm::Type *base_type = NULL;
+      if (type_name.find("void") != std::string::npos)
+         base_type = ::llvm::Type::getVoidTy(mod.getContext());
+      else if (type_name.find("char") != std::string::npos)
+         base_type = ::llvm::Type::getInt8Ty(mod.getContext());
+      else if (type_name.find("short") != std::string::npos)
+         base_type = ::llvm::Type::getInt16Ty(mod.getContext());
+      else if (type_name.find("int") != std::string::npos)
+         base_type = ::llvm::Type::getInt32Ty(mod.getContext());
+      else if (type_name.find("long") != std::string::npos)
+         base_type = ::llvm::Type::getInt64Ty(mod.getContext());
+      else if (type_name.find("half") != std::string::npos)
+         base_type = ::llvm::Type::getHalfTy(mod.getContext());
+      else if (type_name.find("float") != std::string::npos)
+         base_type = ::llvm::Type::getFloatTy(mod.getContext());
+      else if (type_name.find("double") != std::string::npos)
+         base_type = ::llvm::Type::getDoubleTy(mod.getContext());
+
+      assert(base_type);
+      if (type_name.find("2") != std::string::npos)
+         base_type = ::llvm::FixedVectorType::get(base_type, 2);
+      else if (type_name.find("3") != std::string::npos)
+         base_type = ::llvm::FixedVectorType::get(base_type, 3);
+      else if (type_name.find("4") != std::string::npos)
+         base_type = ::llvm::FixedVectorType::get(base_type, 4);
+      else if (type_name.find("8") != std::string::npos)
+         base_type = ::llvm::FixedVectorType::get(base_type, 8);
+      else if (type_name.find("16") != std::string::npos)
+         base_type = ::llvm::FixedVectorType::get(base_type, 16);
+      return base_type;
+   }
+
+   std::vector<binary::argument>
    make_kernel_args(const Module &mod, const std::string &kernel_name,
                     const clang::CompilerInstance &c) {
-      std::vector<module::argument> args;
+      std::vector<binary::argument> args;
       const Function &f = *mod.getFunction(kernel_name);
       ::llvm::DataLayout dl(&mod);
       const auto size_type =
          dl.getSmallestLegalIntType(mod.getContext(), sizeof(cl_uint) * 8);
+      const unsigned size_align = compat::get_abi_type_alignment(dl, size_type);
 
       for (const auto &arg : f.args()) {
          const auto arg_type = arg.getType();
@@ -168,7 +210,7 @@ namespace {
          const unsigned arg_api_size = dl.getTypeAllocSize(arg_type);
 
          const unsigned target_size = dl.getTypeStoreSize(arg_type);
-         const unsigned target_align = dl.getABITypeAlignment(arg_type);
+         const unsigned target_align = compat::get_abi_type_alignment(dl, arg_type);
 
          const auto type_name = get_str_argument_metadata(f, arg,
                                                           "kernel_arg_type");
@@ -178,34 +220,34 @@ namespace {
                f, arg, "kernel_arg_access_qual");
             args.emplace_back(get_image_type(type_name, access_qual),
                               target_size, target_size,
-                              target_align, module::argument::zero_ext);
+                              target_align, binary::argument::zero_ext);
 
          } else if (type_name == "sampler_t") {
-            args.emplace_back(module::argument::sampler, arg_api_size,
+            args.emplace_back(binary::argument::sampler, arg_api_size,
                               target_size, target_align,
-                              module::argument::zero_ext);
+                              binary::argument::zero_ext);
 
          } else if (type_name == "__llvm_image_size") {
             // Image size implicit argument.
-            args.emplace_back(module::argument::scalar, sizeof(cl_uint),
+            args.emplace_back(binary::argument::scalar, sizeof(cl_uint),
                               dl.getTypeStoreSize(size_type),
-                              dl.getABITypeAlignment(size_type),
-                              module::argument::zero_ext,
-                              module::argument::image_size);
+                              size_align,
+                              binary::argument::zero_ext,
+                              binary::argument::image_size);
 
          } else if (type_name == "__llvm_image_format") {
             // Image format implicit argument.
-            args.emplace_back(module::argument::scalar, sizeof(cl_uint),
+            args.emplace_back(binary::argument::scalar, sizeof(cl_uint),
                               dl.getTypeStoreSize(size_type),
-                              dl.getABITypeAlignment(size_type),
-                              module::argument::zero_ext,
-                              module::argument::image_format);
+                              size_align,
+                              binary::argument::zero_ext,
+                              binary::argument::image_format);
 
          } else {
             // Other types.
             const auto actual_type =
                isa< ::llvm::PointerType>(arg_type) && arg.hasByValAttr() ?
-               cast< ::llvm::PointerType>(arg_type)->getElementType() : arg_type;
+               ptr_arg_to_llvm_type(mod, type_name) : arg_type;
 
             if (actual_type->isPointerTy()) {
                const unsigned address_space =
@@ -215,9 +257,13 @@ namespace {
                const auto offset =
                            static_cast<unsigned>(clang::LangAS::opencl_local);
                if (address_space == map[offset]) {
-                  args.emplace_back(module::argument::local, arg_api_size,
-                                    target_size, target_align,
-                                    module::argument::zero_ext);
+                  const auto pointee_type = ptr_arg_to_llvm_type(mod, type_name);
+
+                  args.emplace_back(binary::argument::local, arg_api_size,
+                                    target_size,
+                                    (pointee_type->isVoidTy()) ? 8 :
+                                    compat::get_abi_type_alignment(dl, pointee_type),
+                                    binary::argument::zero_ext);
                } else {
                   // XXX: Correctly handle constant address space.  There is no
                   // way for r600g to pass a handle for constant buffers back
@@ -226,19 +272,19 @@ namespace {
                   // continue treating constant buffers as global buffers
                   // until we can come up with a way to create handles for
                   // constant buffers.
-                  args.emplace_back(module::argument::global, arg_api_size,
+                  args.emplace_back(binary::argument::global, arg_api_size,
                                     target_size, target_align,
-                                    module::argument::zero_ext);
+                                    binary::argument::zero_ext);
                }
 
             } else {
-               const bool needs_sign_ext = f.getAttributes().hasAttribute(
-                  arg.getArgNo() + 1, ::llvm::Attribute::SExt);
+               const bool needs_sign_ext = f.getAttributes().hasParamAttr(
+                  arg.getArgNo(), ::llvm::Attribute::SExt);
 
-               args.emplace_back(module::argument::scalar, arg_api_size,
+               args.emplace_back(binary::argument::scalar, arg_api_size,
                                  target_size, target_align,
-                                 (needs_sign_ext ? module::argument::sign_ext :
-                                  module::argument::zero_ext));
+                                 (needs_sign_ext ? binary::argument::sign_ext :
+                                  binary::argument::zero_ext));
             }
 
             // Add kernel argument infos if built with -cl-kernel-arg-info.
@@ -256,25 +302,25 @@ namespace {
       // Append implicit arguments.  XXX - The types, ordering and
       // vector size of the implicit arguments should depend on the
       // target according to the selected calling convention.
-      args.emplace_back(module::argument::scalar, sizeof(cl_uint),
+      args.emplace_back(binary::argument::scalar, sizeof(cl_uint),
                         dl.getTypeStoreSize(size_type),
-                        dl.getABITypeAlignment(size_type),
-                        module::argument::zero_ext,
-                        module::argument::grid_dimension);
+                        size_align,
+                        binary::argument::zero_ext,
+                        binary::argument::grid_dimension);
 
-      args.emplace_back(module::argument::scalar, sizeof(cl_uint),
+      args.emplace_back(binary::argument::scalar, sizeof(cl_uint),
                         dl.getTypeStoreSize(size_type),
-                        dl.getABITypeAlignment(size_type),
-                        module::argument::zero_ext,
-                        module::argument::grid_offset);
+                        size_align,
+                        binary::argument::zero_ext,
+                        binary::argument::grid_offset);
 
       return args;
    }
 
-   module::section
+   binary::section
    make_text_section(const std::vector<char> &code) {
       const pipe_binary_program_header header { uint32_t(code.size()) };
-      module::section text { 0, module::section::text_executable,
+      binary::section text { 0, binary::section::text_executable,
                              header.num_bytes, {} };
 
       text.data.insert(text.data.end(), reinterpret_cast<const char *>(&header),
@@ -285,24 +331,24 @@ namespace {
    }
 }
 
-module
+binary
 clover::llvm::build_module_common(const Module &mod,
                                   const std::vector<char> &code,
                                   const std::map<std::string,
                                                  unsigned> &offsets,
                                   const clang::CompilerInstance &c) {
-   module m;
+   binary b;
 
    for (const auto &llvm_name : map(std::mem_fn(&Function::getName),
                                get_kernels(mod))) {
       const ::std::string name(llvm_name);
       if (offsets.count(name))
-         m.syms.emplace_back(name, kernel_attributes(mod, name),
+         b.syms.emplace_back(name, kernel_attributes(mod, name),
                              get_reqd_work_group_size(mod, name),
                              0, offsets.at(name),
                              make_kernel_args(mod, name, c));
    }
 
-   m.secs.push_back(make_text_section(code));
-   return m;
+   b.secs.push_back(make_text_section(code));
+   return b;
 }

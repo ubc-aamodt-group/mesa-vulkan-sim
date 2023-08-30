@@ -34,7 +34,7 @@
  *    Keith Whitwell <keithw@vmware.com>
  */
 
-#include "glheader.h"
+#include "util/glheader.h"
 #include "arrayobj.h"
 #include "api_arrayelt.h"
 #include "bufferobj.h"
@@ -44,6 +44,7 @@
 #include "mtypes.h"
 #include "main/dispatch.h"
 #include "varray.h"
+#include "api_exec_decl.h"
 
 typedef void (GLAPIENTRY *attrib_func)( GLuint indx, const void *data );
 
@@ -65,11 +66,11 @@ TYPE_IDX(GLenum t)
 static inline int
 vertex_format_to_index(const struct gl_vertex_format *vformat)
 {
-   if (vformat->Doubles)
+   if (vformat->User.Doubles)
       return 3;
-   else if (vformat->Integer)
+   else if (vformat->User.Integer)
       return 2;
-   else if (vformat->Normalized)
+   else if (vformat->User.Normalized)
       return 1;
    else
       return 0;
@@ -82,7 +83,7 @@ static struct _glapi_table *
 get_dispatch(void)
 {
    GET_CURRENT_CONTEXT(ctx);
-   return ctx->CurrentServerDispatch;
+   return ctx->Dispatch.Current;
 }
 
 
@@ -1394,8 +1395,8 @@ static const attrib_func AttribFuncsARB[4][4][NUM_TYPES] = {
 static inline attrib_func
 func_nv(const struct gl_vertex_format *vformat)
 {
-   return AttribFuncsNV[vformat->Normalized][vformat->Size-1]
-      [TYPE_IDX(vformat->Type)];
+   return AttribFuncsNV[vformat->User.Normalized][vformat->User.Size-1]
+      [TYPE_IDX(vformat->User.Type)];
 }
 
 
@@ -1405,8 +1406,8 @@ func_nv(const struct gl_vertex_format *vformat)
 static inline attrib_func
 func_arb(const struct gl_vertex_format *vformat)
 {
-   return AttribFuncsARB[vertex_format_to_index(vformat)][vformat->Size-1]
-      [TYPE_IDX(vformat->Type)];
+   return AttribFuncsARB[vertex_format_to_index(vformat)][vformat->User.Size-1]
+      [TYPE_IDX(vformat->User.Type)];
 }
 
 
@@ -1477,7 +1478,7 @@ _mesa_array_element(struct gl_context *ctx, GLint elt)
  * Note: this may be called during display list construction.
  */
 void GLAPIENTRY
-_ae_ArrayElement(GLint elt)
+_mesa_ArrayElement(GLint elt)
 {
    GET_CURRENT_CONTEXT(ctx);
    struct gl_vertex_array_object *vao;
@@ -1486,7 +1487,7 @@ _ae_ArrayElement(GLint elt)
     * then we call PrimitiveRestartNV and return.
     */
    if (ctx->Array.PrimitiveRestart && (elt == ctx->Array.RestartIndex)) {
-      CALL_PrimitiveRestartNV(ctx->CurrentServerDispatch, ());
+      CALL_PrimitiveRestartNV(ctx->Dispatch.Current, ());
       return;
    }
 
@@ -1496,12 +1497,4 @@ _ae_ArrayElement(GLint elt)
    _mesa_array_element(ctx, elt);
 
    _mesa_vao_unmap_arrays(ctx, vao);
-}
-
-
-void
-_mesa_install_arrayelt_vtxfmt(struct _glapi_table *disp,
-                              const GLvertexformat *vfmt)
-{
-   SET_ArrayElement(disp, vfmt->ArrayElement);
 }

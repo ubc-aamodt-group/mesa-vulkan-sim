@@ -1,8 +1,14 @@
 #!/bin/bash
+# shellcheck disable=SC1091 # The relative paths in this file only become valid at runtime.
+# shellcheck disable=SC2034
+# shellcheck disable=SC2086 # we want word splitting
+
+. "$SCRIPTS_DIR"/setup-test-env.sh
 
 BM=$CI_PROJECT_DIR/install/bare-metal
+CI_COMMON=$CI_PROJECT_DIR/install/common
 
-if [ -z "$BM_SERIAL" -a -z "$BM_SERIAL_SCRIPT" ]; then
+if [ -z "$BM_SERIAL" ] && [ -z "$BM_SERIAL_SCRIPT" ]; then
   echo "Must set BM_SERIAL OR BM_SERIAL_SCRIPT in your gitlab-runner config.toml [[runners]] environment"
   echo "BM_SERIAL:"
   echo "  This is the serial device to talk to for waiting for fastboot to be ready and logging from the kernel."
@@ -45,40 +51,50 @@ if [ -z "$BM_ROOTFS" ]; then
   exit 1
 fi
 
-if [ -z "$BM_WEBDAV_IP" -o -z "$BM_WEBDAV_PORT" ]; then
-  echo "BM_WEBDAV_IP and/or BM_WEBDAV_PORT is not set - no results will be uploaded from DUT!"
-  WEBDAV_CMDLINE=""
-else
-  WEBDAV_CMDLINE="webdav=http://$BM_WEBDAV_IP:$BM_WEBDAV_PORT"
+if echo $BM_CMDLINE | grep -q "root=/dev/nfs"; then
+  BM_FASTBOOT_NFSROOT=1
 fi
 
 set -ex
 
 # Clear out any previous run's artifacts.
 rm -rf results/
-mkdir -p results
+mkdir -p results/
 
-# Create the rootfs in a temp dir
-rsync -a --delete $BM_ROOTFS/ rootfs/
-. $BM/rootfs-setup.sh rootfs
+if [ -n "$BM_FASTBOOT_NFSROOT" ]; then
+  # Create the rootfs in the NFS directory.  rm to make sure it's in a pristine
+  # state, since it's volume-mounted on the host.
+  rsync -a --delete $BM_ROOTFS/ /nfs/
+  mkdir -p /nfs/results
+  . $BM/rootfs-setup.sh /nfs
 
-# Finally, pack it up into a cpio rootfs.  Skip the vulkan CTS since none of
-# these devices use it and it would take up space in the initrd.
-
-if [ -n "$PIGLIT_PROFILES" ]; then
-  EXCLUDE_FILTER="deqp|arb_gpu_shader5|arb_gpu_shader_fp64|arb_gpu_shader_int64|glsl-4.[0123456]0|arb_tessellation_shader"
+  # Root on NFS, no need for an inintramfs.
+  rm -f rootfs.cpio.gz
+  touch rootfs.cpio
+  gzip rootfs.cpio
 else
-  EXCLUDE_FILTER="piglit|python"
-fi
+  # Create the rootfs in a temp dir
+  rsync -a --delete $BM_ROOTFS/ rootfs/
+  . $BM/rootfs-setup.sh rootfs
 
-pushd rootfs
-find -H | \
-  egrep -v "external/(openglcts|vulkancts|amber|glslang|spirv-tools)" |
-  egrep -v "traces-db|apitrace|renderdoc" | \
-  egrep -v $EXCLUDE_FILTER | \
-  cpio -H newc -o | \
-  xz --check=crc32 -T4 - > $CI_PROJECT_DIR/rootfs.cpio.gz
-popd
+  # Finally, pack it up into a cpio rootfs.  Skip the vulkan CTS since none of
+  # these devices use it and it would take up space in the initrd.
+
+  if [ -n "$PIGLIT_PROFILES" ]; then
+    EXCLUDE_FILTER="deqp|arb_gpu_shader5|arb_gpu_shader_fp64|arb_gpu_shader_int64|glsl-4.[0123456]0|arb_tessellation_shader"
+  else
+    EXCLUDE_FILTER="piglit|python"
+  fi
+
+  pushd rootfs
+  find -H . | \
+    grep -E -v "external/(openglcts|vulkancts|amber|glslang|spirv-tools)" |
+    grep -E -v "traces-db|apitrace|renderdoc" | \
+    grep -E -v $EXCLUDE_FILTER | \
+    cpio -H newc -o | \
+    xz --check=crc32 -T4 - > $CI_PROJECT_DIR/rootfs.cpio.gz
+  popd
+fi
 
 # Make the combined kernel image and dtb for passing to fastboot.  For normal
 # Mesa development, we build the kernel and store it in the docker container
@@ -89,45 +105,57 @@ popd
 # moving that container to the runner.  So, if BM_KERNEL+BM_DTB are URLs,
 # fetch them instead of looking in the container.
 if echo "$BM_KERNEL $BM_DTB" | grep -q http; then
-  apt install -y wget
+  apt-get install -y curl
 
-  wget $BM_KERNEL -O kernel
-  wget $BM_DTB -O dtb
+  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
+      "$BM_KERNEL" -o kernel
+  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
+      "$BM_DTB" -o dtb
 
   cat kernel dtb > Image.gz-dtb
-  rm kernel dtb
+  rm kernel
 else
   cat $BM_KERNEL $BM_DTB > Image.gz-dtb
-fi
-
-abootimg \
-  --create artifacts/fastboot.img \
-  -k Image.gz-dtb \
-  -r rootfs.cpio.gz \
-  -c cmdline="$BM_CMDLINE $WEBDAV_CMDLINE"
-rm Image.gz-dtb
-
-# Start nginx to get results from DUT
-if [ -n "$WEBDAV_CMDLINE" ]; then
-  ln -s `pwd`/results /results
-  sed -i s/80/$BM_WEBDAV_PORT/g /etc/nginx/sites-enabled/default
-  sed -i s/www-data/root/g /etc/nginx/nginx.conf
-  nginx
+  cp $BM_DTB dtb
 fi
 
 export PATH=$BM:$PATH
 
+mkdir -p artifacts
+mkbootimg.py \
+  --kernel Image.gz-dtb \
+  --ramdisk rootfs.cpio.gz \
+  --dtb dtb \
+  --cmdline "$BM_CMDLINE" \
+  $BM_MKBOOT_PARAMS \
+  --header_version 2 \
+  -o artifacts/fastboot.img
+
+rm Image.gz-dtb dtb
+
 # Start background command for talking to serial if we have one.
 if [ -n "$BM_SERIAL_SCRIPT" ]; then
-  $BM_SERIAL_SCRIPT | tee results/serial-output.txt &
+  $BM_SERIAL_SCRIPT > results/serial-output.txt &
 
   while [ ! -e results/serial-output.txt ]; do
     sleep 1
   done
 fi
 
+set +e
 $BM/fastboot_run.py \
   --dev="$BM_SERIAL" \
+  --test-timeout ${TEST_PHASE_TIMEOUT:-20} \
   --fbserial="$BM_FASTBOOT_SERIAL" \
   --powerup="$BM_POWERUP" \
   --powerdown="$BM_POWERDOWN"
+ret=$?
+set -e
+
+if [ -n "$BM_FASTBOOT_NFSROOT" ]; then
+  # Bring artifacts back from the NFS dir to the build dir where gitlab-runner
+  # will look for them.
+  cp -Rp /nfs/results/. results/
+fi
+
+exit $ret

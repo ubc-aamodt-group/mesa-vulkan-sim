@@ -19,10 +19,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
- *
- * Authors:
- *    Jason Ekstrand (jason@jlekstrand.net)
- *
  */
 
 #include "nir.h"
@@ -62,6 +58,10 @@ static unsigned
 insert_mov(nir_alu_instr *vec, unsigned start_idx, nir_shader *shader)
 {
    assert(start_idx < nir_op_infos[vec->op].num_inputs);
+
+   /* No sense generating a MOV from undef, we can just leave the dst channel undef. */
+   if (nir_src_is_undef(vec->src[start_idx].src))
+      return 1 << start_idx;
 
    nir_alu_instr *mov = nir_alu_instr_create(shader, nir_op_mov);
    nir_alu_src_copy(&mov->src[0], &vec->src[start_idx], mov);
@@ -103,7 +103,7 @@ insert_mov(nir_alu_instr *vec, unsigned start_idx, nir_shader *shader)
    if (mov->dest.write_mask) {
       nir_instr_insert_before(&vec->instr, &mov->instr);
    } else {
-      ralloc_free(mov);
+      nir_instr_free(&mov->instr);
    }
 
    return channels_handled;
@@ -139,7 +139,10 @@ try_coalesce(nir_alu_instr *vec, unsigned start_idx, void *_data)
    /* If we are going to do a reswizzle, then the vecN operation must be the
     * only use of the source value.  We also can't have any source modifiers.
     */
-   nir_foreach_use(src, vec->src[start_idx].src.ssa) {
+   nir_foreach_use_including_if(src, vec->src[start_idx].src.ssa) {
+      if (src->is_if)
+         return 0;
+
       if (src->parent_instr != &vec->instr)
          return 0;
 
@@ -147,9 +150,6 @@ try_coalesce(nir_alu_instr *vec, unsigned start_idx, void *_data)
       if (alu_src->abs || alu_src->negate)
          return 0;
    }
-
-   if (!list_is_empty(&vec->src[start_idx].src.ssa->if_uses))
-      return 0;
 
    if (vec->src[start_idx].src.ssa->parent_instr->type != nir_instr_type_alu)
       return 0;
@@ -253,7 +253,7 @@ nir_lower_vec_to_movs_instr(nir_builder *b, nir_instr *instr, void *data)
       reg->num_components = vec->dest.dest.ssa.num_components;
       reg->bit_size = vec->dest.dest.ssa.bit_size;
 
-      nir_ssa_def_rewrite_uses(&vec->dest.dest.ssa, nir_src_for_reg(reg));
+      nir_ssa_def_rewrite_uses_src(&vec->dest.dest.ssa, nir_src_for_reg(reg));
 
       nir_instr_rewrite_dest(&vec->instr, &vec->dest.dest,
                              nir_dest_for_reg(reg));
@@ -292,7 +292,7 @@ nir_lower_vec_to_movs_instr(nir_builder *b, nir_instr *instr, void *data)
    }
 
    nir_instr_remove(&vec->instr);
-   ralloc_free(vec);
+   nir_instr_free(&vec->instr);
 
    return true;
 }

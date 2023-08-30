@@ -19,9 +19,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
- *
- * Authors:
- *    Jason Ekstrand (jason@jlekstrand.net)
  */
 
 #include "nir.h"
@@ -77,7 +74,7 @@ set_src_live(nir_src *src, void *void_live)
    if (!src->is_ssa)
       return true;
 
-   if (src->ssa->parent_instr->type == nir_instr_type_ssa_undef)
+   if (nir_src_is_undef(*src))
       return true;   /* undefined variables are never live */
 
    BITSET_SET(live, src->ssa->index);
@@ -111,20 +108,12 @@ propagate_across_edge(nir_block *pred, nir_block *succ,
    BITSET_WORD *live = state->tmp_live;
    memcpy(live, succ->live_in, state->bitset_words * sizeof *live);
 
-   nir_foreach_instr(instr, succ) {
-      if (instr->type != nir_instr_type_phi)
-         break;
-      nir_phi_instr *phi = nir_instr_as_phi(instr);
-
+   nir_foreach_phi(phi, succ) {
       assert(phi->dest.is_ssa);
       set_ssa_def_dead(&phi->dest.ssa, live);
    }
 
-   nir_foreach_instr(instr, succ) {
-      if (instr->type != nir_instr_type_phi)
-         break;
-      nir_phi_instr *phi = nir_instr_as_phi(instr);
-
+   nir_foreach_phi(phi, succ) {
       nir_foreach_phi_src(src, phi) {
          if (src->pred == pred) {
             set_src_live(&src->src, live);
@@ -341,75 +330,4 @@ nir_ssa_defs_interfere(nir_ssa_def *a, nir_ssa_def *b)
    } else {
       return nir_ssa_def_is_live_at(b, a->parent_instr);
    }
-}
-
-/* Takes an SSA def's defs and uses and expands the live interval to cover
- * that range.  Control flow effects are handled separately.
- */
-static bool def_cb(nir_ssa_def *def, void *state)
-{
-   nir_instr_liveness *liveness = state;
-   nir_instr *instr = def->parent_instr;
-   int index = def->index;
-
-   liveness->defs[index].start = MIN2(liveness->defs[index].start, instr->index);
-
-   nir_foreach_use(src, def) {
-      liveness->defs[index].end = MAX2(liveness->defs[index].end,
-                                       src->parent_instr->index);
-   }
-
-   return true;
-}
-
-nir_instr_liveness *
-nir_live_ssa_defs_per_instr(nir_function_impl *impl)
-{
-   /* We'll use block-level live_ssa_defs to expand our per-instr ranges for
-    * control flow.
-    */
-   nir_metadata_require(impl,
-                        nir_metadata_block_index |
-                        nir_metadata_instr_index |
-                        nir_metadata_live_ssa_defs);
-
-   /* Make our struct. */
-   nir_instr_liveness *liveness = ralloc(NULL, nir_instr_liveness);
-   liveness->defs = rzalloc_array(liveness, nir_liveness_bounds,
-                                  impl->ssa_alloc);
-
-   /* Set our starts so we can use MIN2() as we accumulate bounds. */
-   for (int i = 0; i < impl->ssa_alloc; i++)
-      liveness->defs->start = ~0;
-
-   nir_foreach_block(block, impl) {
-      unsigned index;
-      BITSET_FOREACH_SET(index, block->live_in, impl->ssa_alloc) {
-         liveness->defs[index].start = MIN2(liveness->defs[index].start,
-                                            block->start_ip);
-      }
-
-      nir_foreach_instr(instr, block) {
-         nir_foreach_ssa_def(instr, def_cb, liveness);
-      };
-
-      /* track an if src's use.  We need to make sure that our value is live
-       * across the if reference, where we don't have an instr->index
-       * representing the use.  Mark it as live through the end of the block.
-       */
-      nir_if *nif = nir_block_get_following_if(block);
-      if (nif) {
-         if (nif->condition.is_ssa) {
-            liveness->defs[nif->condition.ssa->index].end = MAX2(
-               liveness->defs[nif->condition.ssa->index].end, block->end_ip);
-         }
-      }
-
-      BITSET_FOREACH_SET(index, block->live_out, impl->ssa_alloc) {
-         liveness->defs[index].end = MAX2(liveness->defs[index].end,
-                                          block->end_ip);
-      }
-   }
-
-   return liveness;
 }

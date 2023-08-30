@@ -27,8 +27,18 @@
 #include "util/anon_file.h"
 #include "anv_private.h"
 
-uint32_t
-anv_gem_create(struct anv_device *device, uint64_t size)
+static void
+stub_gem_close(struct anv_device *device, uint32_t gem_handle)
+{
+   close(gem_handle);
+}
+
+static uint32_t
+stub_gem_create(struct anv_device *device,
+                const struct intel_memory_class_instance **regions,
+                uint16_t num_regions, uint64_t size,
+                enum anv_bo_alloc_flags alloc_flags,
+                uint64_t *actual_size)
 {
    int fd = os_create_anonymous_file(size, "fake bo");
    if (fd == -1)
@@ -36,28 +46,55 @@ anv_gem_create(struct anv_device *device, uint64_t size)
 
    assert(fd != 0);
 
+   *actual_size = size;
    return fd;
 }
 
-void
-anv_gem_close(struct anv_device *device, uint32_t gem_handle)
+static void *
+stub_gem_mmap(struct anv_device *device, struct anv_bo *bo, uint64_t offset,
+              uint64_t size, VkMemoryPropertyFlags property_flags)
 {
-   close(gem_handle);
+   return mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, bo->gem_handle,
+               offset);
 }
 
-void*
-anv_gem_mmap(struct anv_device *device, uint32_t gem_handle,
-             uint64_t offset, uint64_t size, uint32_t flags)
+static VkResult
+stub_execute_simple_batch(struct anv_queue *queue,
+                          struct anv_bo *batch_bo,
+                          uint32_t batch_bo_size)
 {
-   /* Ignore flags, as they're specific to I915_GEM_MMAP. */
-   (void) flags;
+   return VK_ERROR_UNKNOWN;
+}
 
-   return mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED,
-               gem_handle, offset);
+static VkResult
+stub_queue_exec_locked(struct anv_queue *queue,
+                       uint32_t wait_count,
+                       const struct vk_sync_wait *waits,
+                       uint32_t cmd_buffer_count,
+                       struct anv_cmd_buffer **cmd_buffers,
+                       uint32_t signal_count,
+                       const struct vk_sync_signal *signals,
+                       struct anv_query_pool *perf_query_pool,
+                       uint32_t perf_query_pass)
+{
+   return VK_ERROR_UNKNOWN;
+}
+
+void *
+anv_gem_mmap(struct anv_device *device, struct anv_bo *bo, uint64_t offset,
+             uint64_t size, VkMemoryPropertyFlags property_flags)
+{
+   void *map = device->kmd_backend->gem_mmap(device, bo, offset, size,
+                                             property_flags);
+
+   if (map != MAP_FAILED)
+      VG(VALGRIND_MALLOCLIKE_BLOCK(map, size, 0, 1));
+
+   return map;
 }
 
 /* This is just a wrapper around munmap, but it also notifies valgrind that
- * this map is no longer valid.  Pair this with anv_gem_mmap().
+ * this map is no longer valid.  Pair this with gem_mmap().
  */
 void
 anv_gem_munmap(struct anv_device *device, void *p, uint64_t size)
@@ -78,20 +115,7 @@ anv_gem_userptr(struct anv_device *device, void *mem, size_t size)
 }
 
 int
-anv_gem_busy(struct anv_device *device, uint32_t gem_handle)
-{
-   return 0;
-}
-
-int
 anv_gem_wait(struct anv_device *device, uint32_t gem_handle, int64_t *timeout_ns)
-{
-   return 0;
-}
-
-int
-anv_gem_execbuffer(struct anv_device *device,
-                   struct drm_i915_gem_execbuffer2 *execbuf)
 {
    return 0;
 }
@@ -117,68 +141,6 @@ anv_gem_set_caching(struct anv_device *device, uint32_t gem_handle,
 }
 
 int
-anv_gem_set_domain(struct anv_device *device, uint32_t gem_handle,
-                   uint32_t read_domains, uint32_t write_domain)
-{
-   return 0;
-}
-
-int
-anv_gem_get_param(int fd, uint32_t param)
-{
-   unreachable("Unused");
-}
-
-uint64_t
-anv_gem_get_drm_cap(int fd, uint32_t capability)
-{
-   return 0;
-}
-
-bool
-anv_gem_get_bit6_swizzle(int fd, uint32_t tiling)
-{
-   unreachable("Unused");
-}
-
-int
-anv_gem_create_context(struct anv_device *device)
-{
-   unreachable("Unused");
-}
-
-int
-anv_gem_destroy_context(struct anv_device *device, int context)
-{
-   unreachable("Unused");
-}
-
-int
-anv_gem_set_context_param(int fd, int context, uint32_t param, uint64_t value)
-{
-   unreachable("Unused");
-}
-
-int
-anv_gem_get_context_param(int fd, int context, uint32_t param, uint64_t *value)
-{
-   unreachable("Unused");
-}
-
-bool
-anv_gem_has_context_priority(int fd)
-{
-   unreachable("Unused");
-}
-
-int
-anv_gem_gpu_get_reset_stats(struct anv_device *device,
-                            uint32_t *active, uint32_t *pending)
-{
-   unreachable("Unused");
-}
-
-int
 anv_gem_handle_to_fd(struct anv_device *device, uint32_t gem_handle)
 {
    unreachable("Unused");
@@ -190,96 +152,28 @@ anv_gem_fd_to_handle(struct anv_device *device, int fd)
    unreachable("Unused");
 }
 
-int
-anv_gem_sync_file_merge(struct anv_device *device, int fd1, int fd2)
+static int
+stub_gem_vm_bind(struct anv_device *device, struct anv_bo *bo)
 {
-   unreachable("Unused");
+   return 0;
 }
 
-int
-anv_gem_syncobj_export_sync_file(struct anv_device *device, uint32_t handle)
+static int
+stub_gem_vm_unbind(struct anv_device *device, struct anv_bo *bo)
 {
-   unreachable("Unused");
+   return 0;
 }
 
-int
-anv_gem_syncobj_import_sync_file(struct anv_device *device,
-                                 uint32_t handle, int fd)
+const struct anv_kmd_backend *anv_stub_kmd_backend_get(void)
 {
-   unreachable("Unused");
-}
-
-uint32_t
-anv_gem_syncobj_create(struct anv_device *device, uint32_t flags)
-{
-   unreachable("Unused");
-}
-
-void
-anv_gem_syncobj_destroy(struct anv_device *device, uint32_t handle)
-{
-   unreachable("Unused");
-}
-
-int
-anv_gem_syncobj_handle_to_fd(struct anv_device *device, uint32_t handle)
-{
-   unreachable("Unused");
-}
-
-uint32_t
-anv_gem_syncobj_fd_to_handle(struct anv_device *device, int fd)
-{
-   unreachable("Unused");
-}
-
-void
-anv_gem_syncobj_reset(struct anv_device *device, uint32_t handle)
-{
-   unreachable("Unused");
-}
-
-bool
-anv_gem_supports_syncobj_wait(int fd)
-{
-   return false;
-}
-
-int
-anv_gem_syncobj_wait(struct anv_device *device,
-                     const uint32_t *handles, uint32_t num_handles,
-                     int64_t abs_timeout_ns, bool wait_all)
-{
-   unreachable("Unused");
-}
-
-int
-anv_gem_reg_read(int fd, uint32_t offset, uint64_t *result)
-{
-   unreachable("Unused");
-}
-
-int
-anv_gem_syncobj_timeline_wait(struct anv_device *device,
-                              const uint32_t *handles, const uint64_t *points,
-                              uint32_t num_items, int64_t abs_timeout_ns,
-                              bool wait_all, bool wait_materialize)
-{
-   unreachable("Unused");
-}
-
-int
-anv_gem_syncobj_timeline_signal(struct anv_device *device,
-                                const uint32_t *handles, const uint64_t *points,
-                                uint32_t num_items)
-{
-   unreachable("Unused");
-}
-
-int
-anv_gem_syncobj_timeline_query(struct anv_device *device,
-                               const uint32_t *handles, uint64_t *points,
-                               uint32_t num_items)
-{
-   unreachable("Unused");
+   static const struct anv_kmd_backend stub_backend = {
+      .gem_create = stub_gem_create,
+      .gem_close = stub_gem_close,
+      .gem_mmap = stub_gem_mmap,
+      .gem_vm_bind = stub_gem_vm_bind,
+      .gem_vm_unbind = stub_gem_vm_unbind,
+      .execute_simple_batch = stub_execute_simple_batch,
+      .queue_exec_locked = stub_queue_exec_locked,
+   };
+   return &stub_backend;
 }

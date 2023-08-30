@@ -193,6 +193,11 @@ static void init_prog(struct program *p)
 		p->viewport.translate[0] = half_width + x;
 		p->viewport.translate[1] = (half_height + y) * scale + bias;
 		p->viewport.translate[2] = half_depth + z;
+
+		p->viewport.swizzle_x = PIPE_VIEWPORT_SWIZZLE_POSITIVE_X;
+		p->viewport.swizzle_y = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Y;
+		p->viewport.swizzle_z = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Z;
+		p->viewport.swizzle_w = PIPE_VIEWPORT_SWIZZLE_POSITIVE_W;
 	}
 
 	/* vertex elements state */
@@ -263,7 +268,7 @@ static void draw(struct program *p)
 
 	util_draw_vertex_buffer(p->pipe, p->cso,
 	                        p->vbuf, 0, 0,
-	                        PIPE_PRIM_TRIANGLES,
+	                        MESA_PRIM_TRIANGLES,
 	                        3,  /* verts */
 	                        2); /* attribs/vert */
 

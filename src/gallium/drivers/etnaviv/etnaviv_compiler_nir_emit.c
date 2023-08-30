@@ -77,13 +77,21 @@ static const struct etna_op_info etna_ops[] = {
 
    /* type convert */
    IOP(i2f32, I2F, 0_X_X),
+   IOP(i2i32, I2I, 0_X_X),
+   OPCT(i2i16, I2I, 0_X_X, TRUE, S16),
+   OPCT(i2i8,  I2I, 0_X_X, TRUE, S8),
    UOP(u2f32, I2F, 0_X_X),
+   UOP(u2u32, I2I, 0_X_X),
+   OPCT(u2u16, I2I, 0_X_X, TRUE, U16),
+   OPCT(u2u8,  I2I, 0_X_X, TRUE, U8),
    IOP(f2i32, F2I, 0_X_X),
+   OPCT(f2i16, F2I, 0_X_X, TRUE, S16),
+   OPCT(f2i8,  F2I, 0_X_X, TRUE, S8),
    UOP(f2u32, F2I, 0_X_X),
+   OPCT(f2u16, F2I, 0_X_X, TRUE, U16),
+   OPCT(f2u8,  F2I, 0_X_X, TRUE, U8),
    UOP(b2f32, AND, 0_X_X), /* AND with fui(1.0f) */
    UOP(b2i32, AND, 0_X_X), /* AND with 1 */
-   OPC(f2b32, CMP, 0_X_X, NE), /* != 0.0 */
-   UOPC(i2b32, CMP, 0_X_X, NE), /* != 0 */
 
    /* arithmetic */
    IOP(iadd, ADD, 0_X_1),
@@ -120,6 +128,7 @@ static const struct etna_op_info etna_ops[] = {
    IOP(ishl, LSHIFT, 0_X_1),
    IOP(ishr, RSHIFT, 0_X_1),
    UOP(ushr, RSHIFT, 0_X_1),
+   UOP(uclz, LEADZERO, 0_X_X),
 };
 
 void
@@ -164,12 +173,6 @@ etna_emit_alu(struct etna_compile *c, nir_op op, struct etna_inst_dst dst,
    case nir_op_b2i32:
       inst.src[2] = etna_immediate_int(1);
       break;
-   case nir_op_f2b32:
-      inst.src[1] = etna_immediate_float(0.0f);
-      break;
-   case nir_op_i2b32:
-      inst.src[1] = etna_immediate_int(0);
-      break;
    case nir_op_ineg:
       inst.src[0] = etna_immediate_int(0);
       src[0].neg = 1;
@@ -194,7 +197,7 @@ etna_emit_alu(struct etna_compile *c, nir_op op, struct etna_inst_dst dst,
 void
 etna_emit_tex(struct etna_compile *c, nir_texop op, unsigned texid, unsigned dst_swiz,
               struct etna_inst_dst dst, struct etna_inst_src coord,
-              struct etna_inst_src lod_bias, struct etna_inst_src compare)
+              struct etna_inst_src src1, struct etna_inst_src src2)
 {
    struct etna_inst inst = {
       .dst = dst,
@@ -203,15 +206,16 @@ etna_emit_tex(struct etna_compile *c, nir_texop op, unsigned texid, unsigned dst
       .src[0] = coord,
    };
 
-   if (lod_bias.use)
-      inst.src[1] = lod_bias;
+   if (src1.use)
+      inst.src[1] = src1;
 
-   if (compare.use)
-      inst.src[2] = compare;
+   if (src2.use)
+      inst.src[2] = src2;
 
    switch (op) {
    case nir_texop_tex: inst.opcode = INST_OPCODE_TEXLD; break;
    case nir_texop_txb: inst.opcode = INST_OPCODE_TEXLDB; break;
+   case nir_texop_txd: inst.opcode = INST_OPCODE_TEXLDD; break;
    case nir_texop_txl: inst.opcode = INST_OPCODE_TEXLDL; break;
    default:
       compile_error(c, "Unhandled NIR tex type: %d\n", op);

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import sphinx_rtd_theme
-
 #
 # The Mesa 3D Graphics Library documentation build configuration file, created by
 # sphinx-quickstart on Wed Mar 29 14:08:51 2017.
@@ -38,7 +36,14 @@ sys.path.append(os.path.abspath('_exts'))
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ['sphinx.ext.graphviz', 'formatting', 'redirects']
+extensions = [
+    'bootstrap',
+    'breathe',
+    'formatting',
+    'nir',
+    'redirects',
+    'sphinx.ext.graphviz',
+]
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -58,7 +63,7 @@ copyright = '1995-2018, Brian Paul'
 author = 'Brian Paul'
 html_show_copyright = False
 
-html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
+html_theme_path = ['.']
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -74,49 +79,30 @@ release = 'latest'
 #
 # This is also used if you do content translation via gettext catalogs.
 # Usually you set "language" from the command line for these cases.
-language = None
+language = 'en'
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This patterns also effect to html_static_path and html_extra_path
 exclude_patterns = []
 
-# The name of the Pygments (syntax highlighting) style to use.
-pygments_style = 'sphinx'
-
 # If true, `todo` and `todoList` produce output, else they produce nothing.
 todo_include_todos = False
 
 # Disable highlighting unless a language is specified, otherwise we'll get
 # python keywords highlit in literal blocks.
-highlight_language = "none"
+highlight_language = 'none'
 
+default_role = 'c:expr'
 
 # -- Options for HTML output ----------------------------------------------
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = 'sphinx_rtd_theme'
+html_theme = 'mesa3d_theme'
 
-html_favicon = "favicon.ico"
-
-# Theme options are theme-specific and customize the look and feel of a theme
-# further.  For a list of options available for each theme, see the
-# documentation.
-#
-html_theme_options = {
-  'display_version': False,
-}
-
-html_context = {
-  'display_gitlab': True,
-  'gitlab_host': 'gitlab.freedesktop.org',
-  'gitlab_user': 'mesa',
-  'gitlab_repo': 'mesa',
-  'gitlab_version': 'master',
-  'conf_py_path': '/docs/',
-}
+html_favicon = 'favicon.ico'
 
 html_copy_source = False
 
@@ -132,24 +118,26 @@ html_extra_path = [
   'libGL.txt',
   'README.UVD',
   'README.VCE',
-  'README.WIN32',
 ]
 
 html_redirects = [
-  ('gallium/drivers/freedreno', 'drivers/freedreno.html'),
-  ('gallium/drivers/freedreno/ir3-notes', 'drivers/freedreno/ir3-notes.html'),
-  ('gallium/drivers/llvmpipe', 'drivers/llvmpipe.html'),
-  ('gallium/drivers/openswr', 'drivers/openswr.html'),
-  ('gallium/drivers/openswr/faq', 'drivers/openswr/faq.html'),
-  ('gallium/drivers/openswr/knobs', 'drivers/openswr/knobs.html'),
-  ('gallium/drivers/openswr/profiling', 'drivers/openswr/profiling.html'),
-  ('gallium/drivers/openswr/usage', 'drivers/openswr/usage.html'),
-  ('gallium/drivers/zink', 'drivers/zink.html'),
-  ('llvmpipe', 'drivers/llvmpipe.html'),
-  ('postprocess', 'gallium/postprocess.html'),
-  ('vmware-guest', 'drivers/vmware-guest.html'),
   ('webmaster', 'https://www.mesa3d.org/website/'),
+  ('developers', 'https://www.mesa3d.org/developers/'),
+  ('thanks', 'https://gitlab.freedesktop.org/mesa/mesa/-/blob/amber/docs/thanks.rst'),
 ]
+
+
+# -- Options for linkcheck ------------------------------------------------
+
+linkcheck_ignore = [
+  r'specs/.*\.spec', # gets copied during the build process
+  r'news:.*', # seems linkcheck doesn't like the news: URI-scheme...
+  r'http://mesa-ci-results.jf.intel.com', # only available for Intel employees
+  r'https://gitlab.com/.*#.*', # needs JS eval
+  r'https://gitlab.freedesktop.org/.*#.*', # needs JS eval
+  r'https://github.com/.*#.*', # needs JS eval
+]
+linkcheck_exclude_documents = [r'relnotes/.*']
 
 
 # -- Options for HTMLHelp output ------------------------------------------
@@ -211,3 +199,11 @@ texinfo_documents = [
 # -- Options for Graphviz -------------------------------------------------
 
 graphviz_output_format = 'svg'
+
+# -- Options for breathe --------------------------------------------------
+breathe_projects = {
+    'mesa' : 'doxygen_xml',
+}
+breathe_default_project = 'mesa'
+breathe_show_define_initializer = True
+breathe_show_enumvalue_initializer = True

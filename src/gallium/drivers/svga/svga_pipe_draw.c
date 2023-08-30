@@ -45,7 +45,7 @@
 static enum pipe_error
 retry_draw_range_elements(struct svga_context *svga,
                           const struct pipe_draw_info *info,
-                          const struct pipe_draw_start_count *draw,
+                          const struct pipe_draw_start_count_bias *draw,
                           unsigned count)
 {
    SVGA_STATS_TIME_PUSH(svga_sws(svga), SVGA_STATS_TIME_DRAWELEMENTS);
@@ -59,7 +59,7 @@ retry_draw_range_elements(struct svga_context *svga,
 
 static enum pipe_error
 retry_draw_arrays( struct svga_context *svga,
-                   enum pipe_prim_type prim, unsigned start, unsigned count,
+                   enum mesa_prim prim, unsigned start, unsigned count,
                    unsigned start_instance, unsigned instance_count,
                    ubyte vertices_per_patch)
 {
@@ -88,11 +88,11 @@ retry_draw_auto(struct svga_context *svga,
    assert(indirect->count_from_stream_output);
    assert(info->instance_count == 1);
    /* SO drawing implies core profile and none of these prim types */
-   assert(info->mode != PIPE_PRIM_QUADS &&
-          info->mode != PIPE_PRIM_QUAD_STRIP &&
-          info->mode != PIPE_PRIM_POLYGON);
+   assert(info->mode != MESA_PRIM_QUADS &&
+          info->mode != MESA_PRIM_QUAD_STRIP &&
+          info->mode != MESA_PRIM_POLYGON);
 
-   if (info->mode == PIPE_PRIM_LINE_LOOP) {
+   if (info->mode == MESA_PRIM_LINE_LOOP) {
       /* XXX need to do a fallback */
       assert(!"draw auto fallback not supported yet");
       return PIPE_OK;
@@ -102,7 +102,7 @@ retry_draw_auto(struct svga_context *svga,
       unsigned hw_count;
 
       range.primType = svga_translate_prim(info->mode, 12, &hw_count,
-                                           info->vertices_per_patch);
+                                           svga->patch_vertices);
       range.primitiveCount = 0;
       range.indexArray.surfaceId = SVGA3D_INVALID_ID;
       range.indexArray.offset = 0;
@@ -137,11 +137,11 @@ retry_draw_indirect(struct svga_context *svga,
    assert(svga_have_sm5(svga));
    assert(indirect && indirect->buffer);
    /* indirect drawing implies core profile and none of these prim types */
-   assert(info->mode != PIPE_PRIM_QUADS &&
-          info->mode != PIPE_PRIM_QUAD_STRIP &&
-          info->mode != PIPE_PRIM_POLYGON);
+   assert(info->mode != MESA_PRIM_QUADS &&
+          info->mode != MESA_PRIM_QUAD_STRIP &&
+          info->mode != MESA_PRIM_POLYGON);
 
-   if (info->mode == PIPE_PRIM_LINE_LOOP) {
+   if (info->mode == MESA_PRIM_LINE_LOOP) {
       /* need to do a fallback */
       util_draw_indirect(&svga->pipe, info, indirect);
       return PIPE_OK;
@@ -151,7 +151,7 @@ retry_draw_indirect(struct svga_context *svga,
       unsigned hw_count;
 
       range.primType = svga_translate_prim(info->mode, 12, &hw_count,
-                                           info->vertices_per_patch);
+                                           svga->patch_vertices);
       range.primitiveCount = 0;  /* specified in indirect buffer */
       range.indexArray.surfaceId = SVGA3D_INVALID_ID;
       range.indexArray.offset = 0;
@@ -218,18 +218,13 @@ get_vcount_from_stream_output(struct svga_context *svga,
 
 static void
 svga_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
+              unsigned drawid_offset,
               const struct pipe_draw_indirect_info *indirect,
-              const struct pipe_draw_start_count *draws,
+              const struct pipe_draw_start_count_bias *draws,
               unsigned num_draws)
 {
    if (num_draws > 1) {
-      struct pipe_draw_info tmp_info = *info;
-
-      for (unsigned i = 0; i < num_draws; i++) {
-         svga_draw_vbo(pipe, &tmp_info, indirect, &draws[i], 1);
-         if (tmp_info.increment_draw_id)
-            tmp_info.drawid++;
-      }
+      util_draw_multi(pipe, info, drawid_offset, indirect, draws, num_draws);
       return;
    }
 
@@ -237,7 +232,7 @@ svga_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
       return;
 
    struct svga_context *svga = svga_context(pipe);
-   enum pipe_prim_type reduced_prim = u_reduced_prim(info->mode);
+   enum mesa_prim reduced_prim = u_reduced_prim(info->mode);
    unsigned count = draws[0].count;
    enum pipe_error ret = 0;
    boolean needed_swtnl;
@@ -246,7 +241,7 @@ svga_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
 
    svga->hud.num_draw_calls++;  /* for SVGA_QUERY_NUM_DRAW_CALLS */
 
-   if (u_reduced_prim(info->mode) == PIPE_PRIM_TRIANGLES &&
+   if (u_reduced_prim(info->mode) == MESA_PRIM_TRIANGLES &&
        svga->curr.rast->templ.cull_face == PIPE_FACE_FRONT_AND_BACK)
       goto done;
 
@@ -268,14 +263,14 @@ svga_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
     * always start from 0 for DrawArrays and does not include baseVertex for
     * DrawIndexed.
     */
-   unsigned index_bias = info->index_size ? info->index_bias : 0;
+   unsigned index_bias = info->index_size ? draws->index_bias : 0;
    if (svga->curr.vertex_id_bias != (draws[0].start + index_bias)) {
       svga->curr.vertex_id_bias = draws[0].start + index_bias;
       svga->dirty |= SVGA_NEW_VS_CONSTS;
    }
 
-   if (svga->curr.vertices_per_patch != info->vertices_per_patch) {
-      svga->curr.vertices_per_patch = info->vertices_per_patch;
+   if (svga->curr.vertices_per_patch != svga->patch_vertices) {
+      svga->curr.vertices_per_patch = svga->patch_vertices;
 
       /* If input patch size changes, we need to notifiy the TCS
        * code to reevaluate the shader variant since the
@@ -288,7 +283,7 @@ svga_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
 
    if (need_fallback_prim_restart(svga, info)) {
       enum pipe_error r;
-      r = util_draw_vbo_without_prim_restart(pipe, info, indirect, &draws[0]);
+      r = util_draw_vbo_without_prim_restart(pipe, info, drawid_offset, indirect, &draws[0]);
       assert(r == PIPE_OK);
       (void) r;
       goto done;
@@ -317,13 +312,13 @@ svga_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
 
       /* Avoid leaking the previous hwtnl bias to swtnl */
       svga_hwtnl_set_index_bias(svga->hwtnl, 0);
-      ret = svga_swtnl_draw_vbo(svga, info, indirect, &draws[0]);
+      ret = svga_swtnl_draw_vbo(svga, info, drawid_offset, indirect, &draws[0]);
    }
    else {
       if (!svga_update_state_retry(svga, SVGA_STATE_HW_DRAW)) {
          static const char *msg = "State update failed, skipping draw call";
          debug_printf("%s\n", msg);
-         pipe_debug_message(&svga->debug.callback, INFO, "%s", msg);
+         util_debug_message(&svga->debug.callback, INFO, "%s", msg);
          goto done;
       }
       svga_hwtnl_set_fillmode(svga->hwtnl, svga->curr.rast->hw_fillmode);
@@ -374,7 +369,7 @@ svga_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
       else {
          ret = retry_draw_arrays(svga, info->mode, draws[0].start, count,
                                  info->start_instance, info->instance_count,
-                                 info->vertices_per_patch);
+                                 svga->patch_vertices);
       }
    }
 

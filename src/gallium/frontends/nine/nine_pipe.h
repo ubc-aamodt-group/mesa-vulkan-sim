@@ -24,7 +24,7 @@
 #define _NINE_PIPE_H_
 
 #include "d3d9.h"
-#include "pipe/p_format.h"
+#include "util/format/u_formats.h"
 #include "pipe/p_screen.h"
 #include "pipe/p_state.h" /* pipe_box */
 #include "util/macros.h"
@@ -181,6 +181,28 @@ pipe_to_d3d9_format(enum pipe_format format)
     return nine_pipe_to_d3d9_format_map[format];
 }
 
+static inline boolean
+fetch4_compatible_format( D3DFORMAT fmt )
+{
+    /* Basically formats with only red channel are allowed (with some exceptions) */
+    static const D3DFORMAT allowed[] = { /* TODO: list incomplete */
+        D3DFMT_L8,
+        D3DFMT_L16,
+        D3DFMT_R16F,
+        D3DFMT_R32F,
+        D3DFMT_A8,
+        D3DFMT_DF16,
+        D3DFMT_DF24,
+        D3DFMT_INTZ
+    };
+    unsigned i;
+
+    for (i = 0; i < sizeof(allowed)/sizeof(D3DFORMAT); i++) {
+        if (fmt == allowed[i]) { return TRUE; }
+    }
+    return FALSE;
+}
+
 /* ATI1 and ATI2 are not officially compressed in d3d9 */
 static inline boolean
 compressed_format( D3DFORMAT fmt )
@@ -256,6 +278,7 @@ d3d9_to_pipe_format_internal(D3DFORMAT format)
     switch (format) {
     case D3DFMT_INTZ: return PIPE_FORMAT_S8_UINT_Z24_UNORM;
     case D3DFMT_DF16: return PIPE_FORMAT_Z16_UNORM;
+    case D3DFMT_DF24: return PIPE_FORMAT_X8Z24_UNORM;
     case D3DFMT_DXT1: return PIPE_FORMAT_DXT1_RGBA;
     case D3DFMT_DXT2: return PIPE_FORMAT_DXT3_RGBA; /* XXX */
     case D3DFMT_DXT3: return PIPE_FORMAT_DXT3_RGBA;
@@ -273,9 +296,6 @@ d3d9_to_pipe_format_internal(D3DFORMAT format)
     case D3DFMT_Y210: /* XXX */
     case D3DFMT_Y216:
     case D3DFMT_NV11:
-    case D3DFMT_DF24: /* Similar to D3DFMT_DF16 but for 24-bits.
-        We don't advertise it because when it is supported, Fetch-4 is
-        supposed to be supported, which we don't support yet. */
     case D3DFMT_NULL: /* special cased, only for surfaces */
         return PIPE_FORMAT_NONE;
     default:
@@ -301,6 +321,10 @@ d3d9_to_pipe_format_checked(struct pipe_screen *screen,
 {
     enum pipe_format result;
 
+    /* We cannot render to depth textures as a render target */
+    if (depth_stencil_format(format) && (bindings & PIPE_BIND_RENDER_TARGET))
+        return PIPE_FORMAT_NONE;
+
     result = d3d9_to_pipe_format_internal(format);
     if (result == PIPE_FORMAT_NONE)
         return PIPE_FORMAT_NONE;
@@ -322,11 +346,20 @@ d3d9_to_pipe_format_checked(struct pipe_screen *screen,
          * is precised in the name), so it is ok to match to another similar
          * format. In all cases, if the app reads the texture with a shader,
          * it gets depth on r and doesn't get stencil.*/
+        case D3DFMT_D16:
+            /* D16 support is a requirement, but as it cannot be locked,
+             * it is ok to revert to D24 */
+            if (format_check_internal(PIPE_FORMAT_Z24X8_UNORM))
+                return PIPE_FORMAT_Z24X8_UNORM;
+            if (format_check_internal(PIPE_FORMAT_X8Z24_UNORM))
+                return PIPE_FORMAT_X8Z24_UNORM;
+            break;
         case D3DFMT_INTZ:
         case D3DFMT_D24S8:
             if (format_check_internal(PIPE_FORMAT_Z24_UNORM_S8_UINT))
                 return PIPE_FORMAT_Z24_UNORM_S8_UINT;
             break;
+        case D3DFMT_DF24:
         case D3DFMT_D24X8:
             if (format_check_internal(PIPE_FORMAT_Z24X8_UNORM))
                 return PIPE_FORMAT_Z24X8_UNORM;
@@ -340,6 +373,16 @@ d3d9_to_pipe_format_checked(struct pipe_screen *screen,
                 return PIPE_FORMAT_NONE;
             if (format_check_internal(PIPE_FORMAT_R32G32B32X32_FLOAT))
                 return PIPE_FORMAT_R32G32B32X32_FLOAT;
+            break;
+        /* Fallback for YUV formats */
+        case D3DFMT_UYVY:
+        case D3DFMT_YUY2:
+        case D3DFMT_NV12:
+            if (bindings & PIPE_BIND_RENDER_TARGET)
+                return PIPE_FORMAT_NONE;
+            if (format_check_internal(PIPE_FORMAT_R8G8B8X8_UNORM))
+                return PIPE_FORMAT_R8G8B8X8_UNORM;
+            break;
         default:
             break;
     }
@@ -555,15 +598,15 @@ static inline unsigned
 d3dprimitivetype_to_pipe_prim(D3DPRIMITIVETYPE prim)
 {
     switch (prim) {
-    case D3DPT_POINTLIST:     return PIPE_PRIM_POINTS;
-    case D3DPT_LINELIST:      return PIPE_PRIM_LINES;
-    case D3DPT_LINESTRIP:     return PIPE_PRIM_LINE_STRIP;
-    case D3DPT_TRIANGLELIST:  return PIPE_PRIM_TRIANGLES;
-    case D3DPT_TRIANGLESTRIP: return PIPE_PRIM_TRIANGLE_STRIP;
-    case D3DPT_TRIANGLEFAN:   return PIPE_PRIM_TRIANGLE_FAN;
+    case D3DPT_POINTLIST:     return MESA_PRIM_POINTS;
+    case D3DPT_LINELIST:      return MESA_PRIM_LINES;
+    case D3DPT_LINESTRIP:     return MESA_PRIM_LINE_STRIP;
+    case D3DPT_TRIANGLELIST:  return MESA_PRIM_TRIANGLES;
+    case D3DPT_TRIANGLESTRIP: return MESA_PRIM_TRIANGLE_STRIP;
+    case D3DPT_TRIANGLEFAN:   return MESA_PRIM_TRIANGLE_FAN;
     default:
         assert(0);
-        return PIPE_PRIM_POINTS;
+        return MESA_PRIM_POINTS;
     }
 }
 

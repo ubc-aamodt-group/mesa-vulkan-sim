@@ -1,25 +1,7 @@
 /*
  * Copyright 2013 Advanced Micro Devices, Inc.
- * All Rights Reserved.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "si_build_pm4.h"
@@ -39,20 +21,11 @@ static struct pipe_stream_output_target *si_create_so_target(struct pipe_context
                                                              unsigned buffer_offset,
                                                              unsigned buffer_size)
 {
-   struct si_context *sctx = (struct si_context *)ctx;
    struct si_streamout_target *t;
    struct si_resource *buf = si_resource(buffer);
 
    t = CALLOC_STRUCT(si_streamout_target);
    if (!t) {
-      return NULL;
-   }
-
-   unsigned buf_filled_size_size = sctx->screen->use_ngg_streamout ? 8 : 4;
-   u_suballocator_alloc(&sctx->allocator_zeroed_memory, buf_filled_size_size, 4,
-                        &t->buf_filled_size_offset, (struct pipe_resource **)&t->buf_filled_size);
-   if (!t->buf_filled_size) {
-      FREE(t);
       return NULL;
    }
 
@@ -119,9 +92,8 @@ static void si_set_streamout_targets(struct pipe_context *ctx, unsigned num_targ
        */
       sctx->flags |= SI_CONTEXT_INV_SCACHE | SI_CONTEXT_INV_VCACHE;
 
-      /* The BUFFER_FILLED_SIZE is written using a PS_DONE event. */
-      if (sctx->screen->use_ngg_streamout) {
-         sctx->flags |= SI_CONTEXT_PS_PARTIAL_FLUSH;
+      if (sctx->gfx_level >= GFX11) {
+         sctx->flags |= SI_CONTEXT_VS_PARTIAL_FLUSH | SI_CONTEXT_PFP_SYNC_ME;
 
          /* Wait now. This is needed to make sure that GDS is not
           * busy at the end of IBs.
@@ -131,7 +103,7 @@ static void si_set_streamout_targets(struct pipe_context *ctx, unsigned num_targ
           */
          wait_now = true;
       } else {
-         sctx->flags |= SI_CONTEXT_VS_PARTIAL_FLUSH;
+         sctx->flags |= SI_CONTEXT_VS_PARTIAL_FLUSH | SI_CONTEXT_PFP_SYNC_ME;
       }
    }
 
@@ -139,10 +111,8 @@ static void si_set_streamout_targets(struct pipe_context *ctx, unsigned num_targ
     * start writing to the targets.
     */
    if (num_targets) {
-      if (sctx->screen->use_ngg_streamout)
-         si_allocate_gds(sctx);
-
-      sctx->flags |= SI_CONTEXT_PS_PARTIAL_FLUSH | SI_CONTEXT_CS_PARTIAL_FLUSH;
+      sctx->flags |= SI_CONTEXT_PS_PARTIAL_FLUSH | SI_CONTEXT_CS_PARTIAL_FLUSH |
+                     SI_CONTEXT_PFP_SYNC_ME;
    }
 
    /* Streamout buffers must be bound in 2 places:
@@ -153,6 +123,10 @@ static void si_set_streamout_targets(struct pipe_context *ctx, unsigned num_targ
    /* Stop streamout. */
    if (sctx->streamout.num_targets && sctx->streamout.begin_emitted)
       si_emit_streamout_end(sctx);
+
+   /* TODO: This is a hack that fixes streamout failures. It shouldn't be necessary. */
+   if (sctx->gfx_level >= GFX11 && !wait_now)
+      si_flush_gfx_cs(sctx, 0, NULL);
 
    /* Set the new targets. */
    unsigned enabled_mask = 0, append_bitmask = 0;
@@ -166,12 +140,25 @@ static void si_set_streamout_targets(struct pipe_context *ctx, unsigned num_targ
 
       if (offsets[i] == ((unsigned)-1))
          append_bitmask |= 1 << i;
+
+      /* Allocate space for the filled buffer size. */
+      struct si_streamout_target *t = sctx->streamout.targets[i];
+      if (!t->buf_filled_size) {
+         unsigned buf_filled_size_size = sctx->gfx_level >= GFX11 ? 8 : 4;
+         u_suballocator_alloc(&sctx->allocator_zeroed_memory, buf_filled_size_size, 4,
+                              &t->buf_filled_size_offset,
+                              (struct pipe_resource **)&t->buf_filled_size);
+      }
    }
 
    for (; i < sctx->streamout.num_targets; i++)
       si_so_target_reference(&sctx->streamout.targets[i], NULL);
 
-   sctx->streamout.enabled_mask = enabled_mask;
+   if (!!sctx->streamout.enabled_mask != !!enabled_mask) {
+      sctx->streamout.enabled_mask = enabled_mask;
+      sctx->do_update_shaders = true; /* to keep/remove streamout shader code as an optimization */
+   }
+
    sctx->streamout.num_targets = num_targets;
    sctx->streamout.append_bitmask = append_bitmask;
 
@@ -189,7 +176,7 @@ static void si_set_streamout_targets(struct pipe_context *ctx, unsigned num_targ
          struct pipe_shader_buffer sbuf;
          sbuf.buffer = targets[i]->buffer;
 
-         if (sctx->screen->use_ngg_streamout) {
+         if (sctx->gfx_level >= GFX11) {
             sbuf.buffer_offset = targets[i]->buffer_offset;
             sbuf.buffer_size = targets[i]->buffer_size;
          } else {
@@ -197,77 +184,17 @@ static void si_set_streamout_targets(struct pipe_context *ctx, unsigned num_targ
             sbuf.buffer_size = targets[i]->buffer_offset + targets[i]->buffer_size;
          }
 
-         si_set_rw_shader_buffer(sctx, SI_VS_STREAMOUT_BUF0 + i, &sbuf);
-         si_resource(targets[i]->buffer)->bind_history |= PIPE_BIND_STREAM_OUTPUT;
+         si_set_internal_shader_buffer(sctx, SI_VS_STREAMOUT_BUF0 + i, &sbuf);
+         si_resource(targets[i]->buffer)->bind_history |= SI_BIND_STREAMOUT_BUFFER;
       } else {
-         si_set_rw_shader_buffer(sctx, SI_VS_STREAMOUT_BUF0 + i, NULL);
+         si_set_internal_shader_buffer(sctx, SI_VS_STREAMOUT_BUF0 + i, NULL);
       }
    }
    for (; i < old_num_targets; i++)
-      si_set_rw_shader_buffer(sctx, SI_VS_STREAMOUT_BUF0 + i, NULL);
+      si_set_internal_shader_buffer(sctx, SI_VS_STREAMOUT_BUF0 + i, NULL);
 
    if (wait_now)
       sctx->emit_cache_flush(sctx, &sctx->gfx_cs);
-}
-
-static void gfx10_emit_streamout_begin(struct si_context *sctx)
-{
-   struct si_streamout_target **t = sctx->streamout.targets;
-   struct radeon_cmdbuf *cs = &sctx->gfx_cs;
-   unsigned last_target = 0;
-
-   for (unsigned i = 0; i < sctx->streamout.num_targets; i++) {
-      if (t[i])
-         last_target = i;
-   }
-
-   for (unsigned i = 0; i < sctx->streamout.num_targets; i++) {
-      if (!t[i])
-         continue;
-
-      t[i]->stride_in_dw = sctx->streamout.stride_in_dw[i];
-
-      bool append = sctx->streamout.append_bitmask & (1 << i);
-      uint64_t va = 0;
-
-      if (append) {
-         radeon_add_to_buffer_list(sctx, &sctx->gfx_cs, t[i]->buf_filled_size, RADEON_USAGE_READ,
-                                   RADEON_PRIO_SO_FILLED_SIZE);
-
-         va = t[i]->buf_filled_size->gpu_address + t[i]->buf_filled_size_offset;
-      }
-
-      radeon_emit(cs, PKT3(PKT3_DMA_DATA, 5, 0));
-      radeon_emit(cs, S_411_SRC_SEL(append ? V_411_SRC_ADDR_TC_L2 : V_411_DATA) |
-                         S_411_DST_SEL(V_411_GDS) | S_411_CP_SYNC(i == last_target));
-      radeon_emit(cs, va);
-      radeon_emit(cs, va >> 32);
-      radeon_emit(cs, 4 * i); /* destination in GDS */
-      radeon_emit(cs, 0);
-      radeon_emit(cs, S_414_BYTE_COUNT_GFX9(4) | S_414_DISABLE_WR_CONFIRM_GFX9(i != last_target));
-   }
-
-   sctx->streamout.begin_emitted = true;
-}
-
-static void gfx10_emit_streamout_end(struct si_context *sctx)
-{
-   struct si_streamout_target **t = sctx->streamout.targets;
-
-   for (unsigned i = 0; i < sctx->streamout.num_targets; i++) {
-      if (!t[i])
-         continue;
-
-      uint64_t va = t[i]->buf_filled_size->gpu_address + t[i]->buf_filled_size_offset;
-
-      si_cp_release_mem(sctx, &sctx->gfx_cs, V_028A90_PS_DONE, 0, EOP_DST_SEL_TC_L2,
-                        EOP_INT_SEL_SEND_DATA_AFTER_WR_CONFIRM, EOP_DATA_SEL_GDS,
-                        t[i]->buf_filled_size, va, EOP_DATA_GDS(i, 1), 0);
-
-      t[i]->buf_filled_size_valid = true;
-   }
-
-   sctx->streamout.begin_emitted = false;
 }
 
 static void si_flush_vgt_streamout(struct si_context *sctx)
@@ -275,73 +202,100 @@ static void si_flush_vgt_streamout(struct si_context *sctx)
    struct radeon_cmdbuf *cs = &sctx->gfx_cs;
    unsigned reg_strmout_cntl;
 
+   radeon_begin(cs);
+
    /* The register is at different places on different ASICs. */
-   if (sctx->chip_class >= GFX7) {
+   if (sctx->gfx_level >= GFX9) {
       reg_strmout_cntl = R_0300FC_CP_STRMOUT_CNTL;
-      radeon_set_uconfig_reg(cs, reg_strmout_cntl, 0);
+      radeon_emit(PKT3(PKT3_WRITE_DATA, 3, 0));
+      radeon_emit(S_370_DST_SEL(V_370_MEM_MAPPED_REGISTER) | S_370_ENGINE_SEL(V_370_ME));
+      radeon_emit(R_0300FC_CP_STRMOUT_CNTL >> 2);
+      radeon_emit(0);
+      radeon_emit(0);
+   } else if (sctx->gfx_level >= GFX7) {
+      reg_strmout_cntl = R_0300FC_CP_STRMOUT_CNTL;
+      radeon_set_uconfig_reg(reg_strmout_cntl, 0);
    } else {
       reg_strmout_cntl = R_0084FC_CP_STRMOUT_CNTL;
-      radeon_set_config_reg(cs, reg_strmout_cntl, 0);
+      radeon_set_config_reg(reg_strmout_cntl, 0);
    }
 
-   radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
-   radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_SO_VGTSTREAMOUT_FLUSH) | EVENT_INDEX(0));
+   radeon_emit(PKT3(PKT3_EVENT_WRITE, 0, 0));
+   radeon_emit(EVENT_TYPE(V_028A90_SO_VGTSTREAMOUT_FLUSH) | EVENT_INDEX(0));
 
-   radeon_emit(cs, PKT3(PKT3_WAIT_REG_MEM, 5, 0));
-   radeon_emit(cs,
-               WAIT_REG_MEM_EQUAL); /* wait until the register is equal to the reference value */
-   radeon_emit(cs, reg_strmout_cntl >> 2); /* register */
-   radeon_emit(cs, 0);
-   radeon_emit(cs, S_0084FC_OFFSET_UPDATE_DONE(1)); /* reference value */
-   radeon_emit(cs, S_0084FC_OFFSET_UPDATE_DONE(1)); /* mask */
-   radeon_emit(cs, 4);                              /* poll interval */
+   radeon_emit(PKT3(PKT3_WAIT_REG_MEM, 5, 0));
+   radeon_emit(WAIT_REG_MEM_EQUAL); /* wait until the register is equal to the reference value */
+   radeon_emit(reg_strmout_cntl >> 2); /* register */
+   radeon_emit(0);
+   radeon_emit(S_0084FC_OFFSET_UPDATE_DONE(1)); /* reference value */
+   radeon_emit(S_0084FC_OFFSET_UPDATE_DONE(1)); /* mask */
+   radeon_emit(4);                              /* poll interval */
+   radeon_end();
 }
 
 static void si_emit_streamout_begin(struct si_context *sctx)
 {
    struct radeon_cmdbuf *cs = &sctx->gfx_cs;
    struct si_streamout_target **t = sctx->streamout.targets;
-   uint16_t *stride_in_dw = sctx->streamout.stride_in_dw;
-   unsigned i;
 
-   si_flush_vgt_streamout(sctx);
+   if (sctx->gfx_level < GFX11)
+      si_flush_vgt_streamout(sctx);
 
-   for (i = 0; i < sctx->streamout.num_targets; i++) {
+   for (unsigned i = 0; i < sctx->streamout.num_targets; i++) {
       if (!t[i])
          continue;
 
-      t[i]->stride_in_dw = stride_in_dw[i];
+      t[i]->stride_in_dw = sctx->streamout.stride_in_dw[i];
 
-      /* AMD GCN binds streamout buffers as shader resources.
-       * VGT only counts primitives and tells the shader
-       * through SGPRs what to do. */
-      radeon_set_context_reg_seq(cs, R_028AD0_VGT_STRMOUT_BUFFER_SIZE_0 + 16 * i, 2);
-      radeon_emit(cs, (t[i]->b.buffer_offset + t[i]->b.buffer_size) >> 2); /* BUFFER_SIZE (in DW) */
-      radeon_emit(cs, stride_in_dw[i]);                                    /* VTX_STRIDE (in DW) */
-
-      if (sctx->streamout.append_bitmask & (1 << i) && t[i]->buf_filled_size_valid) {
-         uint64_t va = t[i]->buf_filled_size->gpu_address + t[i]->buf_filled_size_offset;
-
-         /* Append. */
-         radeon_emit(cs, PKT3(PKT3_STRMOUT_BUFFER_UPDATE, 4, 0));
-         radeon_emit(cs, STRMOUT_SELECT_BUFFER(i) |
-                            STRMOUT_OFFSET_SOURCE(STRMOUT_OFFSET_FROM_MEM)); /* control */
-         radeon_emit(cs, 0);                                                 /* unused */
-         radeon_emit(cs, 0);                                                 /* unused */
-         radeon_emit(cs, va);                                                /* src address lo */
-         radeon_emit(cs, va >> 32);                                          /* src address hi */
-
-         radeon_add_to_buffer_list(sctx, &sctx->gfx_cs, t[i]->buf_filled_size, RADEON_USAGE_READ,
-                                   RADEON_PRIO_SO_FILLED_SIZE);
+      if (sctx->gfx_level >= GFX11) {
+         if (sctx->streamout.append_bitmask & (1 << i)) {
+            /* Restore the register value. */
+            si_cp_copy_data(sctx, cs, COPY_DATA_REG, NULL,
+                            (R_031088_GDS_STRMOUT_DWORDS_WRITTEN_0 / 4) + i,
+                            COPY_DATA_SRC_MEM, t[i]->buf_filled_size,
+                            t[i]->buf_filled_size_offset);
+         } else {
+            /* Set to 0. */
+            radeon_begin(cs);
+            radeon_set_uconfig_reg(R_031088_GDS_STRMOUT_DWORDS_WRITTEN_0 + i * 4, 0);
+            radeon_end();
+         }
       } else {
-         /* Start from the beginning. */
-         radeon_emit(cs, PKT3(PKT3_STRMOUT_BUFFER_UPDATE, 4, 0));
-         radeon_emit(cs, STRMOUT_SELECT_BUFFER(i) |
-                            STRMOUT_OFFSET_SOURCE(STRMOUT_OFFSET_FROM_PACKET)); /* control */
-         radeon_emit(cs, 0);                                                    /* unused */
-         radeon_emit(cs, 0);                                                    /* unused */
-         radeon_emit(cs, t[i]->b.buffer_offset >> 2); /* buffer offset in DW */
-         radeon_emit(cs, 0);                          /* unused */
+         /* Legacy streamout.
+          *
+          * The hw binds streamout buffers as shader resources. VGT only counts primitives
+          * and tells the shader through SGPRs what to do.
+          */
+         radeon_begin(cs);
+         radeon_set_context_reg_seq(R_028AD0_VGT_STRMOUT_BUFFER_SIZE_0 + 16 * i, 2);
+         radeon_emit((t[i]->b.buffer_offset + t[i]->b.buffer_size) >> 2); /* BUFFER_SIZE (in DW) */
+         radeon_emit(sctx->streamout.stride_in_dw[i]);                                    /* VTX_STRIDE (in DW) */
+
+         if (sctx->streamout.append_bitmask & (1 << i) && t[i]->buf_filled_size_valid) {
+            uint64_t va = t[i]->buf_filled_size->gpu_address + t[i]->buf_filled_size_offset;
+
+            /* Append. */
+            radeon_emit(PKT3(PKT3_STRMOUT_BUFFER_UPDATE, 4, 0));
+            radeon_emit(STRMOUT_SELECT_BUFFER(i) |
+                        STRMOUT_OFFSET_SOURCE(STRMOUT_OFFSET_FROM_MEM)); /* control */
+            radeon_emit(0);                                              /* unused */
+            radeon_emit(0);                                              /* unused */
+            radeon_emit(va);                                             /* src address lo */
+            radeon_emit(va >> 32);                                       /* src address hi */
+
+            radeon_add_to_buffer_list(sctx, &sctx->gfx_cs, t[i]->buf_filled_size,
+                                      RADEON_USAGE_READ | RADEON_PRIO_SO_FILLED_SIZE);
+         } else {
+            /* Start from the beginning. */
+            radeon_emit(PKT3(PKT3_STRMOUT_BUFFER_UPDATE, 4, 0));
+            radeon_emit(STRMOUT_SELECT_BUFFER(i) |
+                        STRMOUT_OFFSET_SOURCE(STRMOUT_OFFSET_FROM_PACKET)); /* control */
+            radeon_emit(0);                                                 /* unused */
+            radeon_emit(0);                                                 /* unused */
+            radeon_emit(t[i]->b.buffer_offset >> 2); /* buffer offset in DW */
+            radeon_emit(0);                          /* unused */
+         }
+         radeon_end_update_context_roll(sctx);
       }
    }
 
@@ -350,40 +304,49 @@ static void si_emit_streamout_begin(struct si_context *sctx)
 
 void si_emit_streamout_end(struct si_context *sctx)
 {
-   if (sctx->screen->use_ngg_streamout) {
-      gfx10_emit_streamout_end(sctx);
-      return;
-   }
-
    struct radeon_cmdbuf *cs = &sctx->gfx_cs;
    struct si_streamout_target **t = sctx->streamout.targets;
-   unsigned i;
-   uint64_t va;
 
-   si_flush_vgt_streamout(sctx);
+   if (sctx->gfx_level >= GFX11) {
+      /* Wait for streamout to finish before reading GDS_STRMOUT registers. */
+      sctx->flags |= SI_CONTEXT_VS_PARTIAL_FLUSH;
+      sctx->emit_cache_flush(sctx, &sctx->gfx_cs);
+   } else {
+      si_flush_vgt_streamout(sctx);
+   }
 
-   for (i = 0; i < sctx->streamout.num_targets; i++) {
+   for (unsigned i = 0; i < sctx->streamout.num_targets; i++) {
       if (!t[i])
          continue;
 
-      va = t[i]->buf_filled_size->gpu_address + t[i]->buf_filled_size_offset;
-      radeon_emit(cs, PKT3(PKT3_STRMOUT_BUFFER_UPDATE, 4, 0));
-      radeon_emit(cs, STRMOUT_SELECT_BUFFER(i) | STRMOUT_OFFSET_SOURCE(STRMOUT_OFFSET_NONE) |
-                         STRMOUT_STORE_BUFFER_FILLED_SIZE); /* control */
-      radeon_emit(cs, va);                                  /* dst address lo */
-      radeon_emit(cs, va >> 32);                            /* dst address hi */
-      radeon_emit(cs, 0);                                   /* unused */
-      radeon_emit(cs, 0);                                   /* unused */
+      uint64_t va = t[i]->buf_filled_size->gpu_address + t[i]->buf_filled_size_offset;
 
-      radeon_add_to_buffer_list(sctx, &sctx->gfx_cs, t[i]->buf_filled_size, RADEON_USAGE_WRITE,
-                                RADEON_PRIO_SO_FILLED_SIZE);
+      if (sctx->gfx_level >= GFX11) {
+         si_cp_copy_data(sctx, &sctx->gfx_cs, COPY_DATA_DST_MEM,
+                         t[i]->buf_filled_size, t[i]->buf_filled_size_offset,
+                         COPY_DATA_REG, NULL,
+                         (R_031088_GDS_STRMOUT_DWORDS_WRITTEN_0 >> 2) + i);
+         sctx->flags |= SI_CONTEXT_PFP_SYNC_ME;
+      } else {
+         radeon_begin(cs);
+         radeon_emit(PKT3(PKT3_STRMOUT_BUFFER_UPDATE, 4, 0));
+         radeon_emit(STRMOUT_SELECT_BUFFER(i) | STRMOUT_OFFSET_SOURCE(STRMOUT_OFFSET_NONE) |
+                     STRMOUT_STORE_BUFFER_FILLED_SIZE); /* control */
+         radeon_emit(va);                                  /* dst address lo */
+         radeon_emit(va >> 32);                            /* dst address hi */
+         radeon_emit(0);                                   /* unused */
+         radeon_emit(0);                                   /* unused */
 
-      /* Zero the buffer size. The counters (primitives generated,
-       * primitives emitted) may be enabled even if there is not
-       * buffer bound. This ensures that the primitives-emitted query
-       * won't increment. */
-      radeon_set_context_reg(cs, R_028AD0_VGT_STRMOUT_BUFFER_SIZE_0 + 16 * i, 0);
-      sctx->context_roll = true;
+         /* Zero the buffer size. The counters (primitives generated,
+          * primitives emitted) may be enabled even if there is not
+          * buffer bound. This ensures that the primitives-emitted query
+          * won't increment. */
+         radeon_set_context_reg(R_028AD0_VGT_STRMOUT_BUFFER_SIZE_0 + 16 * i, 0);
+         radeon_end_update_context_roll(sctx);
+
+         radeon_add_to_buffer_list(sctx, &sctx->gfx_cs, t[i]->buf_filled_size,
+                                   RADEON_USAGE_WRITE | RADEON_PRIO_SO_FILLED_SIZE);
+      }
 
       t[i]->buf_filled_size_valid = true;
    }
@@ -400,16 +363,17 @@ void si_emit_streamout_end(struct si_context *sctx)
 
 static void si_emit_streamout_enable(struct si_context *sctx)
 {
-   assert(!sctx->screen->use_ngg_streamout);
+   assert(sctx->gfx_level < GFX11);
 
-   radeon_set_context_reg_seq(&sctx->gfx_cs, R_028B94_VGT_STRMOUT_CONFIG, 2);
-   radeon_emit(&sctx->gfx_cs, S_028B94_STREAMOUT_0_EN(si_get_strmout_en(sctx)) |
-                                S_028B94_RAST_STREAM(0) |
-                                S_028B94_STREAMOUT_1_EN(si_get_strmout_en(sctx)) |
-                                S_028B94_STREAMOUT_2_EN(si_get_strmout_en(sctx)) |
-                                S_028B94_STREAMOUT_3_EN(si_get_strmout_en(sctx)));
-   radeon_emit(&sctx->gfx_cs,
-               sctx->streamout.hw_enabled_mask & sctx->streamout.enabled_stream_buffers_mask);
+   radeon_begin(&sctx->gfx_cs);
+   radeon_set_context_reg_seq(R_028B94_VGT_STRMOUT_CONFIG, 2);
+   radeon_emit(S_028B94_STREAMOUT_0_EN(si_get_strmout_en(sctx)) |
+               S_028B94_RAST_STREAM(0) |
+               S_028B94_STREAMOUT_1_EN(si_get_strmout_en(sctx)) |
+               S_028B94_STREAMOUT_2_EN(si_get_strmout_en(sctx)) |
+               S_028B94_STREAMOUT_3_EN(si_get_strmout_en(sctx)));
+   radeon_emit(sctx->streamout.hw_enabled_mask & sctx->streamout.enabled_stream_buffers_mask);
+   radeon_end();
 }
 
 static void si_set_streamout_enable(struct si_context *sctx, bool enable)
@@ -423,7 +387,7 @@ static void si_set_streamout_enable(struct si_context *sctx, bool enable)
       sctx->streamout.enabled_mask | (sctx->streamout.enabled_mask << 4) |
       (sctx->streamout.enabled_mask << 8) | (sctx->streamout.enabled_mask << 12);
 
-   if (!sctx->screen->use_ngg_streamout &&
+   if (sctx->gfx_level < GFX11 &&
        ((old_strmout_en != si_get_strmout_en(sctx)) ||
         (old_hw_enabled_mask != sctx->streamout.hw_enabled_mask)))
       si_mark_atom_dirty(sctx, &sctx->atoms.s.streamout_enable);
@@ -431,7 +395,7 @@ static void si_set_streamout_enable(struct si_context *sctx, bool enable)
 
 void si_update_prims_generated_query_state(struct si_context *sctx, unsigned type, int diff)
 {
-   if (!sctx->screen->use_ngg_streamout && type == PIPE_QUERY_PRIMITIVES_GENERATED) {
+   if (sctx->gfx_level < GFX11 && type == PIPE_QUERY_PRIMITIVES_GENERATED) {
       bool old_strmout_en = si_get_strmout_en(sctx);
 
       sctx->streamout.num_prims_gen_queries += diff;
@@ -454,11 +418,8 @@ void si_init_streamout_functions(struct si_context *sctx)
    sctx->b.create_stream_output_target = si_create_so_target;
    sctx->b.stream_output_target_destroy = si_so_target_destroy;
    sctx->b.set_stream_output_targets = si_set_streamout_targets;
+   sctx->atoms.s.streamout_begin.emit = si_emit_streamout_begin;
 
-   if (sctx->screen->use_ngg_streamout) {
-      sctx->atoms.s.streamout_begin.emit = gfx10_emit_streamout_begin;
-   } else {
-      sctx->atoms.s.streamout_begin.emit = si_emit_streamout_begin;
+   if (sctx->gfx_level < GFX11)
       sctx->atoms.s.streamout_enable.emit = si_emit_streamout_enable;
-   }
 }

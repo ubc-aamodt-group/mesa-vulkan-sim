@@ -333,7 +333,6 @@ init_state(struct vl_zscan *zscan)
       sampler.mag_img_filter = PIPE_TEX_FILTER_NEAREST;
       sampler.compare_mode = PIPE_TEX_COMPARE_NONE;
       sampler.compare_func = PIPE_FUNC_ALWAYS;
-      sampler.normalized_coords = 1;
       zscan->samplers[i] = zscan->pipe->create_sampler_state(zscan->pipe, &sampler);
       if (!zscan->samplers[i])
          goto error_samplers;
@@ -409,7 +408,7 @@ vl_zscan_layout(struct pipe_context *pipe, const int layout[64], unsigned blocks
    if (!res)
       goto error_resource;
 
-   f = pipe->transfer_map(pipe, res,
+   f = pipe->texture_map(pipe, res,
                           0, PIPE_MAP_WRITE | PIPE_MAP_DISCARD_RANGE,
                           &rect, &buf_transfer);
    if (!f)
@@ -428,7 +427,7 @@ vl_zscan_layout(struct pipe_context *pipe, const int layout[64], unsigned blocks
             f[i * VL_BLOCK_WIDTH + y * pitch + x] = addr;
          }
 
-   pipe->transfer_unmap(pipe, buf_transfer);
+   pipe->texture_unmap(pipe, buf_transfer);
 
    memset(&sv_tmpl, 0, sizeof(sv_tmpl));
    u_sampler_view_default_template(&sv_tmpl, res, res->format);
@@ -500,6 +499,10 @@ vl_zscan_init_buffer(struct vl_zscan *zscan, struct vl_zscan_buffer *buffer,
    buffer->viewport.translate[0] = 0;
    buffer->viewport.translate[1] = 0;
    buffer->viewport.translate[2] = 0;
+   buffer->viewport.swizzle_x = PIPE_VIEWPORT_SWIZZLE_POSITIVE_X;
+   buffer->viewport.swizzle_y = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Y;
+   buffer->viewport.swizzle_z = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Z;
+   buffer->viewport.swizzle_w = PIPE_VIEWPORT_SWIZZLE_POSITIVE_W;
 
    buffer->fb_state.width = dst->width;
    buffer->fb_state.height = dst->height;
@@ -575,7 +578,7 @@ vl_zscan_upload_quant(struct vl_zscan *zscan, struct vl_zscan_buffer *buffer,
 
    rect.width *= zscan->blocks_per_line;
 
-   data = pipe->transfer_map(pipe, buffer->quant->texture,
+   data = pipe->texture_map(pipe, buffer->quant->texture,
                              0, PIPE_MAP_WRITE |
                              PIPE_MAP_DISCARD_RANGE,
                              &rect, &buf_transfer);
@@ -589,7 +592,7 @@ vl_zscan_upload_quant(struct vl_zscan *zscan, struct vl_zscan_buffer *buffer,
          for (x = 0; x < VL_BLOCK_WIDTH; ++x)
             data[i * VL_BLOCK_WIDTH + y * pitch + x] = matrix[x + y * VL_BLOCK_WIDTH];
 
-   pipe->transfer_unmap(pipe, buf_transfer);
+   pipe->texture_unmap(pipe, buf_transfer);
 }
 
 void
@@ -604,8 +607,8 @@ vl_zscan_render(struct vl_zscan *zscan, struct vl_zscan_buffer *buffer, unsigned
    zscan->pipe->set_framebuffer_state(zscan->pipe, &buffer->fb_state);
    zscan->pipe->set_viewport_states(zscan->pipe, 0, 1, &buffer->viewport);
    zscan->pipe->set_sampler_views(zscan->pipe, PIPE_SHADER_FRAGMENT,
-                                  0, 3, &buffer->src);
+                                  0, 3, 0, false, &buffer->src);
    zscan->pipe->bind_vs_state(zscan->pipe, zscan->vs);
    zscan->pipe->bind_fs_state(zscan->pipe, zscan->fs);
-   util_draw_arrays_instanced(zscan->pipe, PIPE_PRIM_QUADS, 0, 4, 0, num_instances);
+   util_draw_arrays_instanced(zscan->pipe, MESA_PRIM_QUADS, 0, 4, 0, num_instances);
 }

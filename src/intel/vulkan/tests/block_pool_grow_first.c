@@ -26,12 +26,8 @@
 
 int main(void)
 {
-   struct anv_physical_device physical_device = {
-      .use_softpin = true,
-   };
-   struct anv_device device = {
-      .physical = &physical_device,
-   };
+   struct anv_physical_device physical_device = {};
+   struct anv_device device = {};
    struct anv_block_pool pool;
 
    /* Create a pool with initial size smaller than the block allocated, so
@@ -40,9 +36,12 @@ int main(void)
    const uint32_t block_size = 16 * 1024;
    const uint32_t initial_size = block_size / 2;
 
+   test_device_info_init(&physical_device.info);
+   anv_device_set_physical(&device, &physical_device);
+   device.kmd_backend = anv_kmd_backend_get(INTEL_KMD_TYPE_STUB);
    pthread_mutex_init(&device.mutex, NULL);
-   anv_bo_cache_init(&device.bo_cache);
-   anv_block_pool_init(&pool, &device, 4096, initial_size);
+   anv_bo_cache_init(&device.bo_cache, &device);
+   anv_block_pool_init(&pool, &device, "test", 4096, initial_size);
    ASSERT(pool.size == initial_size);
 
    uint32_t padding;
@@ -63,4 +62,6 @@ int main(void)
    memset(map, 22, block_size);
 
    anv_block_pool_finish(&pool);
+   anv_bo_cache_finish(&device.bo_cache);
+   pthread_mutex_destroy(&device.mutex);
 }

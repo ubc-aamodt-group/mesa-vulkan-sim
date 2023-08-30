@@ -32,7 +32,6 @@
 #include "ast.h"
 #include "glsl_parser_extras.h"
 #include "compiler/glsl_types.h"
-#include "main/context.h"
 #include "util/u_string.h"
 #include "util/format/u_format.h"
 
@@ -1439,10 +1438,10 @@ layout_qualifier_id:
                                 "valid in fragment shaders");
             }
 
-	    if (state->INTEL_conservative_rasterization_enable) {
-	       $$.flags.q.inner_coverage = 1;
-	    } else {
-	       _mesa_glsl_error(& @1, state,
+            if (state->INTEL_conservative_rasterization_enable) {
+               $$.flags.q.inner_coverage = 1;
+            } else {
+               _mesa_glsl_error(& @1, state,
                                 "inner_coverage layout qualifier present, "
                                 "but the INTEL_conservative_rasterization extension "
                                 "is not enabled.");
@@ -1457,7 +1456,7 @@ layout_qualifier_id:
             }
 
             if (state->ARB_post_depth_coverage_enable ||
-		state->INTEL_conservative_rasterization_enable) {
+                state->INTEL_conservative_rasterization_enable) {
                $$.flags.q.post_depth_coverage = 1;
             } else {
                _mesa_glsl_error(& @1, state,
@@ -1863,7 +1862,7 @@ layout_qualifier_id:
              !state->EXT_geometry_shader_enable) {
             _mesa_glsl_error(& @3, state,
                              "GL_ARB_gpu_shader5 invocations "
-                             "qualifier specified", $3);
+                             "qualifier specified");
          }
       }
 
@@ -1894,11 +1893,11 @@ layout_qualifier_id:
       if ($$.flags.q.uniform && !state->has_uniform_buffer_objects()) {
          _mesa_glsl_error(& @1, state,
                           "#version 140 / GL_ARB_uniform_buffer_object "
-                          "layout qualifier `%s' is used", $1);
+                          "layout qualifier `uniform' is used");
       } else if ($$.flags.q.uniform && state->ARB_uniform_buffer_object_warn) {
          _mesa_glsl_warning(& @1, state,
                             "#version 140 / GL_ARB_uniform_buffer_object "
-                            "layout qualifier `%s' is used", $1);
+                            "layout qualifier `uniform' is used");
       }
    }
    ;
@@ -2047,9 +2046,9 @@ type_qualifier:
        * output from one shader stage will still match an input of a subsequent
        * stage without the input being declared as invariant."
        *
-       * On the desktop side, this text first appears in GLSL 4.30.
+       * On the desktop side, this text first appears in GLSL 4.20.
        */
-      if (state->is_version(430, 300) && $$.flags.q.in)
+      if (state->is_version(420, 300) && $$.flags.q.in)
          _mesa_glsl_error(&@1, state, "invariant qualifiers cannot be used with shader inputs");
    }
    | interpolation_qualifier type_qualifier
@@ -2743,7 +2742,7 @@ iteration_statement:
                                             NULL, $3, NULL, $5);
       $$->set_location_range(@1, @4);
    }
-   | DO statement WHILE '(' expression ')' ';'
+   | DO statement_no_new_scope WHILE '(' expression ')' ';'
    {
       void *ctx = state->linalloc;
       $$ = new(ctx) ast_iteration_statement(ast_iteration_statement::ast_do_while,
@@ -3106,5 +3105,7 @@ layout_defaults:
       if (!state->out_qualifier->push_to_global(& @1, state)) {
          YYERROR;
       }
+
+      (void)yynerrs;
    }
    ;

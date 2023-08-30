@@ -50,7 +50,7 @@ build_write_masked_stores(nir_builder *b, nir_deref_instr *vec_deref,
       build_write_masked_store(b, vec_deref, value, start);
    } else {
       unsigned mid = start + (end - start) / 2;
-      nir_push_if(b, nir_ilt(b, index, nir_imm_int(b, mid)));
+      nir_push_if(b, nir_ilt_imm(b, index, mid));
       build_write_masked_stores(b, vec_deref, value, index, start, mid);
       nir_push_else(b, NULL);
       build_write_masked_stores(b, vec_deref, value, index, mid, end);
@@ -151,11 +151,11 @@ nir_lower_array_deref_of_vec_impl(nir_function_impl *impl,
                nir_vector_extract(&b, &intrin->dest.ssa, index);
             if (scalar->parent_instr->type == nir_instr_type_ssa_undef) {
                nir_ssa_def_rewrite_uses(&intrin->dest.ssa,
-                                        nir_src_for_ssa(scalar));
+                                        scalar);
                nir_instr_remove(&intrin->instr);
             } else {
                nir_ssa_def_rewrite_uses_after(&intrin->dest.ssa,
-                                              nir_src_for_ssa(scalar),
+                                              scalar,
                                               scalar->parent_instr);
             }
             progress = true;

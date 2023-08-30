@@ -29,7 +29,7 @@
 #ifndef EGLCURRENT_INCLUDED
 #define EGLCURRENT_INCLUDED
 
-#include "c99_compat.h"
+#include <stdbool.h>
 
 #include "egltypedefs.h"
 
@@ -51,6 +51,7 @@ extern "C" {
  */
 struct _egl_thread_info
 {
+   bool inited;
    EGLint LastError;
    _EGLContext *CurrentContext;
    EGLenum CurrentAPI;
@@ -88,10 +89,6 @@ extern void
 _eglDestroyCurrentThread(void);
 
 
-extern EGLBoolean
-_eglIsCurrentThreadDummy(void);
-
-
 extern _EGLContext *
 _eglGetCurrentContext(void);
 
@@ -102,18 +99,6 @@ _eglError(EGLint errCode, const char *msg);
 extern void
 _eglDebugReport(EGLenum error, const char *funcName,
       EGLint type, const char *message, ...);
-
-#define _eglReportCritical(error, funcName, ...) \
-    _eglDebugReport(error, funcName, EGL_DEBUG_MSG_CRITICAL_KHR, __VA_ARGS__)
-
-#define _eglReportError(error, funcName, ...) \
-    _eglDebugReport(error, funcName, EGL_DEBUG_MSG_ERROR_KHR, __VA_ARGS__)
-
-#define _eglReportWarn(funcName, ...) \
-    _eglDebugReport(EGL_SUCCESS, funcName, EGL_DEBUG_MSG_WARN_KHR, __VA_ARGS__)
-
-#define _eglReportInfo(funcName, ...) \
-    _eglDebugReport(EGL_SUCCESS, funcName, EGL_DEBUG_MSG_INFO_KHR, __VA_ARGS__)
 
 #ifdef __cplusplus
 }

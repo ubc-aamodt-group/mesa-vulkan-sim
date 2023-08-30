@@ -70,6 +70,7 @@ static const struct pipe_loader_ops pipe_loader_drm_ops;
 static const struct drm_driver_descriptor *driver_descriptors[] = {
    &i915_driver_descriptor,
    &iris_driver_descriptor,
+   &crocus_driver_descriptor,
    &nouveau_driver_descriptor,
    &r300_driver_descriptor,
    &r600_driver_descriptor,
@@ -81,6 +82,7 @@ static const struct drm_driver_descriptor *driver_descriptors[] = {
    &v3d_driver_descriptor,
    &vc4_driver_descriptor,
    &panfrost_driver_descriptor,
+   &asahi_driver_descriptor,
    &etnaviv_driver_descriptor,
    &tegra_driver_descriptor,
    &lima_driver_descriptor,
@@ -155,6 +157,10 @@ pipe_loader_drm_probe_fd_nodup(struct pipe_loader_device **dev, int fd)
    plib = &ddev->lib;
 #endif
    ddev->dd = get_driver_descriptor(ddev->base.driver_name, plib);
+
+   /* vgem is a virtual device; don't try using it with kmsro */
+   if (strcmp(ddev->base.driver_name, "vgem") == 0)
+      goto fail;
 
    /* kmsro supports lots of drivers, try as a fallback */
    if (!ddev->dd)
@@ -257,7 +263,7 @@ pipe_loader_drm_get_driconf(struct pipe_loader_device *dev, unsigned *count)
 
 static struct pipe_screen *
 pipe_loader_drm_create_screen(struct pipe_loader_device *dev,
-                              const struct pipe_screen_config *config)
+                              const struct pipe_screen_config *config, bool sw_vk)
 {
    struct pipe_loader_drm_device *ddev = pipe_loader_drm_device(dev);
 

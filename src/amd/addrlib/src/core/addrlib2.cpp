@@ -1,28 +1,11 @@
 /*
- * Copyright © 2007-2019 Advanced Micro Devices, Inc.
- * All Rights Reserved.
- *
- * Permission is hereby granted, free of charge, to any person obtaining
- * a copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sub license, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
- * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS, AUTHORS
- * AND/OR ITS SUPPLIERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * The above copyright notice and this permission notice (including the
- * next paragraph) shall be included in all copies or substantial portions
- * of the Software.
- */
+************************************************************************************************************************
+*
+*  Copyright (C) 2007-2022 Advanced Micro Devices, Inc.  All rights reserved.
+*  SPDX-License-Identifier: MIT
+*
+***********************************************************************************************************************/
+
 
 /**
 ************************************************************************************************************************
@@ -303,6 +286,12 @@ ADDR_E_RETURNCODE Lib::ComputeSurfaceInfo(
             if (localIn.flags.needEquation && (Log2(localIn.numFrags) == 0))
             {
                 pOut->equationIndex = GetEquationIndex(&localIn, pOut);
+                if ((localIn.flags.allowExtEquation == 0) &&
+                    (pOut->equationIndex != ADDR_INVALID_EQUATION_INDEX) &&
+                    (m_equationTable[pOut->equationIndex].numBitComponents > ADDR_MAX_LEGACY_EQUATION_COMP))
+                {
+                    pOut->equationIndex = ADDR_INVALID_EQUATION_INDEX;
+                }
             }
 
             if (localIn.flags.qbStereo)
@@ -310,6 +299,9 @@ ADDR_E_RETURNCODE Lib::ComputeSurfaceInfo(
                 if (pOut->pStereoInfo != NULL)
                 {
                     ComputeQbStereoInfo(pOut);
+#if DEBUG
+                    ValidateStereoInfo(pIn, pOut);
+#endif
                 }
             }
         }
@@ -826,7 +818,12 @@ ADDR_E_RETURNCODE Lib::ComputeDccAddrFromCoord(
     }
     else
     {
-        returnCode = HwlComputeDccAddrFromCoord(pIn, pOut);
+        returnCode = HwlSupportComputeDccAddrFromCoord(pIn);
+
+        if (returnCode == ADDR_OK)
+        {
+            HwlComputeDccAddrFromCoord(pIn, pOut);
+        }
     }
 
     return returnCode;
@@ -935,6 +932,37 @@ ADDR_E_RETURNCODE Lib::ComputeSubResourceOffsetForSwizzlePattern(
     else
     {
         returnCode = HwlComputeSubResourceOffsetForSwizzlePattern(pIn, pOut);
+    }
+
+    return returnCode;
+}
+
+/**
+************************************************************************************************************************
+*   Lib::ComputeNonBlockCompressedView
+*
+*   @brief
+*       Interface function stub of Addr2ComputeNonBlockCompressedView.
+*
+*   @return
+*       ADDR_E_RETURNCODE
+************************************************************************************************************************
+*/
+ADDR_E_RETURNCODE Lib::ComputeNonBlockCompressedView(
+    const ADDR2_COMPUTE_NONBLOCKCOMPRESSEDVIEW_INPUT* pIn,
+    ADDR2_COMPUTE_NONBLOCKCOMPRESSEDVIEW_OUTPUT*      pOut)
+{
+    ADDR_E_RETURNCODE returnCode;
+
+    if ((GetFillSizeFieldsFlags() == TRUE) &&
+        ((pIn->size != sizeof(ADDR2_COMPUTE_NONBLOCKCOMPRESSEDVIEW_INPUT)) ||
+         (pOut->size != sizeof(ADDR2_COMPUTE_NONBLOCKCOMPRESSEDVIEW_OUTPUT))))
+    {
+        returnCode = ADDR_INVALIDPARAMS;
+    }
+    else
+    {
+        returnCode = HwlComputeNonBlockCompressedView(pIn, pOut);
     }
 
     return returnCode;
@@ -1139,6 +1167,7 @@ ADDR_E_RETURNCODE Lib::ComputeSurfaceAddrFromCoordLinear(
         ADDR2_COMPUTE_SURFACE_INFO_INPUT  localIn  = {0};
         ADDR2_COMPUTE_SURFACE_INFO_OUTPUT localOut = {0};
         ADDR2_MIP_INFO                    mipInfo[MaxMipLevels];
+        ADDR_ASSERT(pIn->numMipLevels <= MaxMipLevels);
 
         localIn.bpp          = pIn->bpp;
         localIn.flags        = pIn->flags;
@@ -1816,6 +1845,61 @@ ADDR_E_RETURNCODE Lib::Addr2GetPreferredSurfaceSetting(
 
 /**
 ************************************************************************************************************************
+*   Lib::GetPossibleSwizzleModes
+*
+*   @brief
+*       Returns a list of swizzle modes that are valid from the hardware's perspective for the client to choose from
+*
+*   @return
+*       ADDR_E_RETURNCODE
+************************************************************************************************************************
+*/
+ADDR_E_RETURNCODE Lib::GetPossibleSwizzleModes(
+    const ADDR2_GET_PREFERRED_SURF_SETTING_INPUT* pIn,
+    ADDR2_GET_PREFERRED_SURF_SETTING_OUTPUT*      pOut) const
+{
+    return HwlGetPossibleSwizzleModes(pIn, pOut);
+}
+
+/**
+************************************************************************************************************************
+*   Lib::GetAllowedBlockSet
+*
+*   @brief
+*       Returns the set of allowed block sizes given the allowed swizzle modes and resource type
+*
+*   @return
+*       ADDR_E_RETURNCODE
+************************************************************************************************************************
+*/
+ADDR_E_RETURNCODE Lib::GetAllowedBlockSet(
+    ADDR2_SWMODE_SET allowedSwModeSet,
+    AddrResourceType rsrcType,
+    ADDR2_BLOCK_SET* pAllowedBlockSet) const
+{
+    return HwlGetAllowedBlockSet(allowedSwModeSet, rsrcType, pAllowedBlockSet);
+}
+
+/**
+************************************************************************************************************************
+*   Lib::GetAllowedSwSet
+*
+*   @brief
+*       Returns the set of allowed swizzle types given the allowed swizzle modes
+*
+*   @return
+*       ADDR_E_RETURNCODE
+************************************************************************************************************************
+*/
+ADDR_E_RETURNCODE Lib::GetAllowedSwSet(
+    ADDR2_SWMODE_SET  allowedSwModeSet,
+    ADDR2_SWTYPE_SET* pAllowedSwSet) const
+{
+    return HwlGetAllowedSwSet(allowedSwModeSet, pAllowedSwSet);
+}
+
+/**
+************************************************************************************************************************
 *   Lib::ComputeBlock256Equation
 *
 *   @brief
@@ -1962,7 +2046,8 @@ VOID Lib::ComputeQbStereoInfo(
 VOID Lib::FilterInvalidEqSwizzleMode(
     ADDR2_SWMODE_SET& allowedSwModeSet,
     AddrResourceType  resourceType,
-    UINT_32           elemLog2
+    UINT_32           elemLog2,
+    UINT_32           maxComponents
     ) const
 {
     if (resourceType != ADDR_RSRC_TEX_1D)
@@ -1971,11 +2056,16 @@ VOID Lib::FilterInvalidEqSwizzleMode(
         const UINT_32 rsrcTypeIdx         = static_cast<UINT_32>(resourceType) - 1;
         UINT_32       validSwModeSet      = allowedSwModeSetVal;
 
-        for (UINT_32 swModeIdx = 0; validSwModeSet != 0; swModeIdx++)
+        for (UINT_32 swModeIdx = 1; validSwModeSet != 0; swModeIdx++)
         {
             if (validSwModeSet & 1)
             {
-                if (m_equationLookupTable[rsrcTypeIdx][swModeIdx][elemLog2] == ADDR_INVALID_EQUATION_INDEX)
+                UINT_32 equation = m_equationLookupTable[rsrcTypeIdx][swModeIdx][elemLog2];
+                if (equation == ADDR_INVALID_EQUATION_INDEX)
+                {
+                    allowedSwModeSetVal &= ~(1u << swModeIdx);
+                }
+                else if (m_equationTable[equation].numBitComponents > maxComponents)
                 {
                     allowedSwModeSetVal &= ~(1u << swModeIdx);
                 }
@@ -1991,6 +2081,81 @@ VOID Lib::FilterInvalidEqSwizzleMode(
         }
     }
 }
+
+#if DEBUG
+/**
+************************************************************************************************************************
+*   Lib::ValidateStereoInfo
+*
+*   @brief
+*       Validate stereo info by checking a few typical cases
+*
+*   @return
+*       N/A
+************************************************************************************************************************
+*/
+VOID Lib::ValidateStereoInfo(
+    const ADDR2_COMPUTE_SURFACE_INFO_INPUT*  pIn,   ///< [in] input structure
+    const ADDR2_COMPUTE_SURFACE_INFO_OUTPUT* pOut   ///< [in] output structure
+    ) const
+{
+    ADDR2_COMPUTE_SURFACE_ADDRFROMCOORD_INPUT addrIn = {};
+    addrIn.size            = sizeof(addrIn);
+    addrIn.swizzleMode     = pIn->swizzleMode;
+    addrIn.flags           = pIn->flags;
+    addrIn.flags.qbStereo  = 0;
+    addrIn.resourceType    = pIn->resourceType;
+    addrIn.bpp             = pIn->bpp;
+    addrIn.unalignedWidth  = pIn->width;
+    addrIn.numSlices       = pIn->numSlices;
+    addrIn.numMipLevels    = pIn->numMipLevels;
+    addrIn.numSamples      = pIn->numSamples;
+    addrIn.numFrags        = pIn->numFrags;
+
+    // Call Addr2ComputePipeBankXor() and validate different pbXor value if necessary...
+    const UINT_32 pbXor = 0;
+
+    ADDR2_COMPUTE_SURFACE_ADDRFROMCOORD_OUTPUT addrOut = {};
+    addrOut.size = sizeof(addrOut);
+
+    // Make the array to be {0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096} for full test
+    const UINT_32 TestCoord[] = {0};
+
+    for (UINT_32 xIdx = 0; xIdx < sizeof(TestCoord) / sizeof(TestCoord[0]); xIdx++)
+    {
+        if (TestCoord[xIdx] < pIn->width)
+        {
+            addrIn.x = TestCoord[xIdx];
+
+            for (UINT_32 yIdx = 0; yIdx  < sizeof(TestCoord) / sizeof(TestCoord[0]); yIdx++)
+            {
+                if (TestCoord[yIdx] < pIn->height)
+                {
+                    addrIn.y               = TestCoord[yIdx] + pOut->pStereoInfo->eyeHeight;
+                    addrIn.pipeBankXor     = pbXor ^ pOut->pStereoInfo->rightSwizzle;
+                    addrIn.unalignedHeight = pIn->height + pOut->pStereoInfo->eyeHeight;
+
+                    ADDR_E_RETURNCODE ret = ComputeSurfaceAddrFromCoord(&addrIn, &addrOut);
+                    ADDR_ASSERT(ret == ADDR_OK);
+
+                    const UINT_64 rightEyeOffsetFromBase = addrOut.addr;
+
+                    addrIn.y               = TestCoord[yIdx];
+                    addrIn.pipeBankXor     = pbXor;
+                    addrIn.unalignedHeight = pIn->height;
+
+                    ret = ComputeSurfaceAddrFromCoord(&addrIn, &addrOut);
+                    ADDR_ASSERT(ret == ADDR_OK);
+
+                    const UINT_64 rightEyeOffsetRelative = addrOut.addr;
+
+                    ADDR_ASSERT(rightEyeOffsetFromBase == rightEyeOffsetRelative + pOut->pStereoInfo->rightOffset);
+                }
+            }
+        }
+    }
+}
+#endif
 
 } // V2
 } // Addr

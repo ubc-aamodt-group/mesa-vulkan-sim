@@ -30,11 +30,12 @@ using namespace brw;
 
 class saturate_propagation_test : public ::testing::Test {
    virtual void SetUp();
+   virtual void TearDown();
 
 public:
    struct brw_compiler *compiler;
-   struct gen_device_info *devinfo;
-   struct gl_context *ctx;
+   struct intel_device_info *devinfo;
+   void *ctx;
    struct brw_wm_prog_data *prog_data;
    struct gl_shader_program *shader_prog;
    fs_visitor *v;
@@ -44,28 +45,40 @@ class saturate_propagation_fs_visitor : public fs_visitor
 {
 public:
    saturate_propagation_fs_visitor(struct brw_compiler *compiler,
+                                   void *mem_ctx,
                                    struct brw_wm_prog_data *prog_data,
                                    nir_shader *shader)
-      : fs_visitor(compiler, NULL, NULL, NULL,
-                   &prog_data->base, shader, 16, -1) {}
+      : fs_visitor(compiler, NULL, mem_ctx, NULL,
+                   &prog_data->base, shader, 16, false, false) {}
 };
 
 
 void saturate_propagation_test::SetUp()
 {
-   ctx = (struct gl_context *)calloc(1, sizeof(*ctx));
-   compiler = (struct brw_compiler *)calloc(1, sizeof(*compiler));
-   devinfo = (struct gen_device_info *)calloc(1, sizeof(*devinfo));
+   ctx = ralloc_context(NULL);
+   compiler = rzalloc(ctx, struct brw_compiler);
+   devinfo = rzalloc(ctx, struct intel_device_info);
    compiler->devinfo = devinfo;
 
-   prog_data = ralloc(NULL, struct brw_wm_prog_data);
+   prog_data = ralloc(ctx, struct brw_wm_prog_data);
    nir_shader *shader =
-      nir_shader_create(NULL, MESA_SHADER_FRAGMENT, NULL, NULL);
+      nir_shader_create(ctx, MESA_SHADER_FRAGMENT, NULL, NULL);
 
-   v = new saturate_propagation_fs_visitor(compiler, prog_data, shader);
+   v = new saturate_propagation_fs_visitor(compiler, ctx, prog_data, shader);
 
-   devinfo->gen = 6;
+   devinfo->ver = 6;
+   devinfo->verx10 = devinfo->ver * 10;
 }
+
+void saturate_propagation_test::TearDown()
+{
+   delete v;
+   v = NULL;
+
+   ralloc_free(ctx);
+   ctx = NULL;
+}
+
 
 static fs_inst *
 instruction(bblock_t *block, int num)
@@ -788,4 +801,43 @@ TEST_F(saturate_propagation_test, larger_exec_size_consumer)
    EXPECT_FALSE(instruction(block0, 0)->saturate);
    EXPECT_EQ(BRW_OPCODE_MOV, instruction(block0, 1)->opcode);
    EXPECT_TRUE(instruction(block0, 1)->saturate);
+}
+
+TEST_F(saturate_propagation_test, offset_source_barrier)
+{
+   const fs_builder &bld = v->bld;
+   fs_reg dst0 = v->vgrf(glsl_type::float_type);
+   fs_reg dst1 = v->vgrf(glsl_type::float_type);
+   fs_reg dst2 = v->vgrf(glsl_type::float_type);
+   fs_reg src0 = v->vgrf(glsl_type::float_type);
+   fs_reg src1 = v->vgrf(glsl_type::float_type);
+   bld.group(16, 0).ADD(dst0, src0, src1);
+   bld.group(1, 0).ADD(dst1, component(dst0, 8), brw_imm_f(1.0f));
+   set_saturate(true, bld.group(16, 0).MOV(dst2, dst0));
+
+   /* = Before =
+    *
+    * 0: add(16)       dst0  src0   src1
+    * 0: add(1)        dst1  dst0+8 1.0f
+    * 1: mov.sat(16)   dst2  dst0
+    *
+    * = After =
+    * (no changes)
+    */
+
+   v->calculate_cfg();
+   bblock_t *block0 = v->cfg->blocks[0];
+
+   EXPECT_EQ(0, block0->start_ip);
+   EXPECT_EQ(2, block0->end_ip);
+
+   EXPECT_FALSE(saturate_propagation(v));
+   EXPECT_EQ(0, block0->start_ip);
+   EXPECT_EQ(2, block0->end_ip);
+   EXPECT_EQ(BRW_OPCODE_ADD, instruction(block0, 0)->opcode);
+   EXPECT_EQ(BRW_OPCODE_ADD, instruction(block0, 1)->opcode);
+   EXPECT_FALSE(instruction(block0, 0)->saturate);
+   EXPECT_FALSE(instruction(block0, 1)->saturate);
+   EXPECT_EQ(BRW_OPCODE_MOV, instruction(block0, 2)->opcode);
+   EXPECT_TRUE(instruction(block0, 2)->saturate);
 }

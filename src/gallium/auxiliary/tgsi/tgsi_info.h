@@ -28,6 +28,7 @@
 #ifndef TGSI_INFO_H
 #define TGSI_INFO_H
 
+#include "compiler/shader_enums.h"
 #include "pipe/p_compiler.h"
 #include "pipe/p_shader_tokens.h"
 #include "util/format/u_format.h"
@@ -87,9 +88,6 @@ tgsi_get_opcode_info(enum tgsi_opcode opcode);
 
 const char *
 tgsi_get_opcode_name(enum tgsi_opcode opcode);
-
-const char *
-tgsi_get_processor_name(enum pipe_shader_type processor);
 
 enum tgsi_opcode_type {
    TGSI_TYPE_UNTYPED, /* for MOV */

@@ -149,7 +149,7 @@ SOFTWARE.
 	<pattern low="11" high="13">100</pattern>
 	<field name="ABSNEG" low="14" high="15" type="#absneg"/>
 	<encode>
-		<map name="IMMED">src->uim_val</map>
+		<map name="IMMED">extract_reg_iim(src)</map>
 	</encode>
 </bitset>
 
@@ -175,7 +175,7 @@ SOFTWARE.
 	<pattern low="11" high="13">101</pattern>
 	<field name="ABSNEG" low="14" high="15" type="#absneg"/>
 	<encode>
-		<map name="IMMED">src->uim_val</map>
+		<map name="IMMED">extract_reg_uim(src)</map>
 	</encode>
 </bitset>
 
@@ -199,12 +199,17 @@ SOFTWARE.
 
 <bitset name="#multisrc-gpr" extends="#multisrc">
 	<display>
-		{ABSNEG}{SRC_R}{HALF}{SRC}
+		{LAST}{ABSNEG}{SRC_R}{HALF}{SRC}
 	</display>
 	<derived name="HALF" expr="#multisrc-half" type="bool" display="h"/>
 	<field name="SRC" low="0" high="7" type="#reg-gpr"/>
-	<pattern low="8" high="13">000000</pattern>
+	<pattern low="8" high="9">00</pattern>
+	<field name="LAST" pos="10" type="bool" display="(last)"/>
+	<pattern low="11" high="13">000</pattern>
 	<field name="ABSNEG" low="14" high="15" type="#absneg"/>
+	<encode>
+		<map name="LAST">!!(src->flags &amp; IR3_REG_LAST_USE)</map>
+	</encode>
 </bitset>
 
 <bitset name="#multisrc-const" extends="#multisrc">
@@ -307,6 +312,14 @@ SOFTWARE.
 	<value val="6" display="u8"/>
 	<value val="7" display="s8"/>
 </enum>
+
+<expr name="#type-half">
+	({TYPE} == 0) /* f16 */ ||
+	({TYPE} == 2) /* u16 */ ||
+	({TYPE} == 4) /* s16 */ ||
+	({TYPE} == 6) /* u8 */  ||
+	({TYPE} == 7) /* s8 */
+</expr>
 
 <enum name="#absneg">
 	<value val="0" display=""/>

@@ -162,7 +162,7 @@ static bool ppir_lower_texture(ppir_block *block, ppir_node *node)
 {
    ppir_dest *dest = ppir_node_get_dest(node);
 
-   if (ppir_node_has_single_succ(node)) {
+   if (ppir_node_has_single_succ(node) && dest->type == ppir_target_ssa) {
       ppir_node *succ = ppir_node_first_succ(node);
       dest->type = ppir_target_pipeline;
       dest->pipeline = ppir_pipeline_reg_sampler;
@@ -322,6 +322,98 @@ static bool ppir_lower_sat(ppir_block *block, ppir_node *node)
    return true;
 }
 
+static bool ppir_lower_branch_merge_condition(ppir_block *block, ppir_node *node)
+{
+   /* Check if we can merge a condition with a branch instruction,
+    * removing the need for a select instruction */
+   assert(node->type == ppir_node_type_branch);
+
+   if (!ppir_node_has_single_pred(node))
+      return false;
+
+   ppir_node *pred = ppir_node_first_pred(node);
+   assert(pred);
+
+   if (pred->type != ppir_node_type_alu)
+      return false;
+
+   switch (pred->op)
+   {
+      case ppir_op_lt:
+      case ppir_op_gt:
+      case ppir_op_le:
+      case ppir_op_ge:
+      case ppir_op_eq:
+      case ppir_op_ne:
+         break;
+      default:
+         return false;
+   }
+
+   ppir_dest *dest = ppir_node_get_dest(pred);
+   if (!ppir_node_has_single_succ(pred) || dest->type != ppir_target_ssa)
+      return false;
+
+   ppir_alu_node *cond = ppir_node_to_alu(pred);
+   /* branch can't reference pipeline registers */
+   if (cond->src[0].type == ppir_target_pipeline ||
+       cond->src[1].type == ppir_target_pipeline)
+      return false;
+
+   /* branch can't use flags */
+   if (cond->src[0].negate || cond->src[0].absolute ||
+       cond->src[1].negate || cond->src[1].absolute)
+      return false;
+
+   /* at this point, it can be successfully be replaced. */
+   ppir_branch_node *branch = ppir_node_to_branch(node);
+   switch (pred->op)
+   {
+      case ppir_op_le:
+         branch->cond_gt = true;
+         break;
+      case ppir_op_lt:
+         branch->cond_eq = true;
+         branch->cond_gt = true;
+         break;
+      case ppir_op_ge:
+         branch->cond_lt = true;
+         break;
+      case ppir_op_gt:
+         branch->cond_eq = true;
+         branch->cond_lt = true;
+         break;
+      case ppir_op_eq:
+         branch->cond_lt = true;
+         branch->cond_gt = true;
+         break;
+      case ppir_op_ne:
+         branch->cond_eq = true;
+         break;
+      default:
+         assert(0);
+         break;
+   }
+
+   assert(cond->num_src == 2);
+
+   branch->num_src = 2;
+   branch->src[0] = cond->src[0];
+   branch->src[1] = cond->src[1];
+
+   /* for all nodes before the condition */
+   ppir_node_foreach_pred_safe(pred, dep) {
+      /* insert the branch node as successor */
+      ppir_node *p = dep->pred;
+      ppir_node_remove_dep(dep);
+      ppir_node_add_dep(node, p, ppir_dep_src);
+   }
+
+   ppir_node_delete(pred);
+
+   return true;
+}
+
 static bool ppir_lower_branch(ppir_block *block, ppir_node *node)
 {
    ppir_branch_node *branch = ppir_node_to_branch(node);
@@ -330,6 +422,12 @@ static bool ppir_lower_branch(ppir_block *block, ppir_node *node)
    if (branch->num_src == 0)
       return true;
 
+   /* Check if we can merge a condition with the branch */
+   if (ppir_lower_branch_merge_condition(block, node))
+      return true;
+
+   /* If the condition cannot be merged, fall back to a
+    * comparison against zero */
    ppir_const_node *zero = ppir_node_create(block, ppir_op_const, -1, 0);
 
    if (!zero)
@@ -342,11 +440,6 @@ static bool ppir_lower_branch(ppir_block *block, ppir_node *node)
    zero->dest.ssa.num_components = 1;
    zero->dest.write_mask = 0x01;
 
-   /* For now we're just comparing branch condition with 0,
-    * in future we should look whether it's possible to move
-    * comparision node into branch itself and use current
-    * way as a fallback for complex conditions.
-    */
    ppir_node_target_assign(&branch->src[1], &zero->node);
 
    if (branch->negate)
@@ -360,6 +453,62 @@ static bool ppir_lower_branch(ppir_block *block, ppir_node *node)
 
    ppir_node_add_dep(&branch->node, &zero->node, ppir_dep_src);
    list_addtail(&zero->node.list, &node->list);
+
+   return true;
+}
+
+static bool ppir_lower_accum(ppir_block *block, ppir_node *node)
+{
+    /* If the last argument of a node placed in PPIR_INSTR_SLOT_ALU_SCL_ADD
+    * (or PPIR_INSTR_SLOT_ALU_VEC_ADD) is placed in
+    * PPIR_INSTR_SLOT_ALU_SCL_MUL (or PPIR_INSTR_SLOT_ALU_VEC_MUL) we cannot
+    * save a register (and an instruction) by using a pipeline register.
+    * Therefore it is interesting to make sure arguments of that type are
+    * the first argument by swapping arguments (if possible) */
+   ppir_alu_node *alu = ppir_node_to_alu(node);
+
+   assert(alu->num_src >= 2);
+
+   if (alu->src[0].type == ppir_target_pipeline)
+      return true;
+
+   if (alu->src[0].type == ppir_target_ssa) {
+      int *src_0_slots = ppir_op_infos[alu->src[0].node->op].slots;
+      if (src_0_slots) {
+         for (int i = 0; src_0_slots[i] != PPIR_INSTR_SLOT_END; i++) {
+            if ((src_0_slots[i] == PPIR_INSTR_SLOT_ALU_SCL_MUL) ||
+               (src_0_slots[i] == PPIR_INSTR_SLOT_ALU_VEC_MUL)) {
+               return true;
+            }
+         }
+      }
+   }
+
+   int src_to_swap = -1;
+   for (int j = 1; j < alu->num_src; j++) {
+      if (alu->src[j].type != ppir_target_ssa)
+         continue;
+      int *src_slots = ppir_op_infos[alu->src[j].node->op].slots;
+      if (!src_slots)
+         continue;
+      for (int i = 0; src_slots[i] != PPIR_INSTR_SLOT_END; i++) {
+         if ((src_slots[i] == PPIR_INSTR_SLOT_ALU_SCL_MUL) ||
+             (src_slots[i] == PPIR_INSTR_SLOT_ALU_VEC_MUL)) {
+            src_to_swap = j;
+            break;
+         }
+      }
+      if (src_to_swap > 0)
+         break;
+   }
+
+   if (src_to_swap < 0)
+      return true;
+
+   /* Swap arguments so that we can use a pipeline register later on */
+   ppir_src tmp = alu->src[0];
+   alu->src[0] = alu->src[src_to_swap];
+   alu->src[src_to_swap] = tmp;
 
    return true;
 }
@@ -379,6 +528,11 @@ static bool (*ppir_lower_funcs[ppir_op_num])(ppir_block *, ppir_node *) = {
    [ppir_op_branch] = ppir_lower_branch,
    [ppir_op_load_uniform] = ppir_lower_load,
    [ppir_op_load_temp] = ppir_lower_load,
+   [ppir_op_add] = ppir_lower_accum,
+   [ppir_op_max] = ppir_lower_accum,
+   [ppir_op_min] = ppir_lower_accum,
+   [ppir_op_eq] = ppir_lower_accum,
+   [ppir_op_ne] = ppir_lower_accum,
 };
 
 bool ppir_lower_prog(ppir_compiler *comp)

@@ -25,23 +25,29 @@
 #define D3D12_BATCH_H
 
 #include "util/u_dynarray.h"
+#include "util/hash_table.h"
+#include "pipe/p_state.h"
 #include <stdint.h>
 
-#ifndef _WIN32
-#include <wsl/winadapter.h>
-#endif
-
-#define D3D12_IGNORE_SDK_LAYERS
-#include <directx/d3d12.h>
+#include "d3d12_common.h"
 
 struct d3d12_bo;
 struct d3d12_descriptor_heap;
 struct d3d12_fence;
 
+
+struct d3d12_sampler_desc_table_key
+{
+   D3D12_CPU_DESCRIPTOR_HANDLE descs[PIPE_MAX_SHADER_SAMPLER_VIEWS];
+   unsigned count;
+};
+
 struct d3d12_batch {
    struct d3d12_fence *fence;
 
-   struct set *bos;
+   struct hash_table *bos;
+   struct util_dynarray local_bos;
+   struct hash_table *sampler_tables;
    struct set *sampler_views;
    struct set *surfaces;
    struct set *objects;
@@ -52,6 +58,10 @@ struct d3d12_batch {
    struct d3d12_descriptor_heap *sampler_heap;
    struct d3d12_descriptor_heap *view_heap;
    bool has_errors;
+   bool pending_memory_barrier;
+
+   uint64_t submit_id;
+   uint32_t ctx_id, ctx_index;
 };
 
 bool
@@ -71,11 +81,13 @@ d3d12_reset_batch(struct d3d12_context *ctx, struct d3d12_batch *batch, uint64_t
 
 bool
 d3d12_batch_has_references(struct d3d12_batch *batch,
-                           struct d3d12_bo *bo);
+                           struct d3d12_bo *bo,
+                           bool want_to_write);
 
 void
 d3d12_batch_reference_resource(struct d3d12_batch *batch,
-                               struct d3d12_resource *res);
+                               struct d3d12_resource *res,
+                               bool write);
 
 void
 d3d12_batch_reference_sampler_view(struct d3d12_batch *batch,

@@ -259,7 +259,7 @@ vl_deint_filter_init(struct vl_deint_filter *filter, struct pipe_context *pipe,
    (
       pipe->screen,
       PIPE_VIDEO_PROFILE_UNKNOWN,
-      PIPE_VIDEO_ENTRYPOINT_UNKNOWN,
+      PIPE_VIDEO_ENTRYPOINT_PROCESSING,
       PIPE_VIDEO_CAP_PREFERED_FORMAT
    );
    templ.width = video_width;
@@ -302,7 +302,6 @@ vl_deint_filter_init(struct vl_deint_filter *filter, struct pipe_context *pipe,
    sampler.min_img_filter = PIPE_TEX_FILTER_LINEAR;
    sampler.min_mip_filter = PIPE_TEX_MIPFILTER_NONE;
    sampler.mag_img_filter = PIPE_TEX_FILTER_LINEAR;
-   sampler.normalized_coords = 1;
    filter->sampler[0] = pipe->create_sampler_state(pipe, &sampler);
    filter->sampler[1] = filter->sampler[2] = filter->sampler[3] = filter->sampler[0];
    if (!filter->sampler[0])
@@ -463,7 +462,7 @@ vl_deint_filter_render(struct vl_deint_filter *filter,
 
    /* set up pipe state */
    filter->pipe->bind_rasterizer_state(filter->pipe, filter->rs_state);
-   filter->pipe->set_vertex_buffers(filter->pipe, 0, 1, &filter->quad);
+   filter->pipe->set_vertex_buffers(filter->pipe, 0, 1, 0, false, &filter->quad);
    filter->pipe->bind_vertex_elements_state(filter->pipe, filter->ves);
    filter->pipe->bind_vs_state(filter->pipe, filter->vs);
    filter->pipe->bind_sampler_states(filter->pipe, PIPE_SHADER_FRAGMENT,
@@ -472,6 +471,10 @@ vl_deint_filter_render(struct vl_deint_filter *filter,
    /* prepare viewport */
    memset(&viewport, 0, sizeof(viewport));
    viewport.scale[2] = 1;
+   viewport.swizzle_x = PIPE_VIEWPORT_SWIZZLE_POSITIVE_X;
+   viewport.swizzle_y = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Y;
+   viewport.swizzle_z = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Z;
+   viewport.swizzle_w = PIPE_VIEWPORT_SWIZZLE_POSITIVE_W;
 
    /* prepare framebuffer */
    memset(&fb_state, 0, sizeof(fb_state));
@@ -497,23 +500,24 @@ vl_deint_filter_render(struct vl_deint_filter *filter,
       sampler_views[1] = prev_sv[k];
       sampler_views[2] = cur_sv[k];
       sampler_views[3] = next_sv[k];
-      filter->pipe->set_sampler_views(filter->pipe, PIPE_SHADER_FRAGMENT, 0, 4, sampler_views);
+      filter->pipe->set_sampler_views(filter->pipe, PIPE_SHADER_FRAGMENT,
+                                      0, 4, 0, false, sampler_views);
 
       /* blit current field */
       fb_state.cbufs[0] = blit_surf;
       filter->pipe->bind_fs_state(filter->pipe, field ? filter->fs_copy_bottom : filter->fs_copy_top);
       filter->pipe->set_framebuffer_state(filter->pipe, &fb_state);
       filter->pipe->set_viewport_states(filter->pipe, 0, 1, &viewport);
-      util_draw_arrays(filter->pipe, PIPE_PRIM_QUADS, 0, 4);
+      util_draw_arrays(filter->pipe, MESA_PRIM_QUADS, 0, 4);
 
       /* blit or interpolate other field */
       fb_state.cbufs[0] = dst_surf;
       filter->pipe->set_framebuffer_state(filter->pipe, &fb_state);
       if (i > 0 && filter->skip_chroma) {
-         util_draw_arrays(filter->pipe, PIPE_PRIM_QUADS, 0, 4);
+         util_draw_arrays(filter->pipe, MESA_PRIM_QUADS, 0, 4);
       } else {
          filter->pipe->bind_fs_state(filter->pipe, field ? filter->fs_deint_top : filter->fs_deint_bottom);
-         util_draw_arrays(filter->pipe, PIPE_PRIM_QUADS, 0, 4);
+         util_draw_arrays(filter->pipe, MESA_PRIM_QUADS, 0, 4);
       }
 
       if (++j >= util_format_get_nr_components(dst_surf->format)) {

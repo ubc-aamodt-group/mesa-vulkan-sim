@@ -34,6 +34,7 @@
 #include "program/program.h"
 
 #include "brw_clip.h"
+#include "brw_prim.h"
 
 static void release_tmps( struct brw_clip_compile *c )
 {
@@ -44,7 +45,7 @@ static void release_tmps( struct brw_clip_compile *c )
 void brw_clip_tri_alloc_regs( struct brw_clip_compile *c,
 			      GLuint nr_verts )
 {
-   const struct gen_device_info *devinfo = c->func.devinfo;
+   const struct intel_device_info *devinfo = c->func.devinfo;
    GLuint i = 0,j;
 
    /* Register usage is static, precompute here:
@@ -117,7 +118,7 @@ void brw_clip_tri_alloc_regs( struct brw_clip_compile *c,
    c->reg.clipdistance_offset = retype(brw_vec1_grf(i, 1), BRW_REGISTER_TYPE_W);
    i++;
 
-   if (devinfo->gen == 5) {
+   if (devinfo->ver == 5) {
       c->reg.ff_sync = retype(brw_vec1_grf(i, 0), BRW_REGISTER_TYPE_UD);
       i++;
    }
@@ -136,7 +137,7 @@ void brw_clip_tri_init_vertices( struct brw_clip_compile *c )
    struct brw_codegen *p = &c->func;
    struct brw_reg tmp0 = c->reg.loopcount; /* handy temporary */
 
-   /* Initial list of indices for incoming vertexes:
+   /* Initial list of indices for incoming vertices:
     */
    brw_AND(p, tmp0, get_element_ud(c->reg.R0, 2), brw_imm_ud(PRIM_MASK));
    brw_CMP(p,
@@ -250,7 +251,7 @@ load_clip_distance(struct brw_clip_compile *c, struct brw_indirect vtx,
 }
 
 
-/* Use mesa's clipping algorithms, translated to GEN4 assembly.
+/* Use mesa's clipping algorithms, translated to GFX4 assembly.
  */
 void brw_clip_tri( struct brw_clip_compile *c )
 {

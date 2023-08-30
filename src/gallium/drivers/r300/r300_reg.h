@@ -305,7 +305,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define R300_VAP_PSC_SGN_NORM_CNTL                0x21dc
 #   define SGN_NORM_ZERO                                    0
 #   define SGN_NORM_ZERO_CLAMP_MINUS_ONE                    1
-#   define SGN_NORM_NO_ZERO                                 2
+#   define SGN_NORM_NO_ZERO                                 2U
 #   define R300_SGN_NORM_NO_ZERO (SGN_NORM_NO_ZERO | \
         (SGN_NORM_NO_ZERO << 2) | (SGN_NORM_NO_ZERO << 4) | \
         (SGN_NORM_NO_ZERO << 6) | (SGN_NORM_NO_ZERO << 8) | \
@@ -540,7 +540,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  * position takes place.
  *
  * Most likely this is used to ignore rest of the program in cases
- * where group of verts arent visible. For some reason this "section"
+ * where group of verts aren't visible. For some reason this "section"
  * is sometimes accepted other instruction that have no relationship with
  * position calculations.
  */
@@ -822,8 +822,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R500_RS_COL_PTR(x)		        ((x) << 24)
 #       define R500_RS_COL_FMT(x)                       ((x) << 27)
 /* gap */
-#define R500_RS_IP_OFFSET_DIS 				(0 << 31)
-#define R500_RS_IP_OFFSET_EN 				(1 << 31)
+#define R500_RS_IP_OFFSET_DIS 				(0U << 31)
+#define R500_RS_IP_OFFSET_EN 				(1U << 31)
 
 /* gap */
 
@@ -1197,7 +1197,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  * My guess is that there are two bits for each zbias primitive
  * (FILL, LINE, POINT).
  *  One to enable depth test and one for depth write.
- * Yet this doesnt explain why depth writes work ...
+ * Yet this doesn't explain why depth writes work ...
  */
 #define R300_SU_POLY_OFFSET_ENABLE	       0x42B4
 #	define R300_FRONT_ENABLE	       (1 << 0)
@@ -1900,7 +1900,6 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  *  - CMPH: If ARG2 > 0.5, return ARG0, else return ARG1
  *  - CMP: If ARG2 < 0, return ARG1, else return ARG0
  *  - FLR: use FRC+MAD
- *  - XPD: use MAD+MAD
  *  - SGE, SLT: use MAD+CMP
  *  - RSQ: use ABS modifier for argument
  *  - Use OUTC_REPL_ALPHA to write results of an alpha-only operation
@@ -2078,7 +2077,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_ALU_OUTC_MOD_DIV8           (6 << R300_ALU_OUTC_MOD_SHIFT)
 
 #       define R300_ALU_OUTC_CLAMP              (1 << 30)
-#       define R300_ALU_INSERT_NOP              (1 << 31)
+#       define R300_ALU_INSERT_NOP              (1U << 31)
 
 #define R300_US_ALU_ALPHA_INST_0                 0x49C0
 #       define R300_ALU_ARGA_SRC0C_X            0
@@ -2311,7 +2310,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_DISCARD_SRC_PIXELS_SRC_COLOR_1     (5 << 3)
 #       define R300_DISCARD_SRC_PIXELS_SRC_ALPHA_COLOR_1     (6 << 3)
 #       define R500_SRC_ALPHA_0_NO_READ                (1 << 30)
-#       define R500_SRC_ALPHA_1_NO_READ                (1 << 31)
+#       define R500_SRC_ALPHA_1_NO_READ                (1U << 31)
 
 /* the following are shared between CBLEND and ABLEND */
 #       define R300_FCN_MASK                         (3  << 12)
@@ -2666,8 +2665,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R500_CONTIGUOUS_6XAA_SAMPLES_DISABLE          (1 << 17)
 #	define R500_PEQ_PACKING_DISABLE                      (0 << 18)
 #	define R500_PEQ_PACKING_ENABLE                       (1 << 18)
-#	define R500_COVERED_PTR_MASKING_DISABLE              (0 << 18)
-#	define R500_COVERED_PTR_MASKING_ENABLE               (1 << 18)
+#	define R500_COVERED_PTR_MASKING_DISABLE              (0 << 19)
+#	define R500_COVERED_PTR_MASKING_ENABLE               (1 << 19)
 
 
 /* gap */
@@ -3310,7 +3309,7 @@ enum {
 #   define R500_FC_KBOOL(x)				(x)
 #define R500_US_FC_CTRL					0x4624
 #   define R500_FC_TEST_EN				(1 << 30)
-#   define R500_FC_FULL_FC_EN				(1 << 31)
+#   define R500_FC_FULL_FC_EN				(1U << 31)
 #define R500_US_FC_INST_0				0x9800
 #   define R500_FC_OP_JUMP				(0 << 0)
 #   define R500_FC_OP_LOOP				(1 << 0)
@@ -3489,7 +3488,7 @@ enum {
 #define R300_PACKET3_INDX_BUFFER            0x00003300
 #    define R300_INDX_BUFFER_DST_SHIFT          0
 #    define R300_INDX_BUFFER_SKIP_SHIFT         16
-#    define R300_INDX_BUFFER_ONE_REG_WR		(1<<31)
+#    define R300_INDX_BUFFER_ONE_REG_WR		(1U << 31)
 
 /* Same as R300_PACKET3_3D_DRAW_VBUF but without VAP_VTX_FMT */
 #define R300_PACKET3_3D_DRAW_VBUF_2         0x00003400
@@ -3498,7 +3497,7 @@ enum {
 /* Same as R300_PACKET3_3D_DRAW_INDX but without VAP_VTX_FMT */
 #define R300_PACKET3_3D_DRAW_INDX_2         0x00003600
 
-/* Clears a portion of hierachical Z RAM
+/* Clears a portion of hierarchical Z RAM
  * 3 dword parameters
  * 0. START
  * 1. COUNT: 13:0 (max is 0x3FFF)

@@ -356,7 +356,7 @@ util_dump_rasterizer_state(FILE *stream, const struct pipe_rasterizer_state *sta
    util_dump_member(stream, uint, state, sprite_coord_enable);
    util_dump_member(stream, bool, state, sprite_coord_mode);
    util_dump_member(stream, bool, state, point_quad_rasterization);
-   util_dump_member(stream, bool, state, point_tri_clip);
+   util_dump_member(stream, bool, state, point_line_tri_clip);
    util_dump_member(stream, bool, state, point_size_per_vertex);
    util_dump_member(stream, bool, state, multisample);
    util_dump_member(stream, bool, state, line_smooth);
@@ -462,12 +462,37 @@ util_dump_clip_state(FILE *stream, const struct pipe_clip_state *state)
    util_dump_struct_end(stream);
 }
 
+void
+util_dump_stream_output_info(FILE *stream,
+                             const struct pipe_stream_output_info *state)
+{
+   if (!state) {
+      util_dump_null(stream);
+      return;
+   }
+
+   util_dump_struct_begin(stream, "pipe_stream_output_info");
+   util_dump_member(stream, uint, state, num_outputs);
+   util_dump_array(stream, uint, state->stride,
+                   ARRAY_SIZE(state->stride));
+   util_dump_array_begin(stream);
+   for (unsigned i = 0; i < state->num_outputs; ++i) {
+      util_dump_elem_begin(stream);
+      util_dump_struct_begin(stream, ""); /* anonymous */
+      util_dump_member(stream, uint, &state->output[i], register_index);
+      util_dump_member(stream, uint, &state->output[i], start_component);
+      util_dump_member(stream, uint, &state->output[i], num_components);
+      util_dump_member(stream, uint, &state->output[i], output_buffer);
+      util_dump_struct_end(stream);
+      util_dump_elem_end(stream);
+   }
+   util_dump_array_end(stream);
+   util_dump_struct_end(stream);
+}
 
 void
 util_dump_shader_state(FILE *stream, const struct pipe_shader_state *state)
 {
-   unsigned i;
-
    if (!state) {
       util_dump_null(stream);
       return;
@@ -485,23 +510,7 @@ util_dump_shader_state(FILE *stream, const struct pipe_shader_state *state)
 
    if (state->stream_output.num_outputs) {
       util_dump_member_begin(stream, "stream_output");
-      util_dump_struct_begin(stream, "pipe_stream_output_info");
-      util_dump_member(stream, uint, &state->stream_output, num_outputs);
-      util_dump_array(stream, uint, state->stream_output.stride,
-                      ARRAY_SIZE(state->stream_output.stride));
-      util_dump_array_begin(stream);
-      for(i = 0; i < state->stream_output.num_outputs; ++i) {
-         util_dump_elem_begin(stream);
-         util_dump_struct_begin(stream, ""); /* anonymous */
-         util_dump_member(stream, uint, &state->stream_output.output[i], register_index);
-         util_dump_member(stream, uint, &state->stream_output.output[i], start_component);
-         util_dump_member(stream, uint, &state->stream_output.output[i], num_components);
-         util_dump_member(stream, uint, &state->stream_output.output[i], output_buffer);
-         util_dump_struct_end(stream);
-         util_dump_elem_end(stream);
-      }
-      util_dump_array_end(stream);
-      util_dump_struct_end(stream);
+      util_dump_stream_output_info(stream, &state->stream_output);
       util_dump_member_end(stream);
    }
 
@@ -680,7 +689,7 @@ util_dump_sampler_state(FILE *stream, const struct pipe_sampler_state *state)
    util_dump_member(stream, enum_tex_filter, state, mag_img_filter);
    util_dump_member(stream, uint, state, compare_mode);
    util_dump_member(stream, enum_func, state, compare_func);
-   util_dump_member(stream, bool, state, normalized_coords);
+   util_dump_member(stream, bool, state, unnormalized_coords);
    util_dump_member(stream, uint, state, max_anisotropy);
    util_dump_member(stream, bool, state, seamless_cube_map);
    util_dump_member(stream, float, state, lod_bias);
@@ -733,6 +742,7 @@ util_dump_image_view(FILE *stream, const struct pipe_image_view *state)
       util_dump_member(stream, uint, state, u.buf.size);
    }
    else {
+      util_dump_member(stream, bool, state, u.tex.single_layer_view);
       util_dump_member(stream, uint, state, u.tex.first_layer);
       util_dump_member(stream, uint, state, u.tex.last_layer);
       util_dump_member(stream, uint, state, u.tex.level);
@@ -913,11 +923,6 @@ util_dump_draw_info(FILE *stream, const struct pipe_draw_info *state)
    util_dump_member(stream, uint, state, start_instance);
    util_dump_member(stream, uint, state, instance_count);
 
-   util_dump_member(stream, uint, state, drawid);
-
-   util_dump_member(stream, uint, state, vertices_per_patch);
-
-   util_dump_member(stream, int,  state, index_bias);
    util_dump_member(stream, uint, state, min_index);
    util_dump_member(stream, uint, state, max_index);
 
@@ -935,11 +940,12 @@ util_dump_draw_info(FILE *stream, const struct pipe_draw_info *state)
 }
 
 void
-util_dump_draw_start_count(FILE *stream, const struct pipe_draw_start_count *state)
+util_dump_draw_start_count_bias(FILE *stream, const struct pipe_draw_start_count_bias *state)
 {
-   util_dump_struct_begin(stream, "pipe_draw_start_count");
+   util_dump_struct_begin(stream, "pipe_draw_start_count_bias");
    util_dump_member(stream, uint, state, start);
    util_dump_member(stream, uint, state, count);
+   util_dump_member(stream, int,  state, index_bias);
    util_dump_struct_end(stream);
 }
 

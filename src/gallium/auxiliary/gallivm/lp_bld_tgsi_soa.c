@@ -36,7 +36,7 @@
  * Brian Paul, and others.
  */
 
-#include "pipe/p_config.h"
+#include "util/detect.h"
 #include "pipe/p_shader_tokens.h"
 #include "util/u_debug.h"
 #include "util/u_math.h"
@@ -68,6 +68,7 @@
 #include "lp_bld_printf.h"
 #include "lp_bld_sample.h"
 #include "lp_bld_struct.h"
+#include "lp_bld_jit_types.h"
 
 #define DUMP_GS_EMITS 0
 
@@ -305,7 +306,7 @@ static void lp_exec_default(struct lp_exec_mask *mask,
    LLVMBuilderRef builder = mask->bld->gallivm->builder;
    struct function_ctx *ctx = func_ctx(mask);
 
-   int default_exec_pc;
+   int default_exec_pc = 0;
    boolean default_is_last;
 
    if (ctx->switch_stack_size > LP_MAX_TGSI_NESTING) {
@@ -446,15 +447,18 @@ get_file_ptr(struct lp_build_tgsi_soa_context *bld,
    LLVMBuilderRef builder = bld->bld_base.base.gallivm->builder;
    LLVMValueRef (*array_of_vars)[TGSI_NUM_CHANNELS];
    LLVMValueRef var_of_array;
+   LLVMTypeRef type_of_array;
 
    switch (file) {
    case TGSI_FILE_TEMPORARY:
       array_of_vars = bld->temps;
       var_of_array = bld->temps_array;
+      type_of_array = bld->temps_array_type;
       break;
    case TGSI_FILE_OUTPUT:
       array_of_vars = bld->outputs;
       var_of_array = bld->outputs_array;
+      type_of_array = bld->outputs_array_type;
       break;
    default:
       assert(0);
@@ -465,13 +469,15 @@ get_file_ptr(struct lp_build_tgsi_soa_context *bld,
 
    if (bld->indirect_files & (1 << file)) {
       LLVMValueRef lindex = lp_build_const_int32(bld->bld_base.base.gallivm, index * 4 + chan);
-      if (LLVMGetTypeKind(LLVMGetElementType(LLVMTypeOf(var_of_array))) == LLVMArrayTypeKind) {
+      /* I'm not sure the other path ever gets hit, but leave until someone figures it out,
+         this check doesn't work with opaque pointers. */
+      if (1) {//LLVMGetTypeKind(LLVMGetElementType(LLVMTypeOf(var_of_array))) == LLVMArrayTypeKind) {
          LLVMValueRef gep[2];
          gep[0] = lp_build_const_int32(bld->bld_base.base.gallivm, 0);
          gep[1] = lindex;
-         return LLVMBuildGEP(builder, var_of_array, gep, 2, "");
+         return LLVMBuildGEP2(builder, type_of_array, var_of_array, gep, 2, "");
       } else {
-         return LLVMBuildGEP(builder, var_of_array, &lindex, 1, "");
+         return LLVMBuildGEP2(builder, type_of_array, var_of_array, &lindex, 1, "");
       }
    }
    else {
@@ -597,9 +603,9 @@ build_gather(struct lp_build_tgsi_context *bld_base,
          index = LLVMBuildExtractElement(builder,
                                          indexes, si, "");
       }
-      scalar_ptr = LLVMBuildGEP(builder, base_ptr,
-                                &index, 1, "gather_ptr");
-      scalar = LLVMBuildLoad(builder, scalar_ptr, "");
+      scalar_ptr = LLVMBuildGEP2(builder, bld->elem_type, base_ptr,
+                                 &index, 1, "gather_ptr");
+      scalar = LLVMBuildLoad2(builder, bld->elem_type, scalar_ptr, "");
 
       res = LLVMBuildInsertElement(builder, res, scalar, di, "");
    }
@@ -640,7 +646,7 @@ emit_mask_scatter(struct lp_build_tgsi_soa_context *bld,
    for (i = 0; i < bld->bld_base.base.type.length; i++) {
       LLVMValueRef ii = lp_build_const_int32(gallivm, i);
       LLVMValueRef index = LLVMBuildExtractElement(builder, indexes, ii, "");
-      LLVMValueRef scalar_ptr = LLVMBuildGEP(builder, base_ptr, &index, 1, "scatter_ptr");
+      LLVMValueRef scalar_ptr = LLVMBuildGEP2(builder, bld->bld_base.base.elem_type, base_ptr, &index, 1, "scatter_ptr");
       LLVMValueRef val = LLVMBuildExtractElement(builder, values, ii, "scatter_val");
       LLVMValueRef scalar_pred = pred ?
          LLVMBuildExtractElement(builder, pred, ii, "scatter_pred") : NULL;
@@ -651,7 +657,7 @@ emit_mask_scatter(struct lp_build_tgsi_soa_context *bld,
 
       if (scalar_pred) {
          LLVMValueRef real_val, dst_val;
-         dst_val = LLVMBuildLoad(builder, scalar_ptr, "");
+         dst_val = LLVMBuildLoad2(builder, bld->bld_base.base.elem_type, scalar_ptr, "");
          real_val = lp_build_select(&bld->elem_bld, scalar_pred, val, dst_val);
          LLVMBuildStore(builder, real_val, scalar_ptr);
       }
@@ -690,14 +696,15 @@ get_indirect_index(struct lp_build_tgsi_soa_context *bld,
    assert(swizzle < 4);
    switch (indirect_reg->File) {
    case TGSI_FILE_ADDRESS:
-      rel = LLVMBuildLoad(builder,
-                          bld->addr[indirect_reg->Index][swizzle],
-                          "load addr reg");
+      rel = LLVMBuildLoad2(builder,
+                           bld->bld_base.base.int_vec_type,
+                           bld->addr[indirect_reg->Index][swizzle],
+                           "load addr reg");
       /* ADDR LLVM values already have LLVM integer type. */
       break;
    case TGSI_FILE_TEMPORARY:
       rel = lp_get_temp_ptr_soa(bld, indirect_reg->Index, swizzle);
-      rel = LLVMBuildLoad(builder, rel, "load temp reg");
+      rel = LLVMBuildLoad2(builder, bld->bld_base.base.vec_type, rel, "load temp reg");
       /* TEMP LLVM values always have LLVM float type, but for indirection, the
        * value actually stored is expected to be an integer */
       rel = LLVMBuildBitCast(builder, rel, uint_bld->vec_type, "");
@@ -869,8 +876,8 @@ emit_fetch_constant(
       struct lp_build_context *bld_broad = &bld_base->base;
       index = lp_build_const_int32(gallivm, reg->Register.Index * 4 + swizzle);
 
-      scalar_ptr = LLVMBuildGEP(builder, consts_ptr,
-                                &index, 1, "");
+      scalar_ptr = LLVMBuildGEP2(builder, bld_broad->elem_type, consts_ptr,
+                                 &index, 1, "");
 
       if (tgsi_type_is_64bit(stype) && ((swizzle_in >> 16) != swizzle + 1)) {
 
@@ -878,15 +885,15 @@ emit_fetch_constant(
          LLVMValueRef shuffles[2];
          index = lp_build_const_int32(gallivm, reg->Register.Index * 4 + (swizzle_in >> 16));
 
-         scalar2_ptr = LLVMBuildGEP(builder, consts_ptr,
+         scalar2_ptr = LLVMBuildGEP2(builder, bld_broad->elem_type, consts_ptr,
                                     &index, 1, "");
 
-         scalar = LLVMBuildLoad(builder, scalar_ptr, "");
-         scalar2 = LLVMBuildLoad(builder, scalar2_ptr, "");
+         scalar = LLVMBuildLoad2(builder, bld_broad->elem_type, scalar_ptr, "");
+         scalar2 = LLVMBuildLoad2(builder, bld_broad->elem_type, scalar2_ptr, "");
          shuffles[0] = lp_build_const_int32(gallivm, 0);
          shuffles[1] = lp_build_const_int32(gallivm, 1);
 
-         res = LLVMGetUndef(LLVMVectorType(LLVMFloatTypeInContext(gallivm->context), bld_base->base.type.length * 2));
+         res = LLVMGetUndef(LLVMVectorType(bld_broad->elem_type, bld_base->base.type.length * 2));
          res = LLVMBuildInsertElement(builder, res, scalar, shuffles[0], "");
          res = LLVMBuildInsertElement(builder, res, scalar2, shuffles[1], "");
       } else {
@@ -903,7 +910,7 @@ emit_fetch_constant(
            scalar_ptr = LLVMBuildBitCast(builder, scalar_ptr, i64ptr_type, "");
            bld_broad = &bld_base->int64_bld;
         }
-        scalar = LLVMBuildLoad(builder, scalar_ptr, "");
+        scalar = LLVMBuildLoad2(builder, bld_broad->elem_type, scalar_ptr, "");
         res = lp_build_broadcast_scalar(bld_broad, scalar);
       }
 
@@ -1001,18 +1008,19 @@ emit_fetch_immediate(
          LLVMValueRef gep[2];
          gep[0] = lp_build_const_int32(gallivm, 0);
          gep[1] = lp_build_const_int32(gallivm, reg->Register.Index * 4 + swizzle);
-         LLVMValueRef imms_ptr = LLVMBuildGEP(builder,
-                                              bld->imms_array, gep, 2, "");
-         res = LLVMBuildLoad(builder, imms_ptr, "");
+         LLVMValueRef imms_ptr = LLVMBuildGEP2(builder,
+                                               bld_base->base.vec_type,
+                                               bld->imms_array, gep, 2, "");
+         res = LLVMBuildLoad2(builder, bld_base->base.vec_type, imms_ptr, "");
 
          if (tgsi_type_is_64bit(stype)) {
             LLVMValueRef imms_ptr2;
             LLVMValueRef res2;
             gep[1] = lp_build_const_int32(gallivm,
                                           reg->Register.Index * 4 + (swizzle_in >> 16));
-            imms_ptr2 = LLVMBuildGEP(builder,
-                                     bld->imms_array, gep, 2, "");
-            res2 = LLVMBuildLoad(builder, imms_ptr2, "");
+            imms_ptr2 = LLVMBuildGEP2(builder, bld_base->base.vec_type,
+                                      bld->imms_array, gep, 2, "");
+            res2 = LLVMBuildLoad2(builder, bld_base->base.vec_type, imms_ptr2, "");
             res = emit_fetch_64bit(bld_base, stype, res, res2);
          }
       }
@@ -1076,10 +1084,10 @@ emit_fetch_input(
       if (bld->indirect_files & (1 << TGSI_FILE_INPUT)) {
          LLVMValueRef lindex = lp_build_const_int32(gallivm,
                                         reg->Register.Index * 4 + swizzle);
-         LLVMValueRef input_ptr = LLVMBuildGEP(builder,
-                                               bld->inputs_array, &lindex, 1, "");
+         LLVMValueRef input_ptr = LLVMBuildGEP2(builder, bld_base->base.vec_type,
+                                                bld->inputs_array, &lindex, 1, "");
 
-         res = LLVMBuildLoad(builder, input_ptr, "");
+         res = LLVMBuildLoad2(builder, bld_base->base.vec_type, input_ptr, "");
          if (tgsi_type_is_64bit(stype)) {
             LLVMValueRef lindex1;
             LLVMValueRef input_ptr2;
@@ -1087,9 +1095,9 @@ emit_fetch_input(
 
             lindex1 = lp_build_const_int32(gallivm,
                                            reg->Register.Index * 4 + (swizzle_in >> 16));
-            input_ptr2 = LLVMBuildGEP(builder,
-                                      bld->inputs_array, &lindex1, 1, "");
-            res2 = LLVMBuildLoad(builder, input_ptr2, "");
+            input_ptr2 = LLVMBuildGEP2(builder, bld_base->base.vec_type,
+                                       bld->inputs_array, &lindex1, 1, "");
+            res2 = LLVMBuildLoad2(builder, bld_base->base.vec_type, input_ptr2, "");
             res = emit_fetch_64bit(bld_base, stype, res, res2);
          }
       }
@@ -1443,14 +1451,15 @@ emit_fetch_temporary(
    }
    else {
       LLVMValueRef temp_ptr;
+      LLVMTypeRef vec_type = bld->bld_base.base.vec_type;
       temp_ptr = lp_get_temp_ptr_soa(bld, reg->Register.Index, swizzle);
-      res = LLVMBuildLoad(builder, temp_ptr, "");
+      res = LLVMBuildLoad2(builder, vec_type, temp_ptr, "");
 
       if (tgsi_type_is_64bit(stype)) {
          LLVMValueRef temp_ptr2, res2;
 
          temp_ptr2 = lp_get_temp_ptr_soa(bld, reg->Register.Index, swizzle_in >> 16);
-         res2 = LLVMBuildLoad(builder, temp_ptr2, "");
+         res2 = LLVMBuildLoad2(builder, vec_type, temp_ptr2, "");
          res = emit_fetch_64bit(bld_base, stype, res, res2);
       }
    }
@@ -1546,8 +1555,9 @@ emit_fetch_system_value(
    case TGSI_SEMANTIC_TESSCOORD:
       {
          LLVMValueRef index[] = { lp_build_const_int32(gallivm, 0), lp_build_const_int32(gallivm, swizzle_in) };
-         LLVMValueRef array_indexed = LLVMBuildGEP(gallivm->builder, bld->system_values.tess_coord, index, 2, "tess_coord_array_indexed");
-         res = LLVMBuildLoad(builder, array_indexed, "tess_coord");
+         LLVMValueRef array_indexed = LLVMBuildGEP2(gallivm->builder, bld->bld_base.base.vec_type,
+                                                    bld->system_values.tess_coord, index, 2, "tess_coord_array_indexed");
+         res = LLVMBuildLoad2(builder, bld->bld_base.base.vec_type, array_indexed, "tess_coord");
       }
       atype = TGSI_TYPE_FLOAT;
       break;
@@ -1559,6 +1569,11 @@ emit_fetch_system_value(
 
   case TGSI_SEMANTIC_DRAWID:
       res = lp_build_broadcast_scalar(&bld_base->uint_bld, bld->system_values.draw_id);
+      atype = TGSI_TYPE_UNSIGNED;
+      break;
+
+  case TGSI_SEMANTIC_SAMPLEID:
+      res = lp_build_broadcast_scalar(&bld_base->uint_bld, bld->system_values.sample_id);
       atype = TGSI_TYPE_UNSIGNED;
       break;
 
@@ -1966,7 +1981,7 @@ emit_store(
 }
 
 static unsigned
-tgsi_to_pipe_tex_target(unsigned tgsi_target)
+tgsi_to_pipe_tex_target(enum tgsi_texture_type tgsi_target)
 {
    switch (tgsi_target) {
    case TGSI_TEXTURE_BUFFER:
@@ -2071,14 +2086,12 @@ emit_tex( struct lp_build_tgsi_soa_context *bld,
    LLVMValueRef coords[5];
    LLVMValueRef offsets[3] = { NULL };
    struct lp_derivatives derivs;
-   struct lp_sampler_params params;
+   struct lp_sampler_params params = { 0 };
    enum lp_sampler_lod_property lod_property = LP_SAMPLER_LOD_SCALAR;
    unsigned num_derivs, num_offsets, i;
    unsigned shadow_coord = 0;
    unsigned layer_coord = 0;
    unsigned sample_key = sampler_op << LP_SAMPLER_OP_TYPE_SHIFT;
-
-   memset(&params, 0, sizeof(params));
 
    if (!bld->sampler) {
       _debug_printf("warning: found texture instruction but no sampler generator supplied\n");
@@ -2258,7 +2271,9 @@ emit_tex( struct lp_build_tgsi_soa_context *bld,
    params.sample_key = sample_key;
    params.texture_index = unit;
    params.sampler_index = unit;
-   params.context_ptr = bld->context_ptr;
+   params.resources_type = bld->resources_type;
+   params.resources_ptr = bld->resources_ptr;
+   params.thread_data_type = bld->thread_data_type;
    params.thread_data_ptr = bld->thread_data_ptr;
    params.coords = coords;
    params.offsets = offsets;
@@ -2284,14 +2299,12 @@ emit_sample(struct lp_build_tgsi_soa_context *bld,
    LLVMValueRef coords[5];
    LLVMValueRef offsets[3] = { NULL };
    struct lp_derivatives derivs;
-   struct lp_sampler_params params;
+   struct lp_sampler_params params = { 0 };
    enum lp_sampler_lod_property lod_property = LP_SAMPLER_LOD_SCALAR;
 
    unsigned num_offsets, num_derivs, i;
    unsigned layer_coord = 0;
    unsigned sample_key = sample_type << LP_SAMPLER_OP_TYPE_SHIFT;
-
-   memset(&params, 0, sizeof(params));
 
    if (!bld->sampler) {
       _debug_printf("warning: found texture instruction but no sampler generator supplied\n");
@@ -2427,7 +2440,9 @@ emit_sample(struct lp_build_tgsi_soa_context *bld,
    params.sample_key = sample_key;
    params.texture_index = texture_unit;
    params.sampler_index = sampler_unit;
-   params.context_ptr = bld->context_ptr;
+   params.resources_type = bld->resources_type;
+   params.resources_ptr = bld->resources_ptr;
+   params.thread_data_type = bld->thread_data_type;
    params.thread_data_ptr = bld->thread_data_ptr;
    params.coords = coords;
    params.offsets = offsets;
@@ -2464,13 +2479,11 @@ emit_fetch_texels( struct lp_build_tgsi_soa_context *bld,
    LLVMValueRef coords[5];
    LLVMValueRef offsets[3] = { NULL };
    LLVMValueRef ms_index = NULL;
-   struct lp_sampler_params params;
+   struct lp_sampler_params params = { 0 };
    enum lp_sampler_lod_property lod_property = LP_SAMPLER_LOD_SCALAR;
    unsigned dims, i;
    unsigned layer_coord = 0;
    unsigned sample_key = LP_SAMPLER_OP_FETCH << LP_SAMPLER_OP_TYPE_SHIFT;
-
-   memset(&params, 0, sizeof(params));
 
    if (!bld->sampler) {
       _debug_printf("warning: found texture instruction but no sampler generator supplied\n");
@@ -2565,7 +2578,9 @@ emit_fetch_texels( struct lp_build_tgsi_soa_context *bld,
     * can exceed this.
     */
    params.sampler_index = 0;
-   params.context_ptr = bld->context_ptr;
+   params.resources_type = bld->resources_type;
+   params.resources_ptr = bld->resources_ptr;
+   params.thread_data_type = bld->thread_data_type;
    params.thread_data_ptr = bld->thread_data_ptr;
    params.coords = coords;
    params.offsets = offsets;
@@ -2604,8 +2619,9 @@ emit_size_query( struct lp_build_tgsi_soa_context *bld,
    unsigned has_lod;
    unsigned i;
    unsigned unit = inst->Src[1].Register.Index;
-   unsigned target, pipe_target;
-   struct lp_sampler_size_query_params params;
+   enum tgsi_texture_type target;
+   enum pipe_texture_target pipe_target;
+   struct lp_sampler_size_query_params params = { 0 };
 
    if (is_sviewinfo) {
       target = bld->sv[unit].Resource;
@@ -2617,6 +2633,8 @@ emit_size_query( struct lp_build_tgsi_soa_context *bld,
    case TGSI_TEXTURE_BUFFER:
    case TGSI_TEXTURE_RECT:
    case TGSI_TEXTURE_SHADOWRECT:
+   case TGSI_TEXTURE_2D_MSAA:
+   case TGSI_TEXTURE_2D_ARRAY_MSAA:
       has_lod = 0;
       break;
    default:
@@ -2645,8 +2663,10 @@ emit_size_query( struct lp_build_tgsi_soa_context *bld,
 
    params.int_type = bld->bld_base.int_bld.type;
    params.texture_unit = unit;
+   params.texture_unit_offset = NULL;
    params.target = pipe_target;
-   params.context_ptr = bld->context_ptr;
+   params.resources_type = bld->resources_type;
+   params.resources_ptr = bld->resources_ptr;
    params.is_sviewinfo = TRUE;
    params.lod_property = lod_property;
    params.explicit_lod = explicit_lod;
@@ -2862,11 +2882,11 @@ emit_dump_file(struct lp_build_tgsi_soa_context *bld,
          } else if (file == TGSI_FILE_TEMPORARY) {
             reg_ptr = lp_get_temp_ptr_soa(bld, index, chan);
             assert(reg_ptr);
-            res = LLVMBuildLoad(builder, reg_ptr, "");
+            res = LLVMBuildLoad2(builder, bld->bld_base.base.vec_type, reg_ptr, "");
          } else if (file == TGSI_FILE_OUTPUT) {
             reg_ptr = lp_get_output_ptr(bld, index, chan);
             assert(reg_ptr);
-            res = LLVMBuildLoad(builder, reg_ptr, "");
+            res = LLVMBuildLoad2(builder, bld->bld_base.base.vec_type, reg_ptr, "");
          } else {
             assert(0);
             continue;
@@ -2952,10 +2972,11 @@ lp_emit_declaration_soa(
       unsigned idx2D = decl->Dim.Index2D;
       LLVMValueRef index2D = lp_build_const_int32(gallivm, idx2D);
       assert(idx2D < LP_MAX_TGSI_CONST_BUFFERS);
-      bld->consts[idx2D] =
-         lp_build_array_get(gallivm, bld->consts_ptr, index2D);
-      bld->consts_sizes[idx2D] =
-         lp_build_array_get(gallivm, bld->const_sizes_ptr, index2D);
+      bld->consts[idx2D] = lp_llvm_buffer_base(gallivm, bld->consts_ptr,
+                                               index2D, LP_MAX_TGSI_CONST_BUFFERS);
+      bld->consts[idx2D] = LLVMBuildBitCast(gallivm->builder, bld->consts[idx2D], LLVMPointerType(LLVMFloatTypeInContext(gallivm->context), 0), "");
+      bld->consts_sizes[idx2D] = lp_llvm_buffer_num_elements(gallivm, bld->consts_ptr,
+                                                             index2D, LP_MAX_TGSI_CONST_BUFFERS);
    }
    break;
    case TGSI_FILE_BUFFER:
@@ -2964,9 +2985,11 @@ lp_emit_declaration_soa(
       LLVMValueRef index = lp_build_const_int32(gallivm, idx);
       assert(idx < LP_MAX_TGSI_SHADER_BUFFERS);
       bld->ssbos[idx] =
-         lp_build_array_get(gallivm, bld->ssbo_ptr, index);
+         lp_llvm_buffer_base(gallivm, bld->ssbo_ptr,
+                             index, LP_MAX_TGSI_SHADER_BUFFERS);
       bld->ssbo_sizes[idx] =
-         lp_build_array_get(gallivm, bld->ssbo_sizes_ptr, index);
+         lp_llvm_buffer_num_elements(gallivm, bld->ssbo_ptr,
+                             index, LP_MAX_TGSI_SHADER_BUFFERS);
 
    }
    break;
@@ -3027,8 +3050,9 @@ void lp_emit_immediate_soa(
       assert(bld->indirect_files & (1 << TGSI_FILE_IMMEDIATE));
       for (i = 0; i < 4; ++i ) {
          gep[1] = lp_build_const_int32(gallivm, index * 4 + i);
-         LLVMValueRef imm_ptr = LLVMBuildGEP(builder,
-                                             bld->imms_array, gep, 2, "");
+         LLVMValueRef imm_ptr = LLVMBuildGEP2(builder,
+                                              bld->bld_base.base.vec_type,
+                                              bld->imms_array, gep, 2, "");
          LLVMBuildStore(builder, imms[i], imm_ptr);
       }
    } else {
@@ -3048,8 +3072,9 @@ void lp_emit_immediate_soa(
          gep[0] = lp_build_const_int32(gallivm, 0);
          for (i = 0; i < 4; ++i ) {
             gep[1] = lp_build_const_int32(gallivm, index * 4 + i);
-            LLVMValueRef imm_ptr = LLVMBuildGEP(builder,
-                                                bld->imms_array, gep, 2, "");
+            LLVMValueRef imm_ptr = LLVMBuildGEP2(builder,
+                                                 bld->bld_base.base.vec_type,
+                                                 bld->imms_array, gep, 2, "");
             LLVMBuildStore(builder,
                            bld->immediates[index][i],
                            imm_ptr);
@@ -3366,9 +3391,10 @@ lod_emit(
                FALSE, LP_SAMPLER_OP_LODQ, emit_data->output);
 }
 
-static void target_to_dims_layer(unsigned target,
-                                 unsigned *dims,
-                                 unsigned *layer_coord)
+static void
+target_to_dims_layer(enum tgsi_texture_type target,
+                     unsigned *dims,
+                     unsigned *layer_coord)
 {
    *layer_coord = 0;
    switch (target) {
@@ -3407,11 +3433,11 @@ img_load_emit(
    struct lp_build_emit_data * emit_data)
 {
    struct lp_build_tgsi_soa_context *bld = lp_soa_context(bld_base);
-   struct lp_img_params params;
+   struct lp_img_params params = { 0 };
    LLVMValueRef coords[5];
    LLVMValueRef coord_undef = LLVMGetUndef(bld->bld_base.base.int_vec_type);
    unsigned dims;
-   unsigned target = emit_data->inst->Memory.Texture;
+   enum tgsi_texture_type target = emit_data->inst->Memory.Texture;
    unsigned layer_coord;
 
    target_to_dims_layer(target, &dims, &layer_coord);
@@ -3425,10 +3451,10 @@ img_load_emit(
    if (layer_coord)
       coords[2] = lp_build_emit_fetch(&bld->bld_base, emit_data->inst, 1, layer_coord);
 
-   memset(&params, 0, sizeof(params));
-
    params.type = bld->bld_base.base.type;
-   params.context_ptr = bld->context_ptr;
+   params.resources_type = bld->resources_type;
+   params.resources_ptr = bld->resources_ptr;
+   params.thread_data_type = bld->thread_data_type;
    params.thread_data_ptr = bld->thread_data_ptr;
    params.coords = coords;
    params.outdata = emit_data->output;
@@ -3532,19 +3558,20 @@ load_emit(
          cond = LLVMBuildExtractElement(gallivm->builder, cond, loop_state.counter, "");
 
          lp_build_if(&ifthen, gallivm, cond);
-         scalar = lp_build_pointer_get(builder, scalar_ptr, loop_index);
+         scalar = lp_build_pointer_get2(builder, uint_bld->elem_type, scalar_ptr, loop_index);
 
-         temp_res = LLVMBuildLoad(builder, result, "");
+         temp_res = LLVMBuildLoad2(builder, uint_bld->vec_type, result, "");
          temp_res = LLVMBuildInsertElement(builder, temp_res, scalar, loop_state.counter, "");
          LLVMBuildStore(builder, temp_res, result);
          lp_build_else(&ifthen);
-         temp_res = LLVMBuildLoad(builder, result, "");
+         temp_res = LLVMBuildLoad2(builder, uint_bld->vec_type, result, "");
          temp_res = LLVMBuildInsertElement(builder, temp_res, lp_build_const_int32(gallivm, 0), loop_state.counter, "");
          LLVMBuildStore(builder, temp_res, result);
          lp_build_endif(&ifthen);
          lp_build_loop_end_cond(&loop_state, lp_build_const_int32(gallivm, uint_bld->type.length),
                                 NULL, LLVMIntUGE);
-         emit_data->output[chan_index] = LLVMBuildLoad(gallivm->builder, result, "");
+         emit_data->output[chan_index] = LLVMBuildLoad2(gallivm->builder, uint_bld->vec_type,
+                                                        result, "");
       }
    }
 }
@@ -3556,11 +3583,11 @@ img_store_emit(
    struct lp_build_emit_data * emit_data)
 {
    struct lp_build_tgsi_soa_context *bld = lp_soa_context(bld_base);
-   struct lp_img_params params;
+   struct lp_img_params params = { 0 };
    LLVMValueRef coords[5];
    LLVMValueRef coord_undef = LLVMGetUndef(bld->bld_base.base.int_vec_type);
    unsigned dims;
-   unsigned target = emit_data->inst->Memory.Texture;
+   enum tgsi_texture_type target = emit_data->inst->Memory.Texture;
    unsigned layer_coord;
 
    target_to_dims_layer(target, &dims, &layer_coord);
@@ -3572,10 +3599,11 @@ img_store_emit(
    }
    if (layer_coord)
       coords[2] = lp_build_emit_fetch(&bld->bld_base, emit_data->inst, 0, layer_coord);
-   memset(&params, 0, sizeof(params));
 
    params.type = bld->bld_base.base.type;
-   params.context_ptr = bld->context_ptr;
+   params.resources_type = bld->resources_type;
+   params.resources_ptr = bld->resources_ptr;
+   params.thread_data_type = bld->thread_data_type;
    params.thread_data_ptr = bld->thread_data_ptr;
    params.coords = coords;
    params.outdata = NULL;
@@ -3679,12 +3707,13 @@ resq_emit(
    assert(bufreg->Register.File == TGSI_FILE_BUFFER || bufreg->Register.File == TGSI_FILE_IMAGE);
 
    if (bufreg->Register.File == TGSI_FILE_IMAGE) {
-      unsigned target = emit_data->inst->Memory.Texture;
+      enum tgsi_texture_type target = emit_data->inst->Memory.Texture;
       struct lp_sampler_size_query_params params = { 0 };
       params.int_type = bld->bld_base.int_bld.type;
       params.texture_unit = buf;
       params.target = tgsi_to_pipe_tex_target(target);
-      params.context_ptr = bld->context_ptr;
+      params.resources_type = bld->resources_type;
+      params.resources_ptr = bld->resources_ptr;
       params.sizes_out = emit_data->output;
 
       bld->image->emit_size_query(bld->image,
@@ -3705,12 +3734,12 @@ img_atomic_emit(
    LLVMAtomicRMWBinOp op)
 {
    struct lp_build_tgsi_soa_context *bld = lp_soa_context(bld_base);
-   struct lp_img_params params;
+   struct lp_img_params params = { 0 };
    LLVMValueRef coords[5];
    LLVMValueRef coord_undef = LLVMGetUndef(bld->bld_base.base.int_vec_type);
    unsigned dims;
    unsigned layer_coord;
-   unsigned target = emit_data->inst->Memory.Texture;
+   enum tgsi_texture_type target = emit_data->inst->Memory.Texture;
 
    target_to_dims_layer(target, &dims, &layer_coord);
 
@@ -3722,10 +3751,10 @@ img_atomic_emit(
    }
    if (layer_coord)
       coords[2] = lp_build_emit_fetch(&bld->bld_base, emit_data->inst, 1, layer_coord);
-   memset(&params, 0, sizeof(params));
 
    params.type = bld->bld_base.base.type;
-   params.context_ptr = bld->context_ptr;
+   params.resources_type = bld->resources_type;
+   params.resources_ptr = bld->resources_ptr;
    params.thread_data_ptr = bld->thread_data_ptr;
    params.exec_mask = mask_vec(bld_base);
    params.image_index = emit_data->inst->Src[0].Register.Index;
@@ -3843,8 +3872,8 @@ atomic_emit(
       index = LLVMBuildExtractElement(gallivm->builder, index,
                                       loop_state.counter, "");
 
-      scalar_ptr = LLVMBuildGEP(builder, scalar_ptr,
-                                &index, 1, "");
+      scalar_ptr = LLVMBuildGEP2(builder, uint_bld->elem_type, scalar_ptr,
+                                 &index, 1, "");
 
       struct lp_build_if_state ifthen;
       LLVMValueRef cond, temp_res;
@@ -3870,18 +3899,18 @@ atomic_emit(
                                      LLVMAtomicOrderingSequentiallyConsistent,
                                      false);
       }
-      temp_res = LLVMBuildLoad(builder, atom_res, "");
+      temp_res = LLVMBuildLoad2(builder, uint_bld->vec_type, atom_res, "");
       temp_res = LLVMBuildInsertElement(builder, temp_res, scalar, loop_state.counter, "");
       LLVMBuildStore(builder, temp_res, atom_res);
       lp_build_else(&ifthen);
-      temp_res = LLVMBuildLoad(builder, atom_res, "");
+      temp_res = LLVMBuildLoad2(builder, uint_bld->vec_type, atom_res, "");
       temp_res = LLVMBuildInsertElement(builder, temp_res, lp_build_const_int32(gallivm, 0), loop_state.counter, "");
       LLVMBuildStore(builder, temp_res, atom_res);
       lp_build_endif(&ifthen);
 
       lp_build_loop_end_cond(&loop_state, lp_build_const_int32(gallivm, uint_bld->type.length),
                              NULL, LLVMIntUGE);
-      emit_data->output[emit_data->chan] = LLVMBuildLoad(gallivm->builder, atom_res, "");
+      emit_data->output[emit_data->chan] = LLVMBuildLoad2(gallivm->builder, uint_bld->vec_type, atom_res, "");
    }
 }
 
@@ -3916,7 +3945,7 @@ increment_vec_ptr_by_mask(struct lp_build_tgsi_context * bld_base,
                           LLVMValueRef mask)
 {
    LLVMBuilderRef builder = bld_base->base.gallivm->builder;
-   LLVMValueRef current_vec = LLVMBuildLoad(builder, ptr, "");
+   LLVMValueRef current_vec = LLVMBuildLoad2(builder, bld_base->uint_bld.vec_type, ptr, "");
 
    current_vec = LLVMBuildSub(builder, current_vec, mask, "");
 
@@ -3929,7 +3958,7 @@ clear_uint_vec_ptr_from_mask(struct lp_build_tgsi_context * bld_base,
                              LLVMValueRef mask)
 {
    LLVMBuilderRef builder = bld_base->base.gallivm->builder;
-   LLVMValueRef current_vec = LLVMBuildLoad(builder, ptr, "");
+   LLVMValueRef current_vec = LLVMBuildLoad2(builder, bld_base->uint_bld.vec_type, ptr, "");
 
    current_vec = lp_build_select(&bld_base->uint_bld,
                                  mask,
@@ -3968,7 +3997,7 @@ emit_vertex(
                                                     emit_data->inst->Src[0].Register.SwizzleX);
       LLVMValueRef mask = mask_vec(bld_base);
       LLVMValueRef total_emitted_vertices_vec =
-         LLVMBuildLoad(builder, bld->total_emitted_vertices_vec_ptr, "");
+         LLVMBuildLoad2(builder, bld->bld_base.uint_bld.vec_type, bld->total_emitted_vertices_vec_ptr, "");
 
       mask = clamp_mask_to_max_output_vertices(bld, mask,
                                                total_emitted_vertices_vec);
@@ -4004,11 +4033,14 @@ end_primitive_masked(struct lp_build_tgsi_context * bld_base,
    if (bld->gs_iface->end_primitive) {
       struct lp_build_context *uint_bld = &bld_base->uint_bld;
       LLVMValueRef emitted_vertices_vec =
-         LLVMBuildLoad(builder, bld->emitted_vertices_vec_ptr, "");
+         LLVMBuildLoad2(builder, bld->bld_base.uint_bld.vec_type,
+                        bld->emitted_vertices_vec_ptr, "");
       LLVMValueRef emitted_prims_vec =
-         LLVMBuildLoad(builder, bld->emitted_prims_vec_ptr, "");
+         LLVMBuildLoad2(builder, bld->bld_base.uint_bld.vec_type,
+                        bld->emitted_prims_vec_ptr, "");
       LLVMValueRef total_emitted_vertices_vec =
-         LLVMBuildLoad(builder, bld->total_emitted_vertices_vec_ptr, "");
+         LLVMBuildLoad2(builder, bld->bld_base.uint_bld.vec_type,
+                        bld->total_emitted_vertices_vec_ptr, "");
       LLVMValueRef emitted_mask = lp_build_cmp(uint_bld, PIPE_FUNC_NOTEQUAL,
                                                emitted_vertices_vec,
                                                uint_bld->zero);
@@ -4033,8 +4065,8 @@ end_primitive_masked(struct lp_build_tgsi_context * bld_base,
                            emitted_vertices_vec);
       lp_build_print_value(bld->bld_base.base.gallivm,
                            " +++ end prim emitted prims1 = ",
-                           LLVMBuildLoad(builder,
-                                         bld->emitted_prims_vec_ptr, ""));
+                           LLVMBuildLoad2(builder, bld->bld_base.uint_bld.vec_type,
+                                          bld->emitted_prims_vec_ptr, ""));
 #endif
       increment_vec_ptr_by_mask(bld_base, bld->emitted_prims_vec_ptr,
                                 mask);
@@ -4043,8 +4075,8 @@ end_primitive_masked(struct lp_build_tgsi_context * bld_base,
 #if DUMP_GS_EMITS
       lp_build_print_value(bld->bld_base.base.gallivm,
                            " +++ end prim emitted verts2 = ",
-                           LLVMBuildLoad(builder,
-                                         bld->emitted_vertices_vec_ptr, ""));
+                           LLVMBuildLoad2(builder, bld->bld_base.uint_bld.vec_type,
+                                          bld->emitted_vertices_vec_ptr, ""));
 #endif
    }
 
@@ -4269,6 +4301,7 @@ static void emit_prologue(struct lp_build_tgsi_context * bld_base)
 
    if (bld->indirect_files & (1 << TGSI_FILE_TEMPORARY)) {
       unsigned array_size = bld_base->info->file_max[TGSI_FILE_TEMPORARY] * 4 + 4;
+      bld->temps_array_type = LLVMArrayType(bld_base->base.vec_type, array_size);
       bld->temps_array = lp_build_alloca_undef(gallivm,
                                                LLVMArrayType(bld_base->base.vec_type, array_size),
                                                "temp_array");
@@ -4278,6 +4311,7 @@ static void emit_prologue(struct lp_build_tgsi_context * bld_base)
       LLVMValueRef array_size =
          lp_build_const_int32(gallivm,
                             bld_base->info->file_max[TGSI_FILE_OUTPUT] * 4 + 4);
+      bld->outputs_array_type = bld_base->base.vec_type;
       bld->outputs_array = lp_build_array_alloca(gallivm,
                                                 bld_base->base.vec_type, array_size,
                                                 "output_array");
@@ -4310,8 +4344,10 @@ static void emit_prologue(struct lp_build_tgsi_context * bld_base)
             LLVMValueRef lindex =
                lp_build_const_int32(gallivm, index * 4 + chan);
             LLVMValueRef input_ptr =
-               LLVMBuildGEP(gallivm->builder, bld->inputs_array,
-                            &lindex, 1, "");
+               LLVMBuildGEP2(gallivm->builder,
+                             bld->bld_base.base.vec_type,
+                             bld->inputs_array,
+                             &lindex, 1, "");
             LLVMValueRef value = bld->inputs[index][chan];
             if (value)
                LLVMBuildStore(gallivm->builder, value, input_ptr);
@@ -4388,9 +4424,11 @@ static void emit_epilogue(struct lp_build_tgsi_context * bld_base)
       end_primitive_masked(bld_base, lp_build_mask_value(bld->mask));
 
       total_emitted_vertices_vec =
-         LLVMBuildLoad(builder, bld->total_emitted_vertices_vec_ptr, "");
+         LLVMBuildLoad2(builder, bld_base->uint_bld.vec_type,
+                        bld->total_emitted_vertices_vec_ptr, "");
       emitted_prims_vec =
-         LLVMBuildLoad(builder, bld->emitted_prims_vec_ptr, "");
+         LLVMBuildLoad2(builder, bld_base->uint_bld.vec_type,
+                        bld->emitted_prims_vec_ptr, "");
 
       bld->gs_iface->gs_epilogue(bld->gs_iface,
                                  total_emitted_vertices_vec,
@@ -4444,13 +4482,15 @@ lp_build_tgsi_soa(struct gallivm_state *gallivm,
    bld.inputs = params->inputs;
    bld.outputs = outputs;
    bld.consts_ptr = params->consts_ptr;
-   bld.const_sizes_ptr = params->const_sizes_ptr;
    bld.ssbo_ptr = params->ssbo_ptr;
-   bld.ssbo_sizes_ptr = params->ssbo_sizes_ptr;
    bld.sampler = params->sampler;
    bld.bld_base.info = params->info;
    bld.indirect_files = params->info->indirect_files;
+   bld.context_type = params->context_type;
    bld.context_ptr = params->context_ptr;
+   bld.resources_type = params->resources_type;
+   bld.resources_ptr = params->resources_ptr;
+   bld.thread_data_type =  params->thread_data_type;
    bld.thread_data_ptr = params->thread_data_ptr;
    bld.image = params->image;
    bld.shared_ptr = params->shared_ptr;
@@ -4568,7 +4608,7 @@ lp_build_tgsi_soa(struct gallivm_state *gallivm,
       /* There's no specific value for this because it should always
        * be set, but apps using ext_geometry_shader4 quite often
        * were forgetting so we're using MAX_VERTEX_VARYING from
-       * that spec even though we could debug_assert if it's not
+       * that spec even though we could assert if it's not
        * set, but that's a lot uglier. */
       uint max_output_vertices;
 

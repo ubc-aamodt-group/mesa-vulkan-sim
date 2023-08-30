@@ -24,11 +24,42 @@
 #ifndef ZINK_FORMAT_H
 #define ZINK_FORMAT_H
 
-#include "pipe/p_format.h"
+#include "util/format/u_formats.h"
+#include "util/format/u_format.h"
 
-#include <vulkan/vulkan.h>
+#include <stdbool.h>
+#include <vulkan/vulkan_core.h>
+
+union pipe_color_union;
+
+enum pipe_format
+zink_decompose_vertex_format(enum pipe_format format);
 
 VkFormat
 zink_pipe_format_to_vk_format(enum pipe_format format);
 
+bool
+zink_format_is_voidable_rgba_variant(enum pipe_format format);
+bool
+zink_format_is_red_alpha(enum pipe_format format);
+bool
+zink_format_is_emulated_alpha(enum pipe_format format);
+enum pipe_format
+zink_format_get_emulated_alpha(enum pipe_format format);
+void
+zink_format_clamp_channel_color(const struct util_format_description *desc, union pipe_color_union *dst, const union pipe_color_union *src, unsigned i);
+void
+zink_format_clamp_channel_srgb(const struct util_format_description *desc, union pipe_color_union *dst, const union pipe_color_union *src, unsigned i);
+
+static inline bool
+zink_format_needs_mutable(enum pipe_format a, enum pipe_format b)
+{
+   if (a == b)
+      return false;
+   if (util_format_is_srgb(a))
+      return util_format_linear(a) != b;
+   if (util_format_is_srgb(b))
+      return util_format_linear(b) != a;
+   return true;
+}
 #endif

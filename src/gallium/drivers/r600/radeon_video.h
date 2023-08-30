@@ -34,7 +34,7 @@
 #ifndef RADEON_VIDEO_H
 #define RADEON_VIDEO_H
 
-#include "radeon/radeon_winsys.h"
+#include "winsys/radeon_winsys.h"
 #include "vl/vl_video_buffer.h"
 
 #define RVID_ERR(fmt, args...) \
@@ -65,7 +65,7 @@ bool rvid_resize_buffer(struct pipe_screen *screen, struct radeon_cmdbuf *cs,
 void rvid_clear_buffer(struct pipe_context *context, struct rvid_buffer* buffer);
 
 /* join surfaces into the same buffer with identical tiling params
-   sumup their sizes and replace the backend buffers with a single bo */
+   sum up their sizes and replace the backend buffers with a single bo */
 void rvid_join_surfaces(struct r600_common_context *rctx,
                         struct pb_buffer** buffers[VL_NUM_COMPONENTS],
                         struct radeon_surf *surfaces[VL_NUM_COMPONENTS]);

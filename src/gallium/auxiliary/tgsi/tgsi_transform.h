@@ -29,6 +29,7 @@
 #define TGSI_TRANSFORM_H
 
 
+#include "pipe/p_defines.h"
 #include "pipe/p_shader_tokens.h"
 #include "tgsi/tgsi_parse.h"
 #include "tgsi/tgsi_build.h"
@@ -64,10 +65,11 @@ struct tgsi_transform_context
 
    /**
     * Called at end of input program to allow caller to append extra
-    * instructions.  Return number of tokens emitted.
+    * instructions.
     */
    void (*epilog)(struct tgsi_transform_context *ctx);
 
+   enum pipe_shader_type processor;
 
 /*** PRIVATE ***/
 
@@ -88,6 +90,7 @@ struct tgsi_transform_context
    uint max_tokens_out;
    struct tgsi_token *tokens_out;
    uint ti;
+   bool fail;
 };
 
 
@@ -337,37 +340,6 @@ tgsi_transform_op2_inst(struct tgsi_transform_context *ctx,
 
 
 static inline void
-tgsi_transform_op3_inst(struct tgsi_transform_context *ctx,
-                        enum tgsi_opcode opcode,
-                        unsigned dst_file,
-                        unsigned dst_index,
-                        unsigned dst_writemask,
-                        unsigned src0_file,
-                        unsigned src0_index,
-                        unsigned src1_file,
-                        unsigned src1_index,
-                        unsigned src2_file,
-                        unsigned src2_index)
-{
-   struct tgsi_full_instruction inst;
-
-   inst = tgsi_default_full_instruction();
-   inst.Instruction.Opcode = opcode;
-   inst.Instruction.NumDstRegs = 1;
-   inst.Dst[0].Register.File = dst_file,
-   inst.Dst[0].Register.Index = dst_index;
-   inst.Dst[0].Register.WriteMask = dst_writemask;
-   inst.Instruction.NumSrcRegs = 3;
-   tgsi_transform_src_reg_xyzw(&inst.Src[0], src0_file, src0_index);
-   tgsi_transform_src_reg_xyzw(&inst.Src[1], src1_file, src1_index);
-   tgsi_transform_src_reg_xyzw(&inst.Src[2], src2_file, src2_index);
-
-   ctx->emit_instruction(ctx, &inst);
-}
-
-
-
-static inline void
 tgsi_transform_op1_swz_inst(struct tgsi_transform_context *ctx,
                             enum tgsi_opcode opcode,
                             unsigned dst_file,
@@ -570,10 +542,9 @@ tgsi_transform_tex_inst(struct tgsi_transform_context *ctx,
 }
 
 
-extern int
+extern struct tgsi_token *
 tgsi_transform_shader(const struct tgsi_token *tokens_in,
-                      struct tgsi_token *tokens_out,
-                      uint max_tokens_out,
+                      uint initial_tokens_len,
                       struct tgsi_transform_context *ctx);
 
 

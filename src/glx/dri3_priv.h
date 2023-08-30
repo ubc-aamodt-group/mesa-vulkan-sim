@@ -60,38 +60,37 @@
 #include <xcb/sync.h>
 
 #include "loader_dri3_helper.h"
-
-/* From driconf.h, user exposed so should be stable */
-#define DRI_CONF_VBLANK_NEVER 0
-#define DRI_CONF_VBLANK_DEF_INTERVAL_0 1
-#define DRI_CONF_VBLANK_DEF_INTERVAL_1 2
-#define DRI_CONF_VBLANK_ALWAYS_SYNC 3
+#include "GL/internal/mesa_interface.h"
 
 struct dri3_display
 {
    __GLXDRIdisplay base;
 
    const __DRIextension **loader_extensions;
-
-   /* DRI3 bits */
-   int dri3Major;
-   int dri3Minor;
-
-   /* Present bits */
-   int hasPresent;
-   int presentMajor;
-   int presentMinor;
+   int has_multibuffer;
 };
 
 struct dri3_screen {
    struct glx_screen base;
 
-   __DRIscreen *driScreen;
    __GLXDRIscreen vtable;
+
+   /* DRI screen is created for display GPU in case of prime gpu offloading.
+    * This screen is used to allocate linear_buffer from
+    * display GPU space in dri3_alloc_render_buffer() function.
+    * In case of not gpu offloading driScreenDisplayGPU will be assigned with
+    * driScreenRenderGPU.
+    * In case of prime gpu offloading if display and render driver names are different
+    * (potentially not compatible), driScreenDisplayGPU will be NULL but
+    * fd_display_gpu will still hold fd for display driver.
+    */
+   __DRIscreen *driScreenDisplayGPU;
+   __DRIscreen *driScreenRenderGPU;
 
    const __DRIimageExtension *image;
    const __DRIimageDriverExtension *image_driver;
    const __DRIcoreExtension *core;
+   const __DRImesaCoreExtension *mesa;
    const __DRI2flushExtension *f;
    const __DRI2configQueryExtension *config;
    const __DRItexBufferExtension *texBuffer;
@@ -100,18 +99,16 @@ struct dri3_screen {
    const __DRIconfig **driver_configs;
 
    void *driver;
-   int fd;
-   bool is_different_gpu;
-
-   int show_fps_interval;
+   /* fd of the GPU used for rendering. */
+   int fd_render_gpu;
+   /* fd of the GPU used for display. If the same GPU is used for display
+    * and rendering, then fd_render_gpu == fd_display_gpu (no need to use
+    * os_same_file_description).
+    */
+   int fd_display_gpu;
+   bool prefer_back_buffer_reuse;
 
    struct loader_dri3_extensions loader_dri3_ext;
-};
-
-struct dri3_context
-{
-   struct glx_context base;
-   __DRIcontext *driContext;
 };
 
 struct dri3_drawable {
@@ -140,3 +137,8 @@ _X_HIDDEN int
 dri3_interop_export_object(struct glx_context *ctx,
                            struct mesa_glinterop_export_in *in,
                            struct mesa_glinterop_export_out *out);
+
+_X_HIDDEN int
+dri3_interop_flush_objects(struct glx_context *ctx,
+                           unsigned count, struct mesa_glinterop_export_in *objects,
+                           GLsync *sync);

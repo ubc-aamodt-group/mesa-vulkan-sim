@@ -24,19 +24,6 @@
 #include "brw_nir.h"
 #include "compiler/nir/nir_builder.h"
 
-static nir_op
-get_conversion_op(nir_alu_type src_type,
-                  unsigned src_bit_size,
-                  nir_alu_type dst_type,
-                  unsigned dst_bit_size,
-                  nir_rounding_mode rounding_mode)
-{
-   nir_alu_type src_full_type = (nir_alu_type) (src_type | src_bit_size);
-   nir_alu_type dst_full_type = (nir_alu_type) (dst_type | dst_bit_size);
-
-   return nir_type_conversion_op(src_full_type, dst_full_type, rounding_mode);
-}
-
 static nir_rounding_mode
 get_opcode_rounding_mode(nir_op op)
 {
@@ -51,19 +38,21 @@ get_opcode_rounding_mode(nir_op op)
 }
 
 static void
-split_conversion(nir_builder *b, nir_alu_instr *alu, nir_op op1, nir_op op2)
+split_conversion(nir_builder *b, nir_alu_instr *alu, nir_alu_type src_type,
+                 nir_alu_type tmp_type, nir_alu_type dst_type,
+                 nir_rounding_mode rnd)
 {
    b->cursor = nir_before_instr(&alu->instr);
    assert(alu->dest.write_mask == 1);
    nir_ssa_def *src = nir_ssa_for_alu_src(b, alu, 0);
-   nir_ssa_def *tmp = nir_build_alu(b, op1, src, NULL, NULL, NULL);
-   nir_ssa_def *res = nir_build_alu(b, op2, tmp, NULL, NULL, NULL);
-   nir_ssa_def_rewrite_uses(&alu->dest.dest.ssa, nir_src_for_ssa(res));
+   nir_ssa_def *tmp = nir_type_convert(b, src, src_type, tmp_type, nir_rounding_mode_undef);
+   nir_ssa_def *res = nir_type_convert(b, tmp, tmp_type, dst_type, rnd);
+   nir_ssa_def_rewrite_uses(&alu->dest.dest.ssa, res);
    nir_instr_remove(&alu->instr);
 }
 
 static bool
-lower_instr(nir_builder *b, nir_alu_instr *alu)
+lower_alu_instr(nir_builder *b, nir_alu_instr *alu)
 {
    unsigned src_bit_size = nir_src_bit_size(alu->src[0].src);
    nir_alu_type src_type = nir_op_infos[alu->op].input_types[0];
@@ -88,13 +77,9 @@ lower_instr(nir_builder *b, nir_alu_instr *alu)
     */
    if ((src_full_type == nir_type_float16 && dst_bit_size == 64) ||
        (src_bit_size == 64 && dst_full_type == nir_type_float16)) {
-      nir_op op1 = get_conversion_op(src_type, src_bit_size,
-                                     nir_type_float, 32,
-                                     nir_rounding_mode_undef);
-      nir_op op2 = get_conversion_op(nir_type_float, 32,
-                                     dst_type, dst_bit_size,
-                                     get_opcode_rounding_mode(alu->op));
-      split_conversion(b, alu, op1, op2);
+      split_conversion(b, alu, src_type, nir_type_float | 32,
+                       dst_type | dst_bit_size,
+                       get_opcode_rounding_mode(alu->op));
       return true;
    }
 
@@ -114,11 +99,8 @@ lower_instr(nir_builder *b, nir_alu_instr *alu)
     */
    if ((src_bit_size == 8 && dst_bit_size == 64) ||
        (src_bit_size == 64 && dst_bit_size == 8)) {
-      nir_op op1 = get_conversion_op(src_type, src_bit_size, dst_type, 32,
-                                     nir_rounding_mode_undef);
-      nir_op op2 = get_conversion_op(dst_type, 32, dst_type, dst_bit_size,
-                                     nir_rounding_mode_undef);
-      split_conversion(b, alu, op1, op2);
+      split_conversion(b, alu, src_type, dst_type | 32, dst_type | dst_bit_size,
+                       nir_rounding_mode_undef);
       return true;
    }
 
@@ -126,46 +108,25 @@ lower_instr(nir_builder *b, nir_alu_instr *alu)
 }
 
 static bool
-lower_impl(nir_function_impl *impl)
+lower_instr(nir_builder *b, nir_instr *instr, UNUSED void *cb_data)
 {
-   nir_builder b;
-   nir_builder_init(&b, impl);
-   bool progress = false;
+   if (instr->type != nir_instr_type_alu)
+      return false;
 
-   nir_foreach_block(block, impl) {
-      nir_foreach_instr_safe(instr, block) {
-         if (instr->type != nir_instr_type_alu)
-            continue;
+   nir_alu_instr *alu = nir_instr_as_alu(instr);
+   assert(alu->dest.dest.is_ssa);
 
-         nir_alu_instr *alu = nir_instr_as_alu(instr);
-         assert(alu->dest.dest.is_ssa);
+   if (!nir_op_infos[alu->op].is_conversion)
+      return false;
 
-         if (!nir_op_infos[alu->op].is_conversion)
-            continue;
-
-         progress = lower_instr(&b, alu) || progress;
-      }
-   }
-
-   if (progress) {
-      nir_metadata_preserve(impl, nir_metadata_block_index |
-                                  nir_metadata_dominance);
-   } else {
-      nir_metadata_preserve(impl, nir_metadata_all);
-   }
-
-   return progress;
+   return lower_alu_instr(b, alu);
 }
 
 bool
 brw_nir_lower_conversions(nir_shader *shader)
 {
-   bool progress = false;
-
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         progress |= lower_impl(function->impl);
-   }
-
-   return progress;
+   return nir_shader_instructions_pass(shader, lower_instr,
+                                       nir_metadata_block_index |
+                                       nir_metadata_dominance,
+                                       NULL);
 }

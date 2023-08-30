@@ -32,29 +32,30 @@
 static struct gl_buffer_object *
 new_upload_buffer(struct gl_context *ctx, GLsizeiptr size, uint8_t **ptr)
 {
-   assert(ctx->GLThread.SupportsBufferUploads);
-
-   struct gl_buffer_object *obj = ctx->Driver.NewBufferObject(ctx, -1);
+   /* id 0 is used to avoid returning invalid binding values to apps */
+   struct gl_buffer_object *obj =
+      _mesa_bufferobj_alloc(ctx, 0);
    if (!obj)
       return NULL;
 
    obj->Immutable = true;
+   obj->GLThreadInternal = true;
 
-   if (!ctx->Driver.BufferData(ctx, GL_ARRAY_BUFFER, size, NULL,
-                               GL_WRITE_ONLY,
-                               GL_CLIENT_STORAGE_BIT | GL_MAP_WRITE_BIT,
-                               obj)) {
-      ctx->Driver.DeleteBuffer(ctx, obj);
+   if (!_mesa_bufferobj_data(ctx, GL_ARRAY_BUFFER, size, NULL,
+                          GL_WRITE_ONLY,
+                          GL_CLIENT_STORAGE_BIT | GL_MAP_WRITE_BIT,
+                          obj)) {
+      _mesa_delete_buffer_object(ctx, obj);
       return NULL;
    }
 
-   *ptr = ctx->Driver.MapBufferRange(ctx, 0, size,
-                                     GL_MAP_WRITE_BIT |
-                                     GL_MAP_UNSYNCHRONIZED_BIT |
-                                     MESA_MAP_THREAD_SAFE_BIT,
-                                     obj, MAP_GLTHREAD);
+   *ptr = _mesa_bufferobj_map_range(ctx, 0, size,
+                                 GL_MAP_WRITE_BIT |
+                                 GL_MAP_UNSYNCHRONIZED_BIT |
+                                 MESA_MAP_THREAD_SAFE_BIT,
+                                 obj, MAP_GLTHREAD);
    if (!*ptr) {
-      ctx->Driver.DeleteBuffer(ctx, obj);
+      _mesa_delete_buffer_object(ctx, obj);
       return NULL;
    }
 
@@ -62,10 +63,24 @@ new_upload_buffer(struct gl_context *ctx, GLsizeiptr size, uint8_t **ptr)
 }
 
 void
+_mesa_glthread_release_upload_buffer(struct gl_context *ctx)
+{
+   struct glthread_state *glthread = &ctx->GLThread;
+
+   if (glthread->upload_buffer_private_refcount > 0) {
+      p_atomic_add(&glthread->upload_buffer->RefCount,
+                   -glthread->upload_buffer_private_refcount);
+      glthread->upload_buffer_private_refcount = 0;
+   }
+   _mesa_reference_buffer_object(ctx, &glthread->upload_buffer, NULL);
+}
+
+void
 _mesa_glthread_upload(struct gl_context *ctx, const void *data,
                       GLsizeiptr size, unsigned *out_offset,
                       struct gl_buffer_object **out_buffer,
-                      uint8_t **out_ptr)
+                      uint8_t **out_ptr,
+                      unsigned start_offset)
 {
    struct glthread_state *glthread = &ctx->GLThread;
    const unsigned default_size = 1024 * 1024;
@@ -74,22 +89,23 @@ _mesa_glthread_upload(struct gl_context *ctx, const void *data,
       return;
 
    /* The alignment was chosen arbitrarily. */
-   unsigned offset = align(glthread->upload_offset, 8);
+   unsigned offset = align(glthread->upload_offset, size <= 4 ? 4 : 8) + start_offset;
 
    /* Allocate a new buffer if needed. */
    if (unlikely(!glthread->upload_buffer || offset + size > default_size)) {
       /* If the size is greater than the buffer size, allocate a separate buffer
        * just for this upload.
        */
-      if (unlikely(size > default_size)) {
+      if (unlikely(start_offset + size > default_size)) {
          uint8_t *ptr;
 
          assert(*out_buffer == NULL);
-         *out_buffer = new_upload_buffer(ctx, size, &ptr);
+         *out_buffer = new_upload_buffer(ctx, size + start_offset, &ptr);
          if (!*out_buffer)
             return;
 
-         *out_offset = 0;
+         ptr += start_offset;
+         *out_offset = start_offset;
          if (data)
             memcpy(ptr, data, size);
          else
@@ -97,16 +113,12 @@ _mesa_glthread_upload(struct gl_context *ctx, const void *data,
          return;
       }
 
-      if (glthread->upload_buffer_private_refcount > 0) {
-         p_atomic_add(&glthread->upload_buffer->RefCount,
-                      -glthread->upload_buffer_private_refcount);
-         glthread->upload_buffer_private_refcount = 0;
-      }
-      _mesa_reference_buffer_object(ctx, &glthread->upload_buffer, NULL);
+      _mesa_glthread_release_upload_buffer(ctx);
+
       glthread->upload_buffer =
          new_upload_buffer(ctx, default_size, &glthread->upload_ptr);
       glthread->upload_offset = 0;
-      offset = 0;
+      offset = start_offset;
 
       /* Since atomic operations are very very slow when 2 threads are not
        * sharing one L3 cache (which can happen on AMD Zen), prevent using
@@ -170,7 +182,7 @@ _mesa_glthread_upload(struct gl_context *ctx, const void *data,
  * feature that if you pass a bad name, it just gens a buffer object for you,
  * so we escape without having to know if things are valid or not.
  */
-void
+static void
 _mesa_glthread_BindBuffer(struct gl_context *ctx, GLenum target, GLuint buffer)
 {
    struct glthread_state *glthread = &ctx->GLThread;
@@ -189,7 +201,93 @@ _mesa_glthread_BindBuffer(struct gl_context *ctx, GLenum target, GLuint buffer)
    case GL_DRAW_INDIRECT_BUFFER:
       glthread->CurrentDrawIndirectBufferName = buffer;
       break;
+   case GL_PIXEL_PACK_BUFFER:
+      glthread->CurrentPixelPackBufferName = buffer;
+      break;
+   case GL_PIXEL_UNPACK_BUFFER:
+      glthread->CurrentPixelUnpackBufferName = buffer;
+      break;
+   case GL_QUERY_BUFFER:
+      glthread->CurrentQueryBufferName = buffer;
+      break;
    }
+}
+
+/* This can hold up to 2 BindBuffer calls. This is used to eliminate
+ * duplicated BindBuffer calls, which are plentiful in viewperf2020/catia.
+ * In this example, the first 2 calls are eliminated by glthread by keeping
+ * track of the last 2 BindBuffer calls and overwriting them if the target
+ * matches.
+ *
+ *   glBindBuffer(GL_ARRAY_BUFFER, 0);
+ *   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+ *   glBindBuffer(GL_ARRAY_BUFFER, 6);
+ *   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 7);
+ */
+struct marshal_cmd_BindBuffer
+{
+   struct marshal_cmd_base cmd_base;
+   GLenum16 target[2];
+   GLuint buffer[2];
+};
+
+uint32_t
+_mesa_unmarshal_BindBuffer(struct gl_context *ctx,
+                           const struct marshal_cmd_BindBuffer *restrict cmd)
+{
+   CALL_BindBuffer(ctx->Dispatch.Current, (cmd->target[0], cmd->buffer[0]));
+
+   if (cmd->target[1])
+      CALL_BindBuffer(ctx->Dispatch.Current, (cmd->target[1], cmd->buffer[1]));
+
+   const unsigned cmd_size = (align(sizeof(struct marshal_cmd_BindBuffer), 8) / 8);
+   assert (cmd_size == cmd->cmd_base.cmd_size);
+   return cmd_size;
+}
+
+void GLAPIENTRY
+_mesa_marshal_BindBuffer(GLenum target, GLuint buffer)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   struct glthread_state *glthread = &ctx->GLThread;
+   struct marshal_cmd_BindBuffer *last = glthread->LastBindBuffer;
+
+   _mesa_glthread_BindBuffer(ctx, target, buffer);
+
+   /* If the last call is BindBuffer... */
+   if (_mesa_glthread_call_is_last(glthread, &last->cmd_base)) {
+      /* If the target is in the last call and unbinding the buffer, overwrite
+       * the buffer ID there.
+       *
+       * We can't optimize out binding non-zero buffers because binding also
+       * creates the GL objects (like glCreateBuffers), which can't be skipped.
+       */
+      if (target == last->target[0] && !last->buffer[0]) {
+         last->buffer[0] = buffer;
+         return;
+      }
+      if (target == last->target[1] && !last->buffer[1]) {
+         last->buffer[1] = buffer;
+         return;
+      }
+
+      /* If the last call has an unused buffer field, add this call to it. */
+      if (last->target[1] == 0) {
+         last->target[1] = MIN2(target, 0xffff); /* clamped to 0xffff (invalid enum) */
+         last->buffer[1] = buffer;
+         return;
+      }
+   }
+
+   int cmd_size = sizeof(struct marshal_cmd_BindBuffer);
+   struct marshal_cmd_BindBuffer *cmd =
+      _mesa_glthread_allocate_command(ctx, DISPATCH_CMD_BindBuffer, cmd_size);
+
+   cmd->target[0] = MIN2(target, 0xffff); /* clamped to 0xffff (invalid enum) */
+   cmd->target[1] = 0;
+   cmd->buffer[0] = buffer;
+
+   glthread->LastBindBuffer = cmd;
 }
 
 void
@@ -198,7 +296,7 @@ _mesa_glthread_DeleteBuffers(struct gl_context *ctx, GLsizei n,
 {
    struct glthread_state *glthread = &ctx->GLThread;
 
-   if (!buffers)
+   if (!buffers || n < 0)
       return;
 
    for (unsigned i = 0; i < n; i++) {
@@ -210,6 +308,10 @@ _mesa_glthread_DeleteBuffers(struct gl_context *ctx, GLsizei n,
          _mesa_glthread_BindBuffer(ctx, GL_ELEMENT_ARRAY_BUFFER, 0);
       if (id == glthread->CurrentDrawIndirectBufferName)
          _mesa_glthread_BindBuffer(ctx, GL_DRAW_INDIRECT_BUFFER, 0);
+      if (id == glthread->CurrentPixelPackBufferName)
+         _mesa_glthread_BindBuffer(ctx, GL_PIXEL_PACK_BUFFER, 0);
+      if (id == glthread->CurrentPixelUnpackBufferName)
+         _mesa_glthread_BindBuffer(ctx, GL_PIXEL_UNPACK_BUFFER, 0);
    }
 }
 
@@ -227,9 +329,9 @@ struct marshal_cmd_BufferData
    /* Next size bytes are GLubyte data[size] */
 };
 
-void
+uint32_t
 _mesa_unmarshal_BufferData(struct gl_context *ctx,
-                           const struct marshal_cmd_BufferData *cmd)
+                           const struct marshal_cmd_BufferData *restrict cmd)
 {
    const GLuint target_or_name = cmd->target_or_name;
    const GLsizei size = cmd->size;
@@ -244,29 +346,32 @@ _mesa_unmarshal_BufferData(struct gl_context *ctx,
       data = (const void *) (cmd + 1);
 
    if (cmd->ext_dsa) {
-      CALL_NamedBufferDataEXT(ctx->CurrentServerDispatch,
+      CALL_NamedBufferDataEXT(ctx->Dispatch.Current,
                               (target_or_name, size, data, usage));
    } else if (cmd->named) {
-      CALL_NamedBufferData(ctx->CurrentServerDispatch,
+      CALL_NamedBufferData(ctx->Dispatch.Current,
                            (target_or_name, size, data, usage));
    } else {
-      CALL_BufferData(ctx->CurrentServerDispatch,
+      CALL_BufferData(ctx->Dispatch.Current,
                       (target_or_name, size, data, usage));
    }
+   return cmd->cmd_base.cmd_size;
 }
 
-void
+uint32_t
 _mesa_unmarshal_NamedBufferData(struct gl_context *ctx,
-                                const struct marshal_cmd_NamedBufferData *cmd)
+                                const struct marshal_cmd_NamedBufferData *restrict cmd)
 {
    unreachable("never used - all BufferData variants use DISPATCH_CMD_BufferData");
+   return 0;
 }
 
-void
+uint32_t
 _mesa_unmarshal_NamedBufferDataEXT(struct gl_context *ctx,
-                                   const struct marshal_cmd_NamedBufferDataEXT *cmd)
+                                   const struct marshal_cmd_NamedBufferDataEXT *restrict cmd)
 {
    unreachable("never used - all BufferData variants use DISPATCH_CMD_BufferData");
+   return 0;
 }
 
 static void
@@ -284,10 +389,10 @@ _mesa_marshal_BufferData_merged(GLuint target_or_name, GLsizeiptr size,
                 (named && target_or_name == 0))) {
       _mesa_glthread_finish_before(ctx, func);
       if (named) {
-         CALL_NamedBufferData(ctx->CurrentServerDispatch,
+         CALL_NamedBufferData(ctx->Dispatch.Current,
                               (target_or_name, size, data, usage));
       } else {
-         CALL_BufferData(ctx->CurrentServerDispatch,
+         CALL_BufferData(ctx->Dispatch.Current,
                          (target_or_name, size, data, usage));
       }
       return;
@@ -348,9 +453,9 @@ struct marshal_cmd_BufferSubData
    /* Next size bytes are GLubyte data[size] */
 };
 
-void
+uint32_t
 _mesa_unmarshal_BufferSubData(struct gl_context *ctx,
-                              const struct marshal_cmd_BufferSubData *cmd)
+                              const struct marshal_cmd_BufferSubData *restrict cmd)
 {
    const GLenum target_or_name = cmd->target_or_name;
    const GLintptr offset = cmd->offset;
@@ -358,29 +463,32 @@ _mesa_unmarshal_BufferSubData(struct gl_context *ctx,
    const void *data = (const void *) (cmd + 1);
 
    if (cmd->ext_dsa) {
-      CALL_NamedBufferSubDataEXT(ctx->CurrentServerDispatch,
+      CALL_NamedBufferSubDataEXT(ctx->Dispatch.Current,
                                  (target_or_name, offset, size, data));
    } else if (cmd->named) {
-      CALL_NamedBufferSubData(ctx->CurrentServerDispatch,
+      CALL_NamedBufferSubData(ctx->Dispatch.Current,
                               (target_or_name, offset, size, data));
    } else {
-      CALL_BufferSubData(ctx->CurrentServerDispatch,
+      CALL_BufferSubData(ctx->Dispatch.Current,
                          (target_or_name, offset, size, data));
    }
+   return cmd->cmd_base.cmd_size;
 }
 
-void
+uint32_t
 _mesa_unmarshal_NamedBufferSubData(struct gl_context *ctx,
-                                   const struct marshal_cmd_NamedBufferSubData *cmd)
+                                   const struct marshal_cmd_NamedBufferSubData *restrict cmd)
 {
    unreachable("never used - all BufferSubData variants use DISPATCH_CMD_BufferSubData");
+   return 0;
 }
 
-void
+uint32_t
 _mesa_unmarshal_NamedBufferSubDataEXT(struct gl_context *ctx,
-                                      const struct marshal_cmd_NamedBufferSubDataEXT *cmd)
+                                      const struct marshal_cmd_NamedBufferSubDataEXT *restrict cmd)
 {
    unreachable("never used - all BufferSubData variants use DISPATCH_CMD_BufferSubData");
+   return 0;
 }
 
 static void
@@ -398,13 +506,14 @@ _mesa_marshal_BufferSubData_merged(GLuint target_or_name, GLintptr offset,
     *       If offset == 0 and size == buffer_size, it's better to discard
     *       the buffer storage, but we don't know the buffer size in glthread.
     */
-   if (ctx->GLThread.SupportsBufferUploads &&
+   if (ctx->Const.AllowGLThreadBufferSubDataOpt &&
+       ctx->Dispatch.Current != ctx->Dispatch.ContextLost &&
        data && offset > 0 && size > 0) {
       struct gl_buffer_object *upload_buffer = NULL;
       unsigned upload_offset = 0;
 
       _mesa_glthread_upload(ctx, data, size, &upload_offset, &upload_buffer,
-                            NULL);
+                            NULL, 0);
 
       if (upload_buffer) {
          _mesa_marshal_InternalBufferSubDataCopyMESA((GLintptr)upload_buffer,
@@ -421,10 +530,10 @@ _mesa_marshal_BufferSubData_merged(GLuint target_or_name, GLintptr offset,
                 (named && target_or_name == 0))) {
       _mesa_glthread_finish_before(ctx, func);
       if (named) {
-         CALL_NamedBufferSubData(ctx->CurrentServerDispatch,
+         CALL_NamedBufferSubData(ctx->Dispatch.Current,
                                  (target_or_name, offset, size, data));
       } else {
-         CALL_BufferSubData(ctx->CurrentServerDispatch,
+         CALL_BufferSubData(ctx->Dispatch.Current,
                             (target_or_name, offset, size, data));
       }
       return;

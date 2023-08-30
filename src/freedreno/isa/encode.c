@@ -22,6 +22,7 @@
  */
 
 #include "util/log.h"
+#include "util/u_math.h"
 
 #include "ir3/ir3.h"
 #include "ir3/ir3_shader.h"
@@ -32,6 +33,8 @@
 struct bitset_params;
 
 struct encode_state {
+	unsigned gen;
+
 	struct ir3_compiler *compiler;
 
 	/**
@@ -52,7 +55,7 @@ extract_SRC1_R(struct ir3_instruction *instr)
 		assert(!instr->repeat);
 		return instr->nop & 0x1;
 	}
-	return !!(instr->regs[1]->flags & IR3_REG_R);
+	return !!(instr->srcs[0]->flags & IR3_REG_R);
 }
 
 static inline bool
@@ -63,8 +66,8 @@ extract_SRC2_R(struct ir3_instruction *instr)
 		return (instr->nop >> 1) & 0x1;
 	}
 	/* src2 does not appear in all cat2, but SRC2_R does (for nop encoding) */
-	if (instr->regs_count > 2)
-		return !!(instr->regs[2]->flags & IR3_REG_R);
+	if (instr->srcs_count > 1)
+		return !!(instr->srcs[1]->flags & IR3_REG_R);
 	return 0;
 }
 
@@ -97,7 +100,7 @@ __instruction_case(struct encode_state *s, struct ir3_instruction *instr)
 			return OPC_BRAX;
 		}
 	} else if (instr->opc == OPC_MOV) {
-		struct ir3_register *src = instr->regs[1];
+		struct ir3_register *src = instr->srcs[0];
 		if (src->flags & IR3_REG_IMMED) {
 			return OPC_MOV_IMMED;
 		} if (src->flags & IR3_REG_RELATIV) {
@@ -111,10 +114,9 @@ __instruction_case(struct encode_state *s, struct ir3_instruction *instr)
 		} else {
 			return OPC_MOV_GPR;
 		}
-	} else if ((instr->block->shader->compiler->gpu_id > 600) &&
-			is_atomic(instr->opc) && (instr->flags & IR3_INSTR_G)) {
-		return instr->opc - OPC_ATOMIC_ADD + OPC_ATOMIC_B_ADD;
-	} else if (s->compiler->gpu_id >= 600) {
+	} else if (instr->opc == OPC_DEMOTE) {
+		return OPC_KILL;
+	} else if (s->compiler->gen >= 6) {
 		if (instr->opc == OPC_RESINFO) {
 			return OPC_RESINFO_B;
 		} else if (instr->opc == OPC_LDIB) {
@@ -143,6 +145,20 @@ extract_ABSNEG(struct ir3_register *reg)
 	}
 }
 
+static inline int32_t
+extract_reg_iim(struct ir3_register *reg)
+{
+   assert(reg->flags & IR3_REG_IMMED);
+   return reg->iim_val;
+}
+
+static inline uint32_t
+extract_reg_uim(struct ir3_register *reg)
+{
+   assert(reg->flags & IR3_REG_IMMED);
+   return reg->uim_val;
+}
+
 /**
  * This is a bit messy, to deal with the fact that the optional "s2en"
  * src is the first src, shifting everything else up by one.
@@ -155,15 +171,15 @@ extract_cat5_SRC(struct ir3_instruction *instr, unsigned n)
 	if (instr->flags & IR3_INSTR_S2EN) {
 		n++;
 	}
-	if (n < instr->regs_count)
-		return instr->regs[n];
+	if (n < instr->srcs_count)
+		return instr->srcs[n];
 	return NULL;
 }
 
 static inline bool
 extract_cat5_FULL(struct ir3_instruction *instr)
 {
-	struct ir3_register *reg = extract_cat5_SRC(instr, 1);
+	struct ir3_register *reg = extract_cat5_SRC(instr, 0);
 	/* some cat5 have zero src regs, in which case 'FULL' is false */
 	if (!reg)
 		return false;
@@ -177,17 +193,21 @@ extract_cat5_DESC_MODE(struct ir3_instruction *instr)
 	if (instr->flags & IR3_INSTR_S2EN) {
 		if (instr->flags & IR3_INSTR_B) {
 			if (instr->flags & IR3_INSTR_A1EN) {
-				return CAT5_BINDLESS_A1_UNIFORM;
+				if (instr->flags & IR3_INSTR_NONUNIF) {
+					return CAT5_BINDLESS_A1_NONUNIFORM;
+				} else {
+					return CAT5_BINDLESS_A1_UNIFORM;
+				}
+			} else if (instr->flags & IR3_INSTR_NONUNIF) {
+				return CAT5_BINDLESS_NONUNIFORM;
 			} else {
 				return CAT5_BINDLESS_UNIFORM;
 			}
 		} else {
-			/* TODO: This should probably be CAT5_UNIFORM, at least on a6xx,
-			 * as this is what the blob does and it is presumably faster, but
-			 * first we should confirm it is actually nonuniform and figure
-			 * out when the whole descriptor mode mechanism was introduced.
-			 */
-			return CAT5_NONUNIFORM;
+			if (instr->flags & IR3_INSTR_NONUNIF)
+				return CAT5_NONUNIFORM;
+			else
+				return CAT5_UNIFORM;
 		}
 		assert(!(instr->cat5.samp | instr->cat5.tex));
 	} else if (instr->flags & IR3_INSTR_B) {
@@ -203,7 +223,7 @@ extract_cat5_DESC_MODE(struct ir3_instruction *instr)
 static inline unsigned
 extract_cat6_DESC_MODE(struct ir3_instruction *instr)
 {
-	struct ir3_register *ssbo = instr->regs[1];
+	struct ir3_register *ssbo = instr->srcs[0];
 	if (ssbo->flags & IR3_REG_IMMED) {
 		return 0; // todo enum
 	} else if (instr->flags & IR3_INSTR_NONUNIF) {
@@ -223,11 +243,11 @@ extract_cat6_DESC_MODE(struct ir3_instruction *instr)
 static inline struct ir3_register *
 extract_cat6_SRC(struct ir3_instruction *instr, unsigned n)
 {
-	if (instr->flags & IR3_INSTR_G) {
+	if (is_global_a3xx_atomic(instr->opc)) {
 		n++;
 	}
-	assert(n < instr->regs_count);
-	return instr->regs[n];
+	assert(n < instr->srcs_count);
+	return instr->srcs[n];
 }
 
 typedef enum {
@@ -267,7 +287,7 @@ __multisrc_case(struct encode_state *s, struct ir3_register *reg)
 
 typedef enum {
 	REG_CAT3_SRC_GPR,
-	REG_CAT3_SRC_CONST,
+	REG_CAT3_SRC_CONST_OR_IMMED,
 	REG_CAT3_SRC_RELATIVE_GPR,
 	REG_CAT3_SRC_RELATIVE_CONST,
 } reg_cat3_src_t;
@@ -281,11 +301,22 @@ __cat3_src_case(struct encode_state *s, struct ir3_register *reg)
 		} else {
 			return REG_CAT3_SRC_RELATIVE_GPR;
 		}
-	} else if (reg->flags & IR3_REG_CONST) {
-		return REG_CAT3_SRC_CONST;
+	} else if (reg->flags & (IR3_REG_CONST | IR3_REG_IMMED)) {
+		return REG_CAT3_SRC_CONST_OR_IMMED;
 	} else {
 		return REG_CAT3_SRC_GPR;
 	}
+}
+
+typedef enum {
+   STC_DST_IMM,
+   STC_DST_A1
+} stc_dst_t;
+
+static inline stc_dst_t
+__stc_dst_case(struct encode_state *s, struct ir3_instruction *instr)
+{
+   return (instr->flags & IR3_INSTR_A1EN) ? STC_DST_A1 : STC_DST_IMM;
 }
 
 #include "encode.h"
@@ -294,7 +325,7 @@ __cat3_src_case(struct encode_state *s, struct ir3_register *reg)
 void *
 isa_assemble(struct ir3_shader_variant *v)
 {
-	uint64_t *ptr, *instrs;
+	BITSET_WORD *ptr, *instrs;
 	const struct ir3_info *info = &v->info;
 	struct ir3 *shader = v->ir;
 
@@ -303,11 +334,19 @@ isa_assemble(struct ir3_shader_variant *v)
 	foreach_block (block, &shader->block_list) {
 		foreach_instr (instr, &block->instr_list) {
 			struct encode_state s = {
+				.gen = shader->compiler->gen * 100,
 				.compiler = shader->compiler,
 				.instr = instr,
 			};
 
-			*(instrs++) = encode__instruction(&s, NULL, instr);
+			bitmask_t encoded;
+			if (instr->opc == OPC_META_RAW) {
+				encoded = uint64_t_to_bitmask(instr->raw.value);
+			} else {
+				encoded = encode__instruction(&s, NULL, instr);
+			}
+			store_instruction(instrs, encoded);
+			instrs += BITMASK_WORDS;
 		}
 	}
 

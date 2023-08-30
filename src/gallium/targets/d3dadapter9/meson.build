@@ -20,8 +20,6 @@
 # SOFTWARE.
 
 # TODO: support non-static targets
-# Static targets are always enabled in autotools (unless you modify
-# configure.ac)
 
 nine_version = ['1', '0', '0']
 
@@ -40,7 +38,7 @@ if with_ld_version_script
 endif
 
 if (with_gallium_va or with_gallium_vdpau or with_gallium_omx != 'disabled' or
-    with_gallium_xvmc or with_dri)
+    with_dri)
   gallium_nine_link_with += libgalliumvl
 else
   gallium_nine_link_with += libgalliumvl_stub
@@ -51,7 +49,7 @@ libgallium_nine = shared_library(
   files('description.c', 'getproc.c', 'drm.c'),
   include_directories : [
     inc_include, inc_src, inc_loader, inc_mapi, inc_mesa, inc_util,
-    inc_dri_common, inc_gallium, inc_gallium_aux, inc_gallium_winsys,
+    inc_gallium, inc_gallium_aux, inc_gallium_winsys,
     inc_gallium_drivers, inc_d3d9,
     include_directories('../../frontends/nine'),
   ],
@@ -63,8 +61,25 @@ libgallium_nine = shared_library(
   dependencies : [
     dep_selinux, dep_libdrm, dep_llvm, dep_thread,
     idep_xmlconfig, idep_mesautil, idep_nir,
-    driver_swrast, driver_r300, driver_r600, driver_radeonsi, driver_nouveau,
-    driver_i915, driver_svga, driver_iris
+    driver_asahi,
+    driver_v3d,
+    driver_crocus,
+    driver_etnaviv,
+    driver_freedreno,
+    driver_kmsro,
+    driver_lima,
+    driver_nouveau,
+    driver_panfrost,
+    driver_r300,
+    driver_r600,
+    driver_radeonsi,
+    driver_svga,
+    driver_swrast,
+    driver_i915,
+    driver_iris,
+    driver_v3d,
+    driver_vc4,
+    driver_zink
   ],
   name_prefix : '',
   version : '.'.join(nine_version),

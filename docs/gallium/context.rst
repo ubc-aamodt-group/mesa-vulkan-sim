@@ -48,6 +48,8 @@ buffers, surfaces) are bound to the driver.
   type. index is used to indicate which buffer to set (some APIs may allow
   multiple ones to be set, and binding a specific one later, though drivers
   are mostly restricted to the first one right now).
+  If take_ownership is true, the buffer reference is passed to the driver, so
+  that the driver doesn't have to increment the reference count.
 
 * ``set_inlinable_constants`` sets inlinable constants for constant buffer 0.
 
@@ -100,7 +102,7 @@ objects. They all follow simple, one-method binding calls, e.g.
   PIPE_MAX_VIEWPORTS.
 * ``set_viewport_states``
 * ``set_window_rectangles`` sets the window rectangles to be used for
-  rendering, as defined by GL_EXT_window_rectangles. There are two
+  rendering, as defined by :ext:`GL_EXT_window_rectangles`. There are two
   modes - include and exclude, which define whether the supplied
   rectangles are to be used for including fragments or excluding
   them. All of the rectangles are ORed together, so in exclude mode,
@@ -116,20 +118,22 @@ objects. They all follow simple, one-method binding calls, e.g.
     levels. This corresponds to GL's ``PATCH_DEFAULT_OUTER_LEVEL``.
   * ``default_inner_level`` is the default value for the inner tessellation
     levels. This corresponds to GL's ``PATCH_DEFAULT_INNER_LEVEL``.
+* ``set_patch_vertices`` sets the number of vertices per input patch
+  for tessellation.
 
 * ``set_debug_callback`` sets the callback to be used for reporting
-  various debug messages, eventually reported via KHR_debug and
+  various debug messages, eventually reported via :ext:`GL_KHR_debug` and
   similar mechanisms.
 
 Samplers
 ^^^^^^^^
 
-pipe_sampler_state objects control how textures are sampled
-(coordinate wrap modes, interpolation modes, etc).  Note that unless
-``PIPE_CAP_TEXTURE_BUFFER_SAMPLER`` is enabled, samplers are not used for
-texture buffer objects.  That is, pipe_context::bind_sampler_views()
-will not bind a sampler if the corresponding sampler view refers to a
-PIPE_BUFFER resource.
+pipe_sampler_state objects control how textures are sampled (coordinate wrap
+modes, interpolation modes, etc). Samplers are only required for texture
+instructions for which nir_tex_instr_need_sampler returns true. Drivers must
+ignore samplers for other texture instructions. Frontends may or may not bind
+samplers when no texture instruction use them. Notably, frontends may not bind
+samplers for texture buffer objects, which are never accessed with samplers.
 
 Sampler Views
 ^^^^^^^^^^^^^
@@ -176,7 +180,7 @@ to the array index which is used for sampling.
 Hardware Atomic buffers
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-Buffers containing hw atomics are required to support the feature
+Buffers containing HW atomics are required to support the feature
 on some drivers.
 
 Drivers that require this need to fill the ``set_hw_atomic_buffers`` method.
@@ -265,7 +269,7 @@ Clearing
 ^^^^^^^^
 
 Clear is one of the most difficult concepts to nail down to a single
-interface (due to both different requirements from APIs and also driver/hw
+interface (due to both different requirements from APIs and also driver/HW
 specific differences).
 
 ``clear`` initializes some or all of the surfaces currently bound to
@@ -353,7 +357,7 @@ buffer.
 In indexed draw, ``min_index`` and ``max_index`` respectively provide a lower
 and upper bound of the indices contained in the index buffer inside the range
 between ``start`` to ``start``+``count``-1.  This allows the driver to
-determine which subset of vertices will be referenced during te draw call
+determine which subset of vertices will be referenced during the draw call
 without having to scan the index buffer.  Providing a over-estimation of the
 the true bounds, for example, a ``min_index`` and ``max_index`` of 0 and
 0xffffffff respectively, must give exactly the same rendering, albeit with less
@@ -557,12 +561,15 @@ has completed, drawing will be predicated on the outcome of the query.
 If ``mode`` is PIPE_RENDER_COND_BY_REGION_WAIT or
 PIPE_RENDER_COND_BY_REGION_NO_WAIT rendering will be predicated as above
 for the non-REGION modes but in the case that an occlusion query returns
-a non-zero result, regions which were occluded may be ommitted by subsequent
+a non-zero result, regions which were occluded may be omitted by subsequent
 drawing commands.  This can result in better performance with some GPUs.
 Normally, if the occlusion query returned a non-zero result subsequent
 drawing happens normally so fragments may be generated, shaded and
 processed even where they're known to be obscured.
 
+The ''render_condition_mem'' function specifies the drawing is dependent
+on a value in memory. A buffer resource and offset denote which 32-bit
+value to use for the query. This is used for Vulkan API.
 
 Flushing
 ^^^^^^^^
@@ -658,8 +665,10 @@ Blitting
 These methods emulate classic blitter controls.
 
 These methods operate directly on ``pipe_resource`` objects, and stand
-apart from any 3D state in the context.  Blitting functionality may be
-moved to a separate abstraction at some point in the future.
+apart from any 3D state in the context. Each method is assumed to have an
+implicit memory barrier around itself. They do not need any explicit
+``memory_barrier``. Blitting functionality may be moved to a separate
+abstraction at some point in the future.
 
 ``resource_copy_region`` blits a region of a resource to a region of another
 resource, provided that both resources have the same format, or compatible
@@ -691,6 +700,11 @@ The returned pointer points to the start of the mapped range according to
 the box region, not the beginning of the resource. If transfer_map fails,
 the returned pointer to the buffer memory is NULL, and the pointer
 to the transfer object remains unchanged (i.e. it can be non-NULL).
+
+When mapping an MSAA surface, the samples are implicitly resolved to
+single-sampled for reads (returning the first sample for depth/stencil/integer,
+averaged for others).  See u_transfer_helper's U_TRANSFER_HELPER_MSAA_MAP for a
+way to get that behavior using a resolve blit.
 
 ``transfer_unmap`` remove the memory mapping for and destroy
 the transfer object. The pointer into the resource should be considered

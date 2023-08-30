@@ -32,12 +32,14 @@
 #include "pipe/p_state.h"
 #include "util/list.h"
 #include "hud/font.h"
+#include "hud/hud_context.h"
 #include "cso_cache/cso_context.h"
 
 enum hud_counter {
    HUD_COUNTER_OFFLOADED,
    HUD_COUNTER_DIRECT,
    HUD_COUNTER_SYNCS,
+   HUD_COUNTER_BATCHES,
 };
 
 struct hud_context {
@@ -50,7 +52,10 @@ struct hud_context {
    /* Context where the HUD is drawn: */
    struct pipe_context *pipe;
    struct cso_context *cso;
-   struct st_context_iface *st;
+
+   /* For notifying st_context to rebind states that we clobbered. */
+   struct st_context *st;
+   hud_st_invalidate_state_func st_invalidate_state;
 
    struct hud_batch_query_context *batch_query;
    struct list_head pane_list;
@@ -62,7 +67,7 @@ struct hud_context {
    struct pipe_depth_stencil_alpha_state dsa;
    void *fs_color, *fs_text;
    struct pipe_rasterizer_state rasterizer, rasterizer_aa_lines;
-   void *vs;
+   void *vs_color, *vs_text;
    struct cso_velems_state velems;
 
    /* font */
@@ -78,6 +83,7 @@ struct hud_context {
       float translate[2];
       float scale[2];
       float padding[2];
+      float rotate[4];
    } constants;
    struct pipe_constant_buffer constbuf;
 

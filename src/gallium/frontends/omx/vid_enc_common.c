@@ -58,7 +58,7 @@ static void enc_GetPictureParamPreset(struct pipe_h264_enc_picture_desc *picture
    picture->motion_est.enc_disable_sub_mode = 0x000000fe;
    picture->motion_est.enc_ime2_search_range_x = 0x00000001;
    picture->motion_est.enc_ime2_search_range_y = 0x00000001;
-   picture->pic_ctrl.enc_constraint_set_flags = 0x00000040;
+   picture->seq.enc_constraint_set_flags = 0x00000040;
 }
 
 enum pipe_video_profile enc_TranslateOMXProfileToPipe(unsigned omx_profile)
@@ -137,7 +137,7 @@ void vid_enc_BufferEncoded_common(vid_enc_PrivateType * priv, OMX_BUFFERHEADERTY
    }
 #endif
 
-   task = LIST_ENTRY(struct encode_task, inp->tasks.next, list);
+   task = list_entry(inp->tasks.next, struct encode_task, list);
    list_del(&task->list);
    list_addtail(&task->list, &priv->used_tasks);
 
@@ -147,7 +147,7 @@ void vid_enc_BufferEncoded_common(vid_enc_PrivateType * priv, OMX_BUFFERHEADERTY
    /* ------------- map result buffer ----------------- */
 
    if (outp->transfer)
-      pipe_transfer_unmap(priv->t_pipe, outp->transfer);
+      pipe_buffer_unmap(priv->t_pipe, outp->transfer);
 
    pipe_resource_reference(&outp->bitstream, task->bitstream);
    pipe_resource_reference(&task->bitstream, NULL);
@@ -156,7 +156,7 @@ void vid_enc_BufferEncoded_common(vid_enc_PrivateType * priv, OMX_BUFFERHEADERTY
    box.height = outp->bitstream->height0;
    box.depth = outp->bitstream->depth0;
 
-   output->pBuffer = priv->t_pipe->transfer_map(priv->t_pipe, outp->bitstream, 0,
+   output->pBuffer = priv->t_pipe->buffer_map(priv->t_pipe, outp->bitstream, 0,
                                                 PIPE_MAP_READ_WRITE,
                                                 &box, &outp->transfer);
 
@@ -183,7 +183,7 @@ struct encode_task *enc_NeedTask_common(vid_enc_PrivateType * priv, OMX_VIDEO_PO
    struct encode_task *task;
 
    if (!list_is_empty(&priv->free_tasks)) {
-      task = LIST_ENTRY(struct encode_task, priv->free_tasks.next, list);
+      task = list_entry(priv->free_tasks.next, struct encode_task, list);
       list_del(&task->list);
       return task;
    }
@@ -247,7 +247,7 @@ void enc_ScaleInput_common(vid_enc_PrivateType * priv, OMX_VIDEO_PORTDEFINITIONT
 
 void enc_ControlPicture_common(vid_enc_PrivateType * priv, struct pipe_h264_enc_picture_desc *picture)
 {
-   struct pipe_h264_enc_rate_control *rate_ctrl = &picture->rate_ctrl;
+   struct pipe_h264_enc_rate_control *rate_ctrl = &picture->rate_ctrl[0];
 
    /* Get bitrate from port */
    switch (priv->bitrate.eControlRate) {
@@ -300,9 +300,11 @@ void enc_ControlPicture_common(vid_enc_PrivateType * priv, struct pipe_h264_enc_
    picture->quant_b_frames = priv->quant.nQpB;
 
    picture->frame_num = priv->frame_num;
-   picture->ref_idx_l0 = priv->ref_idx_l0;
-   picture->ref_idx_l1 = priv->ref_idx_l1;
-   picture->enable_vui = (picture->rate_ctrl.frame_rate_num != 0);
+   picture->num_ref_idx_l0_active_minus1 = 0;
+   picture->ref_idx_l0_list[0] = priv->ref_idx_l0;
+   picture->num_ref_idx_l1_active_minus1 = 0;
+   picture->ref_idx_l1_list[0] = priv->ref_idx_l1;
+   picture->enable_vui = (picture->rate_ctrl[0].frame_rate_num != 0);
    enc_GetPictureParamPreset(picture);
 }
 
@@ -425,7 +427,7 @@ OMX_ERRORTYPE enc_LoadImage_common(vid_enc_PrivateType * priv, OMX_VIDEO_PORTDEF
    } else {
       struct vl_video_buffer *dst_buf = (struct vl_video_buffer *)vbuf;
 
-      pipe_transfer_unmap(pipe, inp->transfer);
+      pipe_texture_unmap(pipe, inp->transfer);
 
       /* inp->resource uses PIPE_FORMAT_I8 and the layout looks like this:
        *
@@ -459,7 +461,7 @@ OMX_ERRORTYPE enc_LoadImage_common(vid_enc_PrivateType * priv, OMX_VIDEO_PORTDEF
          image[2].shader_access = image[1].access = PIPE_IMAGE_ACCESS_WRITE;
          image[2].format = PIPE_FORMAT_R8G8_UINT;
 
-         pipe->set_shader_images(pipe, PIPE_SHADER_COMPUTE, 0, 3, image);
+         pipe->set_shader_images(pipe, PIPE_SHADER_COMPUTE, 0, 3, 0, image);
 
          /* Set the constant buffer. */
          uint32_t constants[4] = {def->nFrameHeight};
@@ -467,7 +469,7 @@ OMX_ERRORTYPE enc_LoadImage_common(vid_enc_PrivateType * priv, OMX_VIDEO_PORTDEF
 
          cb.buffer_size = sizeof(constants);
          cb.user_buffer = constants;
-         pipe->set_constant_buffer(pipe, PIPE_SHADER_COMPUTE, 0, &cb);
+         pipe->set_constant_buffer(pipe, PIPE_SHADER_COMPUTE, 0, false, &cb);
 
          /* Use the optimal block size for the linear image layout. */
          struct pipe_grid_info info = {};
@@ -496,8 +498,8 @@ OMX_ERRORTYPE enc_LoadImage_common(vid_enc_PrivateType * priv, OMX_VIDEO_PORTDEF
          pipe->memory_barrier(pipe, PIPE_BARRIER_ALL);
 
          /* Unbind. */
-         pipe->set_shader_images(pipe, PIPE_SHADER_COMPUTE, 0, 3, NULL);
-         pipe->set_constant_buffer(pipe, PIPE_SHADER_COMPUTE, 0, NULL);
+         pipe->set_shader_images(pipe, PIPE_SHADER_COMPUTE, 0, 0, 3, NULL);
+         pipe->set_constant_buffer(pipe, PIPE_SHADER_COMPUTE, 0, false, NULL);
          pipe->bind_compute_state(pipe, NULL);
       } else {
          /* Graphics path */
@@ -545,7 +547,7 @@ OMX_ERRORTYPE enc_LoadImage_common(vid_enc_PrivateType * priv, OMX_VIDEO_PORTDEF
       box.width = inp->resource->width0;
       box.height = inp->resource->height0;
       box.depth = inp->resource->depth0;
-      buf->pBuffer = pipe->transfer_map(pipe, inp->resource, 0,
+      buf->pBuffer = pipe->texture_map(pipe, inp->resource, 0,
                                         PIPE_MAP_WRITE, &box,
                                         &inp->transfer);
    }

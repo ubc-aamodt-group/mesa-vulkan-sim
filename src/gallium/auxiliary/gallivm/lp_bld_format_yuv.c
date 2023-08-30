@@ -83,14 +83,14 @@ uyvy_to_yuv_soa(struct gallivm_state *gallivm,
     * v = (uyvy >>  8) & 0xff
     */
 
-#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+#if DETECT_ARCH_X86 || DETECT_ARCH_X86_64
    /*
     * Avoid shift with per-element count.
     * No support on x86, gets translated to roughly 5 instructions
     * per element. Didn't measure performance but cuts shader size
     * by quite a bit (less difference if cpu has no sse4.1 support).
     */
-   if (util_cpu_caps.has_sse2 && n > 1) {
+   if (util_get_cpu_caps()->has_sse2 && n > 1) {
       LLVMValueRef sel, tmp, tmp2;
       struct lp_build_context bld32;
 
@@ -167,14 +167,14 @@ yuyv_to_yuv_soa(struct gallivm_state *gallivm,
     * v = (yuyv)                & 0xff
     */
 
-#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+#if DETECT_ARCH_X86 || DETECT_ARCH_X86_64
    /*
     * Avoid shift with per-element count.
     * No support on x86, gets translated to roughly 5 instructions
     * per element. Didn't measure performance but cuts shader size
     * by quite a bit (less difference if cpu has no sse4.1 support).
     */
-   if (util_cpu_caps.has_sse2 && n > 1) {
+   if (util_get_cpu_caps()->has_sse2 && n > 1) {
       LLVMValueRef sel, tmp;
       struct lp_build_context bld32;
 
@@ -335,7 +335,6 @@ rgb_to_rgba_aos(struct gallivm_state *gallivm,
     */
 
 #if UTIL_ARCH_LITTLE_ENDIAN
-   r = r;
    g = LLVMBuildShl(builder, g, lp_build_const_int_vec(gallivm, type, 8), "");
    b = LLVMBuildShl(builder, b, lp_build_const_int_vec(gallivm, type, 16), "");
    a = lp_build_const_int_vec(gallivm, type, 0xff000000);

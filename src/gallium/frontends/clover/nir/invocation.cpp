@@ -26,16 +26,18 @@
 
 #include "core/device.hpp"
 #include "core/error.hpp"
-#include "core/module.hpp"
+#include "core/binary.hpp"
 #include "pipe/p_state.h"
 #include "util/algorithm.hpp"
 #include "util/functional.hpp"
 
 #include <compiler/glsl_types.h>
+#include <compiler/clc/nir_clc_helpers.h>
 #include <compiler/nir/nir_builder.h>
 #include <compiler/nir/nir_serialize.h>
 #include <compiler/spirv/nir_spirv.h>
 #include <util/u_math.h>
+#include <util/hex.h>
 
 using namespace clover;
 
@@ -72,171 +74,35 @@ static void debug_function(void *private_data,
 static void
 clover_arg_size_align(const glsl_type *type, unsigned *size, unsigned *align)
 {
-   if (type == glsl_type::sampler_type) {
+   if (type == glsl_type::sampler_type || type->is_image()) {
       *size = 0;
       *align = 1;
-   } else if (type->is_image()) {
-      *size = *align = sizeof(cl_mem);
    } else {
       *size = type->cl_size();
       *align = type->cl_alignment();
    }
 }
 
-static bool
-clover_nir_lower_images(nir_shader *shader)
+static void
+clover_nir_add_image_uniforms(nir_shader *shader)
 {
-   nir_function_impl *impl = nir_shader_get_entrypoint(shader);
+   /* Clover expects each image variable to take up a cl_mem worth of space in
+    * the arguments data.  Add uniforms as needed to match this expectation.
+    */
+   nir_foreach_image_variable_safe(var, shader) {
+      nir_variable *uniform = rzalloc(shader, nir_variable);
+      uniform->name = ralloc_strdup(uniform, var->name);
+      uniform->type = glsl_uintN_t_type(sizeof(cl_mem) * 8);
+      uniform->data.mode = nir_var_uniform;
+      uniform->data.read_only = true;
+      uniform->data.location = var->data.location;
 
-   ASSERTED int last_loc = -1;
-   int num_rd_images = 0, num_wr_images = 0, num_samplers = 0;
-   nir_foreach_uniform_variable(var, shader) {
-      if (glsl_type_is_image(var->type) || glsl_type_is_sampler(var->type)) {
-         /* Assume they come in order */
-         assert(var->data.location > last_loc);
-         last_loc = var->data.location;
-      }
-
-      /* TODO: Constant samplers */
-      if (var->type == glsl_bare_sampler_type()) {
-         var->data.driver_location = num_samplers++;
-      } else if (glsl_type_is_image(var->type)) {
-         if (var->data.access & ACCESS_NON_WRITEABLE)
-            var->data.driver_location = num_rd_images++;
-         else
-            var->data.driver_location = num_wr_images++;
-      } else {
-         /* CL shouldn't have any sampled images */
-         assert(!glsl_type_is_sampler(var->type));
-      }
+      exec_node_insert_node_before(&var->node, &uniform->node);
    }
-   shader->info.num_textures = num_rd_images;
-   shader->info.textures_used = (1 << num_rd_images) - 1;
-   shader->info.num_images = num_wr_images;
-
-   nir_builder b;
-   nir_builder_init(&b, impl);
-
-   bool progress = false;
-   nir_foreach_block_reverse(block, impl) {
-      nir_foreach_instr_reverse_safe(instr, block) {
-         switch (instr->type) {
-         case nir_instr_type_deref: {
-            nir_deref_instr *deref = nir_instr_as_deref(instr);
-            if (deref->deref_type != nir_deref_type_var)
-               break;
-
-            if (!glsl_type_is_image(deref->type) &&
-                !glsl_type_is_sampler(deref->type))
-               break;
-
-            b.cursor = nir_instr_remove(&deref->instr);
-            nir_ssa_def *loc =
-               nir_imm_intN_t(&b, deref->var->data.driver_location,
-                                  deref->dest.ssa.bit_size);
-            nir_ssa_def_rewrite_uses(&deref->dest.ssa, nir_src_for_ssa(loc));
-            progress = true;
-            break;
-         }
-
-         case nir_instr_type_tex: {
-            nir_tex_instr *tex = nir_instr_as_tex(instr);
-            unsigned count = 0;
-            for (unsigned i = 0; i < tex->num_srcs; i++) {
-               if (tex->src[i].src_type == nir_tex_src_texture_deref ||
-                   tex->src[i].src_type == nir_tex_src_sampler_deref) {
-                  nir_deref_instr *deref = nir_src_as_deref(tex->src[i].src);
-                  if (deref->deref_type == nir_deref_type_var) {
-                     /* In this case, we know the actual variable */
-                     if (tex->src[i].src_type == nir_tex_src_texture_deref)
-                        tex->texture_index = deref->var->data.driver_location;
-                     else
-                        tex->sampler_index = deref->var->data.driver_location;
-                     /* This source gets discarded */
-                     nir_instr_rewrite_src(&tex->instr, &tex->src[i].src,
-                                           NIR_SRC_INIT);
-                     continue;
-                  } else {
-                     assert(tex->src[i].src.is_ssa);
-                     b.cursor = nir_before_instr(&tex->instr);
-                     /* Back-ends expect a 32-bit thing, not 64-bit */
-                     nir_ssa_def *offset = nir_u2u32(&b, tex->src[i].src.ssa);
-                     if (tex->src[i].src_type == nir_tex_src_texture_deref)
-                        tex->src[count].src_type = nir_tex_src_texture_offset;
-                     else
-                        tex->src[count].src_type = nir_tex_src_sampler_offset;
-                     nir_instr_rewrite_src(&tex->instr, &tex->src[count].src,
-                                           nir_src_for_ssa(offset));
-                  }
-               } else {
-                  /* If we've removed a source, move this one down */
-                  if (count != i) {
-                     assert(count < i);
-                     tex->src[count].src_type = tex->src[i].src_type;
-                     nir_instr_move_src(&tex->instr, &tex->src[count].src,
-                                        &tex->src[i].src);
-                  }
-               }
-               count++;
-            }
-            tex->num_srcs = count;
-            progress = true;
-            break;
-         }
-
-         case nir_instr_type_intrinsic: {
-            nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
-            switch (intrin->intrinsic) {
-            case nir_intrinsic_image_deref_load:
-            case nir_intrinsic_image_deref_store:
-            case nir_intrinsic_image_deref_atomic_add:
-            case nir_intrinsic_image_deref_atomic_imin:
-            case nir_intrinsic_image_deref_atomic_umin:
-            case nir_intrinsic_image_deref_atomic_imax:
-            case nir_intrinsic_image_deref_atomic_umax:
-            case nir_intrinsic_image_deref_atomic_and:
-            case nir_intrinsic_image_deref_atomic_or:
-            case nir_intrinsic_image_deref_atomic_xor:
-            case nir_intrinsic_image_deref_atomic_exchange:
-            case nir_intrinsic_image_deref_atomic_comp_swap:
-            case nir_intrinsic_image_deref_atomic_fadd:
-            case nir_intrinsic_image_deref_atomic_inc_wrap:
-            case nir_intrinsic_image_deref_atomic_dec_wrap:
-            case nir_intrinsic_image_deref_size:
-            case nir_intrinsic_image_deref_samples: {
-               assert(intrin->src[0].is_ssa);
-               b.cursor = nir_before_instr(&intrin->instr);
-               /* Back-ends expect a 32-bit thing, not 64-bit */
-               nir_ssa_def *offset = nir_u2u32(&b, intrin->src[0].ssa);
-               nir_rewrite_image_intrinsic(intrin, offset, false);
-               progress = true;
-               break;
-            }
-
-            default:
-               break;
-            }
-            break;
-         }
-
-         default:
-            break;
-         }
-      }
-   }
-
-   if (progress) {
-      nir_metadata_preserve(impl, nir_metadata_block_index |
-                                  nir_metadata_dominance);
-   } else {
-      nir_metadata_preserve(impl, nir_metadata_all);
-   }
-
-   return progress;
 }
 
 struct clover_lower_nir_state {
-   std::vector<module::argument> &args;
+   std::vector<binary::argument> &args;
    uint32_t global_dims;
    nir_variable *constant_var;
    nir_variable *printf_buffer;
@@ -259,9 +125,9 @@ clover_lower_nir_instr(nir_builder *b, nir_instr *instr, void *_state)
    case nir_intrinsic_load_printf_buffer_address: {
       if (!state->printf_buffer) {
          unsigned location = state->args.size();
-         state->args.emplace_back(module::argument::global, sizeof(size_t),
-                                  8, 8, module::argument::zero_ext,
-                                  module::argument::printf_buffer);
+         state->args.emplace_back(binary::argument::global, sizeof(size_t),
+                                  8, 8, binary::argument::zero_ext,
+                                  binary::argument::printf_buffer);
 
          const glsl_type *type = glsl_uint64_t_type();
          state->printf_buffer = nir_variable_create(b->shader, nir_var_uniform,
@@ -280,9 +146,9 @@ clover_lower_nir_instr(nir_builder *b, nir_instr *instr, void *_state)
           * three 32 bit values
          */
          unsigned location = state->args.size();
-         state->args.emplace_back(module::argument::scalar, 4, 4, 4,
-                                  module::argument::zero_ext,
-                                  module::argument::grid_offset);
+         state->args.emplace_back(binary::argument::scalar, 4, 4, 4,
+                                  binary::argument::zero_ext,
+                                  binary::argument::grid_offset);
 
          const glsl_type *type = glsl_uint_type();
          for (uint32_t i = 0; i < 3; i++) {
@@ -298,7 +164,7 @@ clover_lower_nir_instr(nir_builder *b, nir_instr *instr, void *_state)
          loads[i] = var ? nir_load_var(b, var) : nir_imm_int(b, 0);
       }
 
-      return nir_u2u(b, nir_vec(b, loads, state->global_dims),
+      return nir_u2uN(b, nir_vec(b, loads, state->global_dims),
                      nir_dest_bit_size(intrinsic->dest));
    }
    case nir_intrinsic_load_constant_base_ptr: {
@@ -311,7 +177,7 @@ clover_lower_nir_instr(nir_builder *b, nir_instr *instr, void *_state)
 }
 
 static bool
-clover_lower_nir(nir_shader *nir, std::vector<module::argument> &args,
+clover_lower_nir(nir_shader *nir, std::vector<binary::argument> &args,
                  uint32_t dims, uint32_t pointer_bit_size)
 {
    nir_variable *constant_var = NULL;
@@ -322,10 +188,10 @@ clover_lower_nir(nir_shader *nir, std::vector<module::argument> &args,
                                          "constant_buffer_addr");
       constant_var->data.location = args.size();
 
-      args.emplace_back(module::argument::global,
-                        pointer_bit_size / 8, pointer_bit_size / 8, pointer_bit_size / 8,
-                        module::argument::zero_ext,
-                        module::argument::constant_buffer);
+      args.emplace_back(binary::argument::global, sizeof(cl_mem),
+                        pointer_bit_size / 8, pointer_bit_size / 8,
+                        binary::argument::zero_ext,
+                        binary::argument::constant_buffer);
    }
 
    clover_lower_nir_state state = { args, dims, constant_var };
@@ -375,7 +241,7 @@ struct disk_cache *clover::nir::create_clc_disk_cache(void)
 
    _mesa_sha1_final(&ctx, sha1);
 
-   disk_cache_format_hex_id(cache_id, sha1, 20 * 2);
+   mesa_bytes_to_hex(cache_id, sha1, 20);
    return disk_cache_create("clover-clc", cache_id, 0);
 }
 
@@ -394,19 +260,27 @@ nir_shader *clover::nir::load_libclc_nir(const device &dev, std::string &r_log)
 				 &spirv_options, compiler_options);
 }
 
-module clover::nir::spirv_to_nir(const module &mod, const device &dev,
+static bool
+can_remove_var(nir_variable *var, void *data)
+{
+   return !(var->type->is_sampler() ||
+            var->type->is_texture() ||
+            var->type->is_image());
+}
+
+binary clover::nir::spirv_to_nir(const binary &mod, const device &dev,
                                  std::string &r_log)
 {
    spirv_to_nir_options spirv_options = create_spirv_options(dev, r_log);
    std::shared_ptr<nir_shader> nir = dev.clc_nir;
    spirv_options.clc_shader = nir.get();
 
-   module m;
+   binary b;
    // We only insert one section.
    assert(mod.secs.size() == 1);
    auto &section = mod.secs[0];
 
-   module::resource_id section_id = 0;
+   binary::resource_id section_id = 0;
    for (const auto &sym : mod.syms) {
       assert(sym.section == 0);
 
@@ -426,10 +300,10 @@ module clover::nir::spirv_to_nir(const module &mod, const device &dev,
          throw build_error();
       }
 
-      nir->info.cs.local_size_variable = sym.reqd_work_group_size[0] == 0;
-      nir->info.cs.local_size[0] = sym.reqd_work_group_size[0];
-      nir->info.cs.local_size[1] = sym.reqd_work_group_size[1];
-      nir->info.cs.local_size[2] = sym.reqd_work_group_size[2];
+      nir->info.workgroup_size_variable = sym.reqd_work_group_size[0] == 0;
+      nir->info.workgroup_size[0] = sym.reqd_work_group_size[0];
+      nir->info.workgroup_size[1] = sym.reqd_work_group_size[1];
+      nir->info.workgroup_size[2] = sym.reqd_work_group_size[2];
       nir_validate_shader(nir, "clover");
 
       // Inline all functions first.
@@ -443,11 +317,7 @@ module clover::nir::spirv_to_nir(const module &mod, const device &dev,
       NIR_PASS_V(nir, nir_opt_deref);
 
       // Pick off the single entrypoint that we want.
-      foreach_list_typed_safe(nir_function, func, node, &nir->functions) {
-         if (!func->is_entrypoint)
-            exec_node_remove(&func->node);
-      }
-      assert(exec_list_length(&nir->functions) == 1);
+      nir_remove_non_entrypoints(nir);
 
       nir_validate_shader(nir, "clover after function inlining");
 
@@ -469,6 +339,10 @@ module clover::nir::spirv_to_nir(const module &mod, const device &dev,
       NIR_PASS_V(nir, nir_opt_dce);
       NIR_PASS_V(nir, nir_lower_convert_alu_types, NULL);
 
+      if (compiler_options->lower_to_scalar) {
+         NIR_PASS_V(nir, nir_lower_alu_to_scalar,
+                    compiler_options->lower_to_scalar_filter, NULL);
+      }
       NIR_PASS_V(nir, nir_lower_system_values);
       nir_lower_compute_system_values_options sysval_options = { 0 };
       sysval_options.has_base_global_invocation_id = true;
@@ -494,6 +368,7 @@ module clover::nir::spirv_to_nir(const module &mod, const device &dev,
       NIR_PASS_V(nir, clover_lower_nir, args, dev.max_block_size().size(),
                  dev.address_bits());
 
+      NIR_PASS_V(nir, clover_nir_add_image_uniforms);
       NIR_PASS_V(nir, nir_lower_vars_to_explicit_types,
                  nir_var_uniform, clover_arg_size_align);
       NIR_PASS_V(nir, nir_lower_vars_to_explicit_types,
@@ -502,8 +377,8 @@ module clover::nir::spirv_to_nir(const module &mod, const device &dev,
                  glsl_get_cl_type_size_align);
 
       NIR_PASS_V(nir, nir_opt_deref);
-      NIR_PASS_V(nir, nir_lower_cl_images_to_tex);
-      NIR_PASS_V(nir, clover_nir_lower_images);
+      NIR_PASS_V(nir, nir_lower_readonly_images_to_tex, false);
+      NIR_PASS_V(nir, nir_lower_cl_images, true, true);
       NIR_PASS_V(nir, nir_lower_memcpy);
 
       /* use offsets for kernel inputs (uniform) */
@@ -523,7 +398,9 @@ module clover::nir::spirv_to_nir(const module &mod, const device &dev,
       NIR_PASS_V(nir, nir_lower_explicit_io, nir_var_mem_global,
                  spirv_options.global_addr_format);
 
-      NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_all, NULL);
+      struct nir_remove_dead_variables_options remove_dead_variables_options = {};
+      remove_dead_variables_options.can_remove_var = can_remove_var;
+      NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_all, &remove_dead_variables_options);
 
       if (compiler_options->lower_int64_options)
          NIR_PASS_V(nir, nir_lower_int64);
@@ -532,20 +409,20 @@ module clover::nir::spirv_to_nir(const module &mod, const device &dev,
 
       if (nir->constant_data_size) {
          const char *ptr = reinterpret_cast<const char *>(nir->constant_data);
-         const module::section constants {
+         const binary::section constants {
             section_id,
-            module::section::data_constant,
+            binary::section::data_constant,
             nir->constant_data_size,
             { ptr, ptr + nir->constant_data_size }
          };
          nir->constant_data = NULL;
          nir->constant_data_size = 0;
-         m.secs.push_back(constants);
+         b.secs.push_back(constants);
       }
 
       void *mem_ctx = ralloc_context(NULL);
       unsigned printf_info_count = nir->printf_info_count;
-      nir_printf_info *printf_infos = nir->printf_info;
+      u_printf_info *printf_infos = nir->printf_info;
 
       ralloc_steal(mem_ctx, printf_infos);
 
@@ -556,17 +433,17 @@ module clover::nir::spirv_to_nir(const module &mod, const device &dev,
       ralloc_free(nir);
 
       const pipe_binary_program_header header { uint32_t(blob.size) };
-      module::section text { section_id, module::section::text_executable, header.num_bytes, {} };
+      binary::section text { section_id, binary::section::text_executable, header.num_bytes, {} };
       text.data.insert(text.data.end(), reinterpret_cast<const char *>(&header),
                        reinterpret_cast<const char *>(&header) + sizeof(header));
       text.data.insert(text.data.end(), blob.data, blob.data + blob.size);
 
       free(blob.data);
 
-      m.printf_strings_in_buffer = false;
-      m.printf_infos.reserve(printf_info_count);
+      b.printf_strings_in_buffer = false;
+      b.printf_infos.reserve(printf_info_count);
       for (unsigned i = 0; i < printf_info_count; i++) {
-         module::printf_info info;
+         binary::printf_info info;
 
          info.arg_sizes.reserve(printf_infos[i].num_args);
          for (unsigned j = 0; j < printf_infos[i].num_args; j++)
@@ -574,20 +451,20 @@ module clover::nir::spirv_to_nir(const module &mod, const device &dev,
 
          info.strings.resize(printf_infos[i].string_size);
          memcpy(info.strings.data(), printf_infos[i].strings, printf_infos[i].string_size);
-         m.printf_infos.push_back(info);
+         b.printf_infos.push_back(info);
       }
 
       ralloc_free(mem_ctx);
 
-      m.syms.emplace_back(sym.name, std::string(),
+      b.syms.emplace_back(sym.name, sym.attributes,
                           sym.reqd_work_group_size, section_id, 0, args);
-      m.secs.push_back(text);
+      b.secs.push_back(text);
       section_id++;
    }
-   return m;
+   return b;
 }
 #else
-module clover::nir::spirv_to_nir(const module &mod, const device &dev, std::string &r_log)
+binary clover::nir::spirv_to_nir(const binary &mod, const device &dev, std::string &r_log)
 {
    r_log += "SPIR-V support in clover is not enabled.\n";
    throw error(CL_LINKER_NOT_AVAILABLE);

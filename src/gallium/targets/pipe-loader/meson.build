@@ -18,7 +18,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-pipe_loader_link_args = [ld_args_gc_sections]
+pipe_loader_link_args = [ld_args_gc_sections, ld_args_build_id]
 pipe_loader_link_deps = []
 pipe_loader_link_with = [libgallium]
 pipe_loader_comp_args = []
@@ -28,13 +28,12 @@ pipe_loader_incs = [
 ]
 
 if (with_gallium_va or with_gallium_vdpau or with_gallium_omx != 'disabled' or
-    with_gallium_xvmc or with_dri or with_gallium_radeonsi)
+    with_dri or with_gallium_radeonsi)
   pipe_loader_link_with += libgalliumvl
 else
   pipe_loader_link_with += libgalliumvl_stub
 endif
-if (with_gallium_va or with_gallium_vdpau or with_gallium_omx != 'disabled' or
-    with_gallium_xvmc)
+if (with_gallium_va or with_gallium_vdpau or with_gallium_omx != 'disabled')
   pipe_loader_link_with += libgalliumvlwinsys
 endif
 
@@ -49,7 +48,7 @@ pipe_loader_install_dir = join_paths(get_option('libdir'), 'gallium-pipe')
 
 _kmsro_targets = [
    driver_kmsro, driver_v3d, driver_vc4, driver_freedreno, driver_etnaviv,
-   driver_panfrost, driver_lima,
+   driver_panfrost, driver_lima, driver_asahi,
 ]
 
 if with_gallium_v3d
@@ -58,6 +57,7 @@ endif
 
 pipe_loaders = [
   [with_gallium_i915, 'i915', driver_i915, []],
+  [with_gallium_crocus, 'crocus', [driver_crocus, idep_xmlconfig], []],
   [with_gallium_iris, 'iris', [driver_iris, idep_xmlconfig], []],
   [with_gallium_nouveau, 'nouveau', driver_nouveau, []],
   [with_gallium_r300, 'r300', driver_r300, []],
@@ -66,7 +66,7 @@ pipe_loaders = [
   [with_gallium_freedreno, 'msm', driver_freedreno, []],
   [with_gallium_kmsro, 'kmsro', _kmsro_targets, []],
   [with_gallium_svga, 'vmwgfx', driver_svga, []],
-  [with_gallium_softpipe, 'swrast', [driver_swrast, driver_swr], [libwsw, libws_null]],
+  [with_gallium_softpipe, 'swrast', driver_swrast, [libwsw, libws_null, libswdri, libswkmsdri]],
 ]
 
 foreach x : pipe_loaders

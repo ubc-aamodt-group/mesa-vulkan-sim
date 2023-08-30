@@ -5,57 +5,67 @@ from canonicalize import json_canonicalize
 
 ######### BEGIN HARDCODED CONFIGURATION
 
-gfx_versions = {
+gfx_levels = {
     'gfx6': [
-        None,
+        [],
         'asic_reg/gca/gfx_6_0_d.h',
         'asic_reg/gca/gfx_6_0_sh_mask.h',
         'asic_reg/gca/gfx_7_2_enum.h' # the file for gfx6 doesn't exist
     ],
     'gfx7': [
-        None,
+        [],
         'asic_reg/gca/gfx_7_2_d.h',
         'asic_reg/gca/gfx_7_2_sh_mask.h',
         'asic_reg/gca/gfx_7_2_enum.h'
     ],
     'gfx8': [
-        None,
+        [],
         'asic_reg/gca/gfx_8_0_d.h',
         'asic_reg/gca/gfx_8_0_sh_mask.h',
         'asic_reg/gca/gfx_8_0_enum.h',
     ],
     'gfx81': [
-        None,
+        [],
         'asic_reg/gca/gfx_8_1_d.h',
         'asic_reg/gca/gfx_8_1_sh_mask.h',
         'asic_reg/gca/gfx_8_1_enum.h',
     ],
     'gfx9': [
-        'vega10_ip_offset.h',
+        [0x00002000, 0x0000A000, 0, 0, 0], # IP_BASE GC_BASE
         'asic_reg/gc/gc_9_2_1_offset.h',
         'asic_reg/gc/gc_9_2_1_sh_mask.h',
         'vega10_enum.h',
     ],
+    'gfx940': [
+        [0x00002000, 0x0000A000, 0, 0, 0], # IP_BASE GC_BASE
+        'asic_reg/gc/gc_9_4_3_offset.h',
+        'asic_reg/gc/gc_9_4_3_sh_mask.h',
+        'vega10_enum.h',
+    ],
     'gfx10': [
-        'navi14_ip_offset.h',
+        [0x00001260, 0x0000A000, 0x02402C00, 0, 0], # IP_BASE GC_BASE
         'asic_reg/gc/gc_10_1_0_offset.h',
         'asic_reg/gc/gc_10_1_0_sh_mask.h',
         'navi10_enum.h',
     ],
     'gfx103': [
-        'sienna_cichlid_ip_offset.h',
+        [0x00001260, 0x0000A000, 0x0001C000, 0x02402C00, 0], # IP_BASE GC_BASE
         'asic_reg/gc/gc_10_3_0_offset.h',
         'asic_reg/gc/gc_10_3_0_sh_mask.h',
         'navi10_enum.h', # the file for gfx10.3 doesn't exist
     ],
+    'gfx11': [
+        [0x00001260, 0x0000A000, 0x0001C000, 0x02402C00, 0, 0], # IP_BASE GC_BASE
+        'asic_reg/gc/gc_11_0_0_offset.h',
+        'asic_reg/gc/gc_11_0_0_sh_mask.h',
+        'soc21_enum.h',
+    ],
 }
-
-# match: static const struct IP_BASE GC_BASE ={ { { { 0x00001260, 0x0000A000, 0x02402C00, 0, 0 } },
-re_base = re.compile(r'^static const struct IP_BASE GC_BASE\s*=\s*{ { { { (\w+), (\w+), (\w+), (\w+), (\w+) } },\n')
 
 # match: #define mmSDMA0_DEC_START                              0x0000
 # match: #define ixSDMA0_DEC_START                              0x0000
-re_offset = re.compile(r'^#define (?P<mm>[mi][mx])(?P<name>\w+)\s+(?P<value>\w+)\n')
+# match: #define regSDMA0_DEC_START                              0x0000
+re_offset = re.compile(r'^#define (?P<mm>(mm|ix|reg))(?P<name>\w+)\s+(?P<value>\w+)\n')
 
 # match: #define SDMA0_DEC_START__START__SHIFT                  0x0
 re_shift = re.compile(r'^#define (?P<name>\w+)__(?P<field>\w+)__SHIFT\s+(?P<value>\w+)\n')
@@ -64,29 +74,45 @@ re_shift = re.compile(r'^#define (?P<name>\w+)__(?P<field>\w+)__SHIFT\s+(?P<valu
 # match: #define SDMA0_DEC_START__START_MASK                    0xFFFFFFFF
 re_mask = re.compile(r'^#define (?P<name>\w+)__(?P<field>\w+)_MASK\s+(?P<value>[0-9a-fA-Fx]+)L?\n')
 
-def register_filter(gfx_version, name, offset, already_added):
+def register_filter(gfx_level, name, offset, already_added):
+    group = offset // 0x1000
+    is_cdna = gfx_level in ['gfx940']
+
+    # Shader and uconfig registers
+    umd_ranges = [0xB, 0x30]
+
+    # Gfx context, other uconfig, and perf counter registers
+    if not is_cdna:
+        umd_ranges += [0x28, 0x31, 0x34, 0x35, 0x36, 0x37]
+
+    # Add all registers in the 0x8000 range for gfx6
+    if gfx_level == 'gfx6':
+        umd_ranges += [0x8]
+
     # Only accept writeable registers and debug registers
-    return ((offset // 0x1000 in [0xB, 0x28, 0x30, 0x31, 0x34, 0x35, 0x36, 0x37] or
+    return ((group in umd_ranges or
              # Add SQ_WAVE registers for trap handlers
              name.startswith('SQ_WAVE_') or
              # Add registers in the 0x8000 range used by all generations
-             (offset // 0x1000 == 0x8 and
+             (group == 0x8 and
               (name.startswith('SQ_IMG_') or
                name.startswith('SQ_BUF_') or
                name.startswith('SQ_THREAD') or
                name.startswith('GRBM_STATUS') or
                name.startswith('CP_CP'))) or
-             # Add all registers in the 0x8000 range for gfx6
-             (gfx_version == 'gfx6' and offset // 0x1000 == 0x8) or
              # Add registers in the 0x9000 range
-             (offset // 0x1000 == 0x9 and
+             (group == 0x9 and
               (name in ['TA_CS_BC_BASE_ADDR', 'GB_ADDR_CONFIG', 'SPI_CONFIG_CNTL'] or
                (name.startswith('GB') and 'TILE_MODE' in name)))) and
             # Remove SQ compiler definitions
             offset // 4 not in (0x23B0, 0x23B1, 0x237F) and
             # Remove conflicts (multiple definitions for the same offset)
             not already_added and
-            'PREF_PRI_ACCUM' not in name)
+            'PREF_PRI_ACCUM' not in name and
+            # only define SPI and COMPUTE registers in the 0xB000 range.
+            (group != 0xB or name.startswith('SPI') or name.startswith('COMPUTE')) and
+            # only define CP_COHER uconfig registers on CDNA
+            (not is_cdna or group != 0x30 or name.startswith('CP_COHER')))
 
 # Mapping from field names to enum types
 enum_map = {
@@ -197,6 +223,7 @@ enum_map = {
     "NUMBER_TYPE": ["SurfaceNumber"],
     "OFFCHIP_GRANULARITY": ["VGT_HS_OFFCHIP_PARAM__OFFCHIP_GRANULARITY"],
     "OP_FILTER_SEL": ["CBPerfOpFilterSel"],
+    "OREO_MODE": ["OreoMode"],
     "OUTPRIM_TYPE_1": ["VGT_GS_OUTPRIM_TYPE"],
     "OUTPRIM_TYPE_2": ["VGT_GS_OUTPRIM_TYPE"],
     "OUTPRIM_TYPE_3": ["VGT_GS_OUTPRIM_TYPE"],
@@ -262,6 +289,7 @@ enum_map = {
     "TYPE": ["SQ_RSRC_BUF_TYPE", "SQ_BUF_RSRC_WORD3", "SQ_RSRC_IMG_TYPE", "SQ_IMG_RSRC_WORD3", "VGT_TESS_TYPE", "VGT_TF_PARAM"],
     "UNCERTAINTY_REGION_MODE": ["ScUncertaintyRegionMode"],
     "VRS_HTILE_ENCODING": ["VRSHtileEncoding"],
+    "VRS_RATE": ["VRSrate"],
     "VS_EN": ["VGT_STAGES_VS_EN"],
     "XY_MAG_FILTER": ["SQ_TEX_XY_FILTER"],
     "XY_MIN_FILTER": ["SQ_TEX_XY_FILTER"],
@@ -273,11 +301,11 @@ enum_map = {
     "Z_RD_POLICY": ["ReadPolicy"],
     "Z_WR_POLICY": ["WritePolicy"],
 
-    "VERTEX_RATE_COMBINER_MODE": ["VRSCombinerMode"],
-    "PRIMITIVE_RATE_COMBINER_MODE": ["VRSCombinerMode"],
-    "HTILE_RATE_COMBINER_MODE": ["VRSCombinerMode"],
-    "SAMPLE_ITER_COMBINER_MODE": ["VRSCombinerMode"],
-    "VRS_OVERRIDE_RATE_COMBINER_MODE": ["VRSCombinerMode"],
+    "VERTEX_RATE_COMBINER_MODE": ["VRSCombinerModeSC"],
+    "PRIMITIVE_RATE_COMBINER_MODE": ["VRSCombinerModeSC"],
+    "HTILE_RATE_COMBINER_MODE": ["VRSCombinerModeSC"],
+    "SAMPLE_ITER_COMBINER_MODE": ["VRSCombinerModeSC"],
+    "VRS_OVERRIDE_RATE_COMBINER_MODE": ["VRSCombinerModeSC"],
 }
 
 # Enum definitions that are incomplete or missing in kernel headers
@@ -391,13 +419,13 @@ IMG_DATA_FORMAT_STENCIL = {
  ]
 }
 
-VRSCombinerMode = {
+VRSCombinerModeSC = {
  "entries": [
-  {"name": "VRS_COMB_MODE_PASSTHRU", "value": 0},
-  {"name": "VRS_COMB_MODE_OVERRIDE", "value": 1},
-  {"name": "VRS_COMB_MODE_MIN", "value": 2},
-  {"name": "VRS_COMB_MODE_MAX", "value": 3},
-  {"name": "VRS_COMB_MODE_SATURATE", "value": 4},
+  {"name": "SC_VRS_COMB_MODE_PASSTHRU", "value": 0},
+  {"name": "SC_VRS_COMB_MODE_OVERRIDE", "value": 1},
+  {"name": "SC_VRS_COMB_MODE_MIN", "value": 2},
+  {"name": "SC_VRS_COMB_MODE_MAX", "value": 3},
+  {"name": "SC_VRS_COMB_MODE_SATURATE", "value": 4},
  ]
 }
 
@@ -412,9 +440,10 @@ VRSHtileEncoding = {
 missing_enums_all = {
   'FLOAT_MODE': {
     "entries": [
+      {"name": "FP_32_ROUND_TOWARDS_ZERO", "value": 3},
+      {"name": "FP_16_64_ROUND_TOWARDS_ZERO", "value": 12},
       {"name": "FP_32_DENORMS", "value": 48},
-      {"name": "FP_64_DENORMS", "value": 192},
-      {"name": "FP_ALL_DENORMS", "value": 240}
+      {"name": "FP_16_64_DENORMS", "value": 192},
     ]
   },
   'QUANT_MODE': {
@@ -547,13 +576,89 @@ missing_enums_gfx81plus = {
   "SX_BLEND_OPT_EPSILON__MRT0_EPSILON": {
     "entries": [
       {"name": "EXACT", "value": 0},
-      {"name": "11BIT_FORMAT", "value": 1},
-      {"name": "10BIT_FORMAT", "value": 3},
-      {"name": "8BIT_FORMAT", "value": 6},
-      {"name": "6BIT_FORMAT", "value": 11},
-      {"name": "5BIT_FORMAT", "value": 13},
-      {"name": "4BIT_FORMAT", "value": 15}
+      # This determines whether epsilon is 0.5 or 0.75 in the unnormalized format
+      # that is used to determine whether a channel is equal to 0 for blending.
+      # 0.5 is exactly between 0 and the next representable value. 0.75 can be
+      # used for less precise blending.
+      {"name": "10BIT_FORMAT_0_5", "value": 2},  # (1.0 * 2^−11) * 1024 = 0.5
+      {"name": "10BIT_FORMAT_0_75", "value": 3}, # (1.5 * 2^−11) * 1024 = 0.75
+      {"name": "8BIT_FORMAT_0_5", "value": 6},   # (1.0 * 2^−9) * 256 = 0.5
+      {"name": "8BIT_FORMAT_0_75", "value": 7},  # (1.5 * 2^−9) * 256 = 0.75
+      {"name": "6BIT_FORMAT_0_5", "value": 10},  # (1.0 * 2^-7) * 64 = 0.5
+      {"name": "6BIT_FORMAT_0_75", "value": 11}, # (1.5 * 2^-7) * 64 = 0.75
+      {"name": "5BIT_FORMAT_0_5", "value": 12},  # (1.0 * 2^-6) * 32 = 0.5
+      {"name": "5BIT_FORMAT_0_75", "value": 13}, # (1.5 * 2^-6) * 32 = 0.75
+      {"name": "4BIT_FORMAT_0_5", "value": 14},  # (1.0 * 2^-5) * 16 = 0.5
+      {"name": "4BIT_FORMAT_0_75", "value": 15}, # (1.5 * 2^-5) * 16 = 0.75
     ]
+  },
+}
+
+missing_enums_gfx9 = {
+  **missing_enums_gfx81plus,
+  "DB_DFSM_CONTROL__PUNCHOUT_MODE": DB_DFSM_CONTROL__PUNCHOUT_MODE,
+  "IMG_DATA_FORMAT_STENCIL": IMG_DATA_FORMAT_STENCIL,
+  "SQ_IMG_RSRC_WORD4__BC_SWIZZLE": SQ_IMG_RSRC_WORD4__BC_SWIZZLE,
+  "BinSizeExtend": {
+    "entries": [
+      {"name": "BIN_SIZE_32_PIXELS", "value": 0},
+      {"name": "BIN_SIZE_64_PIXELS", "value": 1},
+      {"name": "BIN_SIZE_128_PIXELS", "value": 2},
+      {"name": "BIN_SIZE_256_PIXELS", "value": 3},
+      {"name": "BIN_SIZE_512_PIXELS", "value": 4}
+    ]
+  },
+  "ScUncertaintyRegionMode": {
+    "entries": [
+      {"name": "SC_HALF_LSB", "value": 0},
+      {"name": "SC_LSB_ONE_SIDED", "value": 1},
+      {"name": "SC_LSB_TWO_SIDED", "value": 2}
+    ]
+  },
+}
+
+missing_enums_gfx103plus = {
+  **missing_enums_gfx81plus,
+  "ColorFormat": ColorFormat,
+  "ThreadTraceRegInclude": ThreadTraceRegInclude,
+  "ThreadTraceTokenExclude": ThreadTraceTokenExclude,
+}
+
+missing_enums_gfx11plus = {
+  **missing_enums_gfx103plus,
+  "ZFormat": {
+   "entries": [
+    {"name": "Z_INVALID", "value": 0},
+    {"name": "Z_16", "value": 1},
+    {"name": "Z_24", "value": 2},
+    {"name": "Z_32_FLOAT", "value": 3}
+   ]
+  },
+  "StencilFormat": {
+   "entries": [
+    {"name": "STENCIL_INVALID", "value": 0},
+    {"name": "STENCIL_8", "value": 1}
+   ]
+  },
+  "SurfaceNumber": {
+   "entries": [
+    {"name": "NUMBER_UNORM", "value": 0},
+    {"name": "NUMBER_SNORM", "value": 1},
+    {"name": "NUMBER_USCALED", "value": 2},
+    {"name": "NUMBER_SSCALED", "value": 3},
+    {"name": "NUMBER_UINT", "value": 4},
+    {"name": "NUMBER_SINT", "value": 5},
+    {"name": "NUMBER_SRGB", "value": 6},
+    {"name": "NUMBER_FLOAT", "value": 7}
+   ]
+  },
+  "SurfaceSwap": {
+   "entries": [
+    {"name": "SWAP_STD", "value": 0},
+    {"name": "SWAP_ALT", "value": 1},
+    {"name": "SWAP_STD_REV", "value": 2},
+    {"name": "SWAP_ALT_REV", "value": 3}
+   ]
   },
 }
 
@@ -572,10 +677,10 @@ enums_missing = {
     **missing_enums_gfx81plus,
   },
   'gfx9': {
-    **missing_enums_gfx81plus,
-    "DB_DFSM_CONTROL__PUNCHOUT_MODE": DB_DFSM_CONTROL__PUNCHOUT_MODE,
-    "IMG_DATA_FORMAT_STENCIL": IMG_DATA_FORMAT_STENCIL,
-    "SQ_IMG_RSRC_WORD4__BC_SWIZZLE": SQ_IMG_RSRC_WORD4__BC_SWIZZLE,
+    **missing_enums_gfx9,
+  },
+  'gfx940': {
+    **missing_enums_gfx9,
   },
   'gfx10': {
     **missing_enums_gfx81plus,
@@ -584,14 +689,14 @@ enums_missing = {
     "ThreadTraceTokenExclude": ThreadTraceTokenExclude,
   },
   'gfx103': {
-    **missing_enums_gfx81plus,
-    "ColorFormat": ColorFormat,
+    **missing_enums_gfx103plus,
     "SX_DOWNCONVERT_FORMAT": SX_DOWNCONVERT_FORMAT,
     "DB_DFSM_CONTROL__PUNCHOUT_MODE": DB_DFSM_CONTROL__PUNCHOUT_MODE,
-    "ThreadTraceRegInclude": ThreadTraceRegInclude,
-    "ThreadTraceTokenExclude": ThreadTraceTokenExclude,
-    "VRSCombinerMode": VRSCombinerMode,
     "VRSHtileEncoding": VRSHtileEncoding,
+    "VRSCombinerModeSC": VRSCombinerModeSC,
+  },
+  'gfx11': {
+    **missing_enums_gfx11plus,
   },
 }
 
@@ -628,6 +733,36 @@ fields_missing = {
   },
   'gfx103': {
     "DB_RESERVED_REG_2": [["RESOURCE_LEVEL", 28, 31, None, True]],
+    "VGT_DRAW_PAYLOAD_CNTL": [["EN_VRS_RATE", 6, 6]],
+    "VGT_SHADER_STAGES_EN": [["PRIMGEN_PASSTHRU_NO_MSG", 26, 26]],
+  },
+  'gfx11': {
+    "VGT_DRAW_PAYLOAD_CNTL": [["EN_VRS_RATE", 6, 6]],
+    # Only GFX1103_R2:
+    "CB_COLOR0_FDCC_CONTROL": [["DISABLE_OVERRIDE_INCONSISTENT_KEYS", 25, 25],
+                               ["ENABLE_MAX_COMP_FRAG_OVERRIDE", 26, 26],
+                               ["MAX_COMP_FRAGS", 27, 29]],
+    "CB_COLOR1_FDCC_CONTROL": [["DISABLE_OVERRIDE_INCONSISTENT_KEYS", 25, 25],
+                               ["ENABLE_MAX_COMP_FRAG_OVERRIDE", 26, 26],
+                               ["MAX_COMP_FRAGS", 27, 29]],
+    "CB_COLOR2_FDCC_CONTROL": [["DISABLE_OVERRIDE_INCONSISTENT_KEYS", 25, 25],
+                               ["ENABLE_MAX_COMP_FRAG_OVERRIDE", 26, 26],
+                               ["MAX_COMP_FRAGS", 27, 29]],
+    "CB_COLOR3_FDCC_CONTROL": [["DISABLE_OVERRIDE_INCONSISTENT_KEYS", 25, 25],
+                               ["ENABLE_MAX_COMP_FRAG_OVERRIDE", 26, 26],
+                               ["MAX_COMP_FRAGS", 27, 29]],
+    "CB_COLOR4_FDCC_CONTROL": [["DISABLE_OVERRIDE_INCONSISTENT_KEYS", 25, 25],
+                               ["ENABLE_MAX_COMP_FRAG_OVERRIDE", 26, 26],
+                               ["MAX_COMP_FRAGS", 27, 29]],
+    "CB_COLOR5_FDCC_CONTROL": [["DISABLE_OVERRIDE_INCONSISTENT_KEYS", 25, 25],
+                               ["ENABLE_MAX_COMP_FRAG_OVERRIDE", 26, 26],
+                               ["MAX_COMP_FRAGS", 27, 29]],
+    "CB_COLOR6_FDCC_CONTROL": [["DISABLE_OVERRIDE_INCONSISTENT_KEYS", 25, 25],
+                               ["ENABLE_MAX_COMP_FRAG_OVERRIDE", 26, 26],
+                               ["MAX_COMP_FRAGS", 27, 29]],
+    "CB_COLOR7_FDCC_CONTROL": [["DISABLE_OVERRIDE_INCONSISTENT_KEYS", 25, 25],
+                               ["ENABLE_MAX_COMP_FRAG_OVERRIDE", 26, 26],
+                               ["MAX_COMP_FRAGS", 27, 29]],
   },
 }
 
@@ -636,33 +771,21 @@ fields_missing = {
 def bitcount(n):
     return bin(n).count('1')
 
-def generate_json(gfx_version, amd_headers_path):
+def generate_json(gfx_level, amd_headers_path):
+    gc_base_offsets = gfx_levels[gfx_level][0]
+
     # Add the path to the filenames
-    filenames = [amd_headers_path + '/' + a if a is not None else None for a in gfx_versions[gfx_version]]
-    old_gen = filenames[0] is None
+    filenames = [amd_headers_path + '/' + a for a in gfx_levels[gfx_level][1:]]
 
     # Open the files
     files = [open(a, 'r').readlines() if a is not None else None for a in filenames]
-
-    # Parse the ip_offset.h file
-    base_offsets = None
-    if not old_gen:
-        for line in files[0]:
-            r = re_base.match(line)
-            if r is not None:
-                base_offsets = r.groups()
-
-        if base_offsets is None:
-            print('Can\'t parse: ' + filenames[0], file=sys.stderr)
-            sys.exit(1)
-
 
     # Parse the offset.h file
     name = None
     offset = None
     added_offsets = set()
     regs = {}
-    for line in files[1]:
+    for line in files[0]:
         r = re_offset.match(line)
         if r is None:
             continue
@@ -670,18 +793,24 @@ def generate_json(gfx_version, amd_headers_path):
         if '_BASE_IDX' not in r.group('name'):
             name = r.group('name')
             offset = int(r.group('value'), 0) * 4
-            if not old_gen and r.group('mm') == 'mm':
+            if len(gc_base_offsets) > 0 and r.group('mm') == 'mm':
                 continue
         else:
-            assert name == r.group('name')[:-9]
+            if name != r.group('name')[:-9]:
+                print('Warning: "{0}" not preceded by {1} but by {2}'.format(r.group('name'), r.group('name')[:-9], name))
+                continue
             idx = int(r.group('value'))
-            assert idx < len(base_offsets)
-            offset += int(base_offsets[idx], 0) * 4
+            assert idx < len(gc_base_offsets)
+            offset += gc_base_offsets[idx] * 4
+
+        # Remove the _UMD suffix because it was mistakenly added to indicate it's for a User-Mode Driver
+        if name[-4:] == '_UMD':
+            name = name[:-4]
 
         # Only accept writeable registers and debug registers
-        if register_filter(gfx_version, name, offset, offset in added_offsets):
+        if register_filter(gfx_level, name, offset, offset in added_offsets):
             regs[name] = {
-                'chips': [gfx_version],
+                'chips': [gfx_level],
                 'map': {'at': offset, 'to': 'mm'},
                 'name': name,
             }
@@ -691,7 +820,7 @@ def generate_json(gfx_version, amd_headers_path):
     # Parse the sh_mask.h file
     shifts = {}
     masks = {}
-    for line in files[2]:
+    for line in files[1]:
         r = re_shift.match(line)
         is_shift = r is not None
         r = re_mask.match(line) if r is None else r
@@ -718,9 +847,9 @@ def generate_json(gfx_version, amd_headers_path):
     re_enum_end = re.compile(r'^} \w+;\n')
     inside_enum = False
     name = None
-    enums = enums_missing[gfx_version] if gfx_version in enums_missing else {}
+    enums = enums_missing[gfx_level] if gfx_level in enums_missing else {}
 
-    for line in files[3]:
+    for line in files[2]:
         r = re_enum_begin.match(line)
         if r is not None:
             name = r.group('name')
@@ -748,7 +877,7 @@ def generate_json(gfx_version, amd_headers_path):
     # Assemble everything
     reg_types = {}
     reg_mappings = []
-    missing_fields = fields_missing[gfx_version] if gfx_version in fields_missing else {}
+    missing_fields = fields_missing[gfx_level] if gfx_level in fields_missing else {}
 
     for (name, reg) in regs.items():
         type = {'fields': []}
@@ -776,7 +905,7 @@ def generate_json(gfx_version, amd_headers_path):
                     if type_name is not None:
                         if type_name not in enums:
                             print('{0}: {1} type not found for {2}.{3}'
-                                  .format(gfx_version, type_name, name, field), file=sys.stderr)
+                                  .format(gfx_level, type_name, name, field), file=sys.stderr)
                         else:
                             new['enum_ref'] = type_name
 
@@ -801,7 +930,12 @@ def generate_json(gfx_version, amd_headers_path):
 
         if len(type['fields']) > 0:
             reg_types[name] = type
-            reg['type_ref'] = name
+
+            # Don't define types that have only one field covering all bits
+            field0_bits = type['fields'][0]['bits'];
+            if len(type['fields']) > 1 or field0_bits[0] != 0 or field0_bits[1] != 31:
+                reg['type_ref'] = name
+
             reg_mappings.append(reg)
 
 
@@ -816,8 +950,8 @@ def generate_json(gfx_version, amd_headers_path):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) <= 1 or (sys.argv[1] not in gfx_versions and sys.argv[1] != 'all'):
-        print('First parameter should be one of: all, ' + ', '.join(gfx_versions.keys()), file=sys.stderr)
+    if len(sys.argv) <= 1 or (sys.argv[1] not in gfx_levels and sys.argv[1] != 'all'):
+        print('First parameter should be one of: all, ' + ', '.join(gfx_levels.keys()), file=sys.stderr)
         sys.exit(1)
 
     if len(sys.argv) <= 2:
@@ -825,8 +959,8 @@ if __name__ == '__main__':
         sys.exit(1)
 
     if sys.argv[1] == 'all':
-        for gfx_version in gfx_versions.keys():
-            print(generate_json(gfx_version, sys.argv[2]), file=open(gfx_version + '.json', 'w'))
+        for gfx_level in gfx_levels.keys():
+            print(generate_json(gfx_level, sys.argv[2]), file=open(gfx_level + '.json', 'w'))
         sys.exit(0)
 
     print(generate_json(sys.argv[1], sys.argv[2]))

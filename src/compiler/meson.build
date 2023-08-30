@@ -22,6 +22,8 @@ inc_compiler = include_directories('.')
 inc_glsl = include_directories('glsl')
 inc_spirv = include_directories('spirv')
 
+float64_glsl_file = files('glsl/float64.glsl')
+
 files_libcompiler = files(
   'builtin_type_macros.h',
   'glsl_types.cpp',
@@ -52,49 +54,14 @@ libcompiler = static_library(
   build_by_default : false,
 )
 
-subdir('spirv')
-
 subdir('nir')
 
-# These are here because putting it in spirv/meson.build would create a circular
-# dependency with nir/meson.build.
-spirv2nir = executable(
-  'spirv2nir',
-  files('spirv/spirv2nir.c'),
-  dependencies : [dep_m, idep_nir, idep_mesautil],
-  include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux, include_directories('spirv')],
-  c_args : [c_msvc_compat_args, no_override_init_args],
-  gnu_symbol_visibility : 'hidden',
-  build_by_default : with_tools.contains('nir'),
-  install : with_tools.contains('nir'),
-)
+subdir('spirv')
 
-if with_tests
-  test(
-    'avail_vis',
-    executable(
-      'avail_vis',
-      files('spirv/tests/avail_vis.cpp'),
-      c_args : [c_msvc_compat_args, no_override_init_args],
-      gnu_symbol_visibility : 'hidden',
-      include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
-      dependencies : [dep_thread, idep_gtest, idep_nir, idep_mesautil],
-    ),
-    suite : ['compiler', 'spirv'],
-  )
-
-  test(
-    'volatile',
-    executable(
-      'volatile',
-      files('spirv/tests/volatile.cpp'),
-      c_args : [c_msvc_compat_args, no_override_init_args],
-      gnu_symbol_visibility : 'hidden',
-      include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
-      dependencies : [dep_thread, idep_gtest, idep_nir, idep_mesautil],
-    ),
-    suite : ['compiler', 'spirv'],
-  )
+if with_clc
+  subdir('clc')
 endif
-
-subdir('glsl')
+if with_gallium
+  subdir('glsl')
+endif
+subdir('isaspec')

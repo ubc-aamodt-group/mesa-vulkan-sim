@@ -22,7 +22,9 @@
  */
 #include "helpers.h"
 
-TEST_F(spirv_test, opload_vis)
+class AvailabilityVisibility : public spirv_test {};
+
+TEST_F(AvailabilityVisibility, opload_vis)
 {
    /*
                OpCapability Shader
@@ -82,11 +84,11 @@ TEST_F(spirv_test, opload_vis)
 
    EXPECT_EQ(nir_intrinsic_memory_semantics(intrinsic), NIR_MEMORY_MAKE_VISIBLE | NIR_MEMORY_ACQUIRE);
    EXPECT_NE(nir_intrinsic_memory_modes(intrinsic) & nir_var_mem_ssbo, 0);
-   EXPECT_EQ(nir_intrinsic_memory_scope(intrinsic), NIR_SCOPE_DEVICE);
-   EXPECT_EQ(nir_intrinsic_execution_scope(intrinsic), NIR_SCOPE_NONE);
+   EXPECT_EQ(nir_intrinsic_memory_scope(intrinsic), SCOPE_DEVICE);
+   EXPECT_EQ(nir_intrinsic_execution_scope(intrinsic), SCOPE_NONE);
 }
 
-TEST_F(spirv_test, opstore_avail)
+TEST_F(AvailabilityVisibility, opstore_avail)
 {
    /*
                OpCapability Shader
@@ -146,11 +148,11 @@ TEST_F(spirv_test, opstore_avail)
 
    EXPECT_EQ(nir_intrinsic_memory_semantics(intrinsic), NIR_MEMORY_MAKE_AVAILABLE | NIR_MEMORY_RELEASE);
    EXPECT_NE(nir_intrinsic_memory_modes(intrinsic) & nir_var_mem_ssbo, 0);
-   EXPECT_EQ(nir_intrinsic_memory_scope(intrinsic), NIR_SCOPE_DEVICE);
-   EXPECT_EQ(nir_intrinsic_execution_scope(intrinsic), NIR_SCOPE_NONE);
+   EXPECT_EQ(nir_intrinsic_memory_scope(intrinsic), SCOPE_DEVICE);
+   EXPECT_EQ(nir_intrinsic_execution_scope(intrinsic), SCOPE_NONE);
 }
 
-TEST_F(spirv_test, opcopymemory_visavail_both_combined)
+TEST_F(AvailabilityVisibility, opcopymemory_visavail_both_combined)
 {
    /*
                OpCapability Shader
@@ -212,16 +214,16 @@ TEST_F(spirv_test, opcopymemory_visavail_both_combined)
 
    EXPECT_EQ(nir_intrinsic_memory_semantics(first), NIR_MEMORY_MAKE_VISIBLE | NIR_MEMORY_ACQUIRE);
    EXPECT_NE(nir_intrinsic_memory_modes(first) & nir_var_mem_ssbo, 0);
-   EXPECT_EQ(nir_intrinsic_memory_scope(first), NIR_SCOPE_WORKGROUP);
-   EXPECT_EQ(nir_intrinsic_execution_scope(first), NIR_SCOPE_NONE);
+   EXPECT_EQ(nir_intrinsic_memory_scope(first), SCOPE_WORKGROUP);
+   EXPECT_EQ(nir_intrinsic_execution_scope(first), SCOPE_NONE);
 
    EXPECT_EQ(nir_intrinsic_memory_semantics(second), NIR_MEMORY_MAKE_AVAILABLE | NIR_MEMORY_RELEASE);
    EXPECT_NE(nir_intrinsic_memory_modes(second) & nir_var_mem_ssbo, 0);
-   EXPECT_EQ(nir_intrinsic_memory_scope(second), NIR_SCOPE_DEVICE);
-   EXPECT_EQ(nir_intrinsic_execution_scope(first), NIR_SCOPE_NONE);
+   EXPECT_EQ(nir_intrinsic_memory_scope(second), SCOPE_DEVICE);
+   EXPECT_EQ(nir_intrinsic_execution_scope(first), SCOPE_NONE);
 }
 
-TEST_F(spirv_test, opcopymemory_visavail_both_separate)
+TEST_F(AvailabilityVisibility, opcopymemory_visavail_both_separate)
 {
    /*
                OpCapability Shader
@@ -284,16 +286,16 @@ TEST_F(spirv_test, opcopymemory_visavail_both_separate)
 
    EXPECT_EQ(nir_intrinsic_memory_semantics(first), NIR_MEMORY_MAKE_VISIBLE | NIR_MEMORY_ACQUIRE);
    EXPECT_NE(nir_intrinsic_memory_modes(first) & nir_var_mem_ssbo, 0);
-   EXPECT_EQ(nir_intrinsic_memory_scope(first), NIR_SCOPE_WORKGROUP);
-   EXPECT_EQ(nir_intrinsic_execution_scope(first), NIR_SCOPE_NONE);
+   EXPECT_EQ(nir_intrinsic_memory_scope(first), SCOPE_WORKGROUP);
+   EXPECT_EQ(nir_intrinsic_execution_scope(first), SCOPE_NONE);
 
    EXPECT_EQ(nir_intrinsic_memory_semantics(second), NIR_MEMORY_MAKE_AVAILABLE | NIR_MEMORY_RELEASE);
    EXPECT_NE(nir_intrinsic_memory_modes(second) & nir_var_mem_ssbo, 0);
-   EXPECT_EQ(nir_intrinsic_memory_scope(second), NIR_SCOPE_DEVICE);
-   EXPECT_EQ(nir_intrinsic_execution_scope(second), NIR_SCOPE_NONE);
+   EXPECT_EQ(nir_intrinsic_memory_scope(second), SCOPE_DEVICE);
+   EXPECT_EQ(nir_intrinsic_execution_scope(second), SCOPE_NONE);
 }
 
-TEST_F(spirv_test, opcopymemory_avail)
+TEST_F(AvailabilityVisibility, opcopymemory_avail)
 {
    /*
                OpCapability Shader
@@ -352,11 +354,11 @@ TEST_F(spirv_test, opcopymemory_avail)
 
    EXPECT_EQ(nir_intrinsic_memory_semantics(intrinsic), NIR_MEMORY_MAKE_AVAILABLE | NIR_MEMORY_RELEASE);
    EXPECT_NE(nir_intrinsic_memory_modes(intrinsic) & nir_var_mem_ssbo, 0);
-   EXPECT_EQ(nir_intrinsic_memory_scope(intrinsic), NIR_SCOPE_DEVICE);
-   EXPECT_EQ(nir_intrinsic_execution_scope(intrinsic), NIR_SCOPE_NONE);
+   EXPECT_EQ(nir_intrinsic_memory_scope(intrinsic), SCOPE_DEVICE);
+   EXPECT_EQ(nir_intrinsic_execution_scope(intrinsic), SCOPE_NONE);
 }
 
-TEST_F(spirv_test, opcopymemory_vis)
+TEST_F(AvailabilityVisibility, opcopymemory_vis)
 {
    /*
                OpCapability Shader
@@ -415,6 +417,6 @@ TEST_F(spirv_test, opcopymemory_vis)
 
    EXPECT_EQ(nir_intrinsic_memory_semantics(intrinsic), NIR_MEMORY_MAKE_VISIBLE | NIR_MEMORY_ACQUIRE);
    EXPECT_NE(nir_intrinsic_memory_modes(intrinsic) & nir_var_mem_ssbo, 0);
-   EXPECT_EQ(nir_intrinsic_memory_scope(intrinsic), NIR_SCOPE_WORKGROUP);
-   EXPECT_EQ(nir_intrinsic_execution_scope(intrinsic), NIR_SCOPE_NONE);
+   EXPECT_EQ(nir_intrinsic_memory_scope(intrinsic), SCOPE_WORKGROUP);
+   EXPECT_EQ(nir_intrinsic_execution_scope(intrinsic), SCOPE_NONE);
 }

@@ -1,5 +1,3 @@
-from __future__ import print_function
-
 CopyRight = '''
 /**************************************************************************
  *
@@ -63,9 +61,9 @@ type_map = {
 
 def bool_map(value):
     if value:
-        return "TRUE"
+        return "true"
     else:
-        return "FALSE"
+        return "false"
 
 
 swizzle_map = {
@@ -92,11 +90,19 @@ def has_access(format):
         'p010',
         'p012',
         'p016',
+        'p030',
+        'y210',
+        'y212',
+        'y216',
+        'y410',
+        'y412',
+        'y416',
         'xyuv',
         'ayuv',
         'r8g8_r8b8_unorm',
         'g8r8_b8r8_unorm',
         'g8r8_g8b8_unorm',
+        'y8_400_unorm',
         'y8_u8_v8_422_unorm',
         'y8_u8v8_422_unorm',
         'y8_u8_v8_444_unorm',
@@ -105,10 +111,14 @@ def has_access(format):
         'y16_u16v16_422_unorm',
         'y16_u16_v16_444_unorm',
         'r8_g8b8_420_unorm',
+        'g8_b8r8_420_unorm',
+        'g8_b8_r8_420_unorm',
+        'r8_g8_b8_unorm',
+        'y8_unorm',
     ]
     if format.short_name() in noaccess_formats:
         return False
-    if format.layout in ('astc', 'atc', 'fxt1'):
+    if format.layout in ('astc', 'atc'):
         return False
     if format.layout == 'etc' and format.short_name() != 'etc1_rgb8':
         return False
@@ -125,6 +135,7 @@ def write_format_table_header(file):
 def write_format_table(formats):
     write_format_table_header(sys.stdout)
     print('#include "u_format_bptc.h"')
+    print('#include "u_format_fxt1.h"')
     print('#include "u_format_s3tc.h"')
     print('#include "u_format_rgtc.h"')
     print('#include "u_format_latc.h"')
@@ -132,9 +143,18 @@ def write_format_table(formats):
     print()
 
     write_format_table_header(sys.stdout2)
-    
+
+    print('#ifdef __cplusplus', file=sys.stdout2)
+    print('extern "C" {', file=sys.stdout2)
+    print('#endif', file=sys.stdout2)
+    print(file=sys.stdout2)
+
     u_format_pack.generate(formats)
-    
+
+    print('#ifdef __cplusplus', file=sys.stdout2)
+    print('} /* extern "C" */', file=sys.stdout2)
+    print('#endif', file=sys.stdout2)
+
     def do_channel_array(channels, swizzles):
         print("   {")
         for i in range(4):
@@ -165,12 +185,13 @@ def write_format_table(formats):
         print("   },")
 
     def generate_table_getter(type):
-        print("const struct util_format_%sdescription *" % type)
-        print("util_format_%sdescription(enum pipe_format format)" % type)
+        suffix = ""
+        if type == "unpack_":
+            suffix = "_generic"
+        print("ATTRIBUTE_RETURNS_NONNULL const struct util_format_%sdescription *" % type)
+        print("util_format_%sdescription%s(enum pipe_format format)" % (type, suffix))
         print("{")
-        print("   if (format >= ARRAY_SIZE(util_format_%sdescriptions))" % (type))
-        print("      return NULL;")
-        print()
+        print("   assert(format < PIPE_FORMAT_COUNT);")
         print("   return &util_format_%sdescriptions[format];" % (type))
         print("}")
         print()
@@ -179,15 +200,13 @@ def write_format_table(formats):
         print("util_format_%s_func_ptr" % func)
         print("util_format_%s_func(enum pipe_format format)" % (func))
         print("{")
-        print("   if (format >= ARRAY_SIZE(util_format_%s_table))" % (func))
-        print("      return NULL;")
-        print()
+        print("   assert(format < PIPE_FORMAT_COUNT);")
         print("   return util_format_%s_table[format];" % (func))
         print("}")
         print()
 
     print('static const struct util_format_description')
-    print('util_format_descriptions[] = {')
+    print('util_format_descriptions[PIPE_FORMAT_COUNT] = {')
     for format in formats:
         sn = format.short_name()
 
@@ -213,7 +232,7 @@ def write_format_table(formats):
     generate_table_getter("")
 
     print('static const struct util_format_pack_description')
-    print('util_format_pack_descriptions[] = {')
+    print('util_format_pack_descriptions[PIPE_FORMAT_COUNT] = {')
     for format in formats:
         sn = format.short_name()
 
@@ -241,9 +260,8 @@ def write_format_table(formats):
     print("};")
     print()
     generate_table_getter("pack_")
-
     print('static const struct util_format_unpack_description')
-    print('util_format_unpack_descriptions[] = {')
+    print('util_format_unpack_descriptions[PIPE_FORMAT_COUNT] = {')
     for format in formats:
         sn = format.short_name()
 
@@ -254,10 +272,17 @@ def write_format_table(formats):
         print("   [%s] = {" % (format.name,))
 
         if format.colorspace != ZS and not format.is_pure_color():
-            print("      .unpack_rgba_8unorm = &util_format_%s_unpack_rgba_8unorm," % sn)
             if format.layout == 's3tc' or format.layout == 'rgtc':
                 print("      .fetch_rgba_8unorm = &util_format_%s_fetch_rgba_8unorm," % sn)
-            print("      .unpack_rgba = &util_format_%s_unpack_rgba_float," % sn)
+            if format.block_width > 1:
+                print(
+                    "      .unpack_rgba_8unorm_rect = &util_format_%s_unpack_rgba_8unorm," % sn)
+                print(
+                    "      .unpack_rgba_rect = &util_format_%s_unpack_rgba_float," % sn)
+            else:
+                print(
+                    "      .unpack_rgba_8unorm = &util_format_%s_unpack_rgba_8unorm," % sn)
+                print("      .unpack_rgba = &util_format_%s_unpack_rgba_float," % sn)
 
         if format.has_depth():
             print("      .unpack_z_32unorm = &util_format_%s_unpack_z_32unorm," % sn)
@@ -276,7 +301,7 @@ def write_format_table(formats):
 
     generate_table_getter("unpack_")
 
-    print('static const util_format_fetch_rgba_func_ptr util_format_fetch_rgba_table[] = {')
+    print('static const util_format_fetch_rgba_func_ptr util_format_fetch_rgba_table[PIPE_FORMAT_COUNT] = {')
     for format in formats:
         sn = format.short_name()
 

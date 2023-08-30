@@ -24,53 +24,49 @@
 #ifndef ZINK_PIPELINE_H
 #define ZINK_PIPELINE_H
 
-#include <vulkan/vulkan.h>
 
-#include "pipe/p_state.h"
+#include "zink_types.h"
 
-struct zink_blend_state;
-struct zink_depth_stencil_alpha_state;
-struct zink_gfx_program;
-struct zink_rasterizer_state;
-struct zink_render_pass;
-struct zink_screen;
-struct zink_vertex_elements_state;
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-struct zink_gfx_pipeline_state {
-   struct zink_render_pass *render_pass;
-
-   struct zink_vertex_elements_hw_state *element_state;
-   VkVertexInputBindingDescription bindings[PIPE_MAX_ATTRIBS]; // combination of element_state and stride
-   VkVertexInputBindingDivisorDescriptionEXT divisors[PIPE_MAX_ATTRIBS];
-   uint8_t divisors_present;
-
-   uint32_t num_attachments;
-   struct zink_blend_state *blend_state;
-
-   struct zink_rasterizer_hw_state *rast_state;
-
-   struct zink_depth_stencil_alpha_hw_state *depth_stencil_alpha_state;
-
-   VkSampleMask sample_mask;
-   uint8_t rast_samples;
-   uint8_t vertices_per_patch;
-
-   unsigned num_viewports;
-
-   bool primitive_restart;
-
-   VkShaderModule modules[PIPE_SHADER_TYPES - 1];
-
-   /* Pre-hashed value for table lookup, invalid when zero.
-    * Members after this point are not included in pipeline state hash key */
-   uint32_t hash;
-   bool dirty;
-};
+struct zink_gfx_output_key *
+zink_find_or_create_output(struct zink_context *ctx);
+struct zink_gfx_output_key *
+zink_find_or_create_output_ds3(struct zink_context *ctx);
+struct zink_gfx_input_key *
+zink_find_or_create_input(struct zink_context *ctx, VkPrimitiveTopology vkmode);
+struct zink_gfx_input_key *
+zink_find_or_create_input_dynamic(struct zink_context *ctx, VkPrimitiveTopology vkmode);
 
 VkPipeline
 zink_create_gfx_pipeline(struct zink_screen *screen,
                          struct zink_gfx_program *prog,
+                         struct zink_shader_object *objs,
                          struct zink_gfx_pipeline_state *state,
-                         VkPrimitiveTopology primitive_topology);
+                         const uint8_t *binding_map,
+                         VkPrimitiveTopology primitive_topology,
+                         bool optimize,
+                         struct util_dynarray *dgc);
 
+VkPipeline
+zink_create_compute_pipeline(struct zink_screen *screen, struct zink_compute_program *comp, struct zink_compute_pipeline_state *state);
+
+VkPipeline
+zink_create_gfx_pipeline_input(struct zink_screen *screen,
+                               struct zink_gfx_pipeline_state *state,
+                               const uint8_t *binding_map,
+                               VkPrimitiveTopology primitive_topology);
+VkPipeline
+zink_create_gfx_pipeline_library(struct zink_screen *screen, struct zink_gfx_program *prog);
+VkPipeline
+zink_create_gfx_pipeline_output(struct zink_screen *screen, struct zink_gfx_pipeline_state *state);
+VkPipeline
+zink_create_gfx_pipeline_combined(struct zink_screen *screen, struct zink_gfx_program *prog, VkPipeline input, VkPipeline *library, unsigned libcount, VkPipeline output, bool optimized);
+VkPipeline
+zink_create_gfx_pipeline_separate(struct zink_screen *screen, struct zink_shader_object *objs, VkPipelineLayout layout);
+#ifdef __cplusplus
+}
+#endif
 #endif

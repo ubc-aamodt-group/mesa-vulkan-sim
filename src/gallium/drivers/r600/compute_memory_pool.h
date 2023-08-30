@@ -47,7 +47,7 @@ struct compute_memory_item
 	int64_t start_in_dw;
 	int64_t size_in_dw;	/**< Size of the chunk in dwords */
 
-	/** Intermediate buffer asociated with an item. It is used mainly for mapping
+	/** Intermediate buffer associated with an item. It is used mainly for mapping
 	 * items against it. They are listed in the pool's unallocated list */
 	struct r600_resource *real_buffer;
 
@@ -80,6 +80,12 @@ struct compute_memory_pool
 static inline int is_item_in_pool(struct compute_memory_item *item)
 {
 	return item->start_in_dw != -1;
+}
+
+static inline int is_item_user_ptr(struct compute_memory_item *item)
+{
+	assert(item->real_buffer);
+	return item->real_buffer->b.is_user_ptr;
 }
 
 struct compute_memory_pool* compute_memory_pool_new(struct r600_screen *rscreen);

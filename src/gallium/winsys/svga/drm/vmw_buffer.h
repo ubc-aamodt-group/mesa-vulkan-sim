@@ -34,8 +34,8 @@
 
 
 /* These extra flags are used wherever the pb_usage_flags enum type is used */
-#define VMW_BUFFER_USAGE_SHARED    (1 << 20)
-#define VMW_BUFFER_USAGE_SYNC      (1 << 21)
+#define VMW_BUFFER_USAGE_SHARED    (1 << 14)
+#define VMW_BUFFER_USAGE_SYNC      (1 << 15)
 
 struct SVGAGuestPtr;
 struct pb_buffer;
@@ -81,7 +81,7 @@ vmw_svga_winsys_buffer_destroy(struct svga_winsys_screen *sws,
 void *
 vmw_svga_winsys_buffer_map(struct svga_winsys_screen *sws,
                            struct svga_winsys_buffer *buf,
-                           unsigned flags);
+                           enum pipe_map_flags flags);
 
 void
 vmw_svga_winsys_buffer_unmap(struct svga_winsys_screen *sws,

@@ -25,7 +25,7 @@
 #include "brw_nir.h"
 
 /**
- * Implements the WaPreventHSTessLevelsInterference workaround (for Gen7-8).
+ * Implements the WaPreventHSTessLevelsInterference workaround (for Gfx7-8).
  *
  * From the Broadwell PRM, Volume 7 (3D-Media-GPGPU), Page 494 (below the
  * definition of the patch header layouts):
@@ -89,12 +89,12 @@ emit_quads_workaround(nir_builder *b, nir_block *block)
    nir_ssa_def *outer = load_output(b, 4, 1, 0);
 
    nir_ssa_def *any_greater_than_1 =
-       nir_ior(b, nir_bany(b, nir_flt(b, nir_imm_float(b, 1.0f), outer)),
-                  nir_bany(b, nir_flt(b, nir_imm_float(b, 1.0f), inner)));
+       nir_ior(b, nir_bany(b, nir_fgt_imm(b, outer, 1.0f)),
+                  nir_bany(b, nir_fgt_imm(b, inner, 1.0f)));
 
    nir_push_if(b, any_greater_than_1);
 
-   inner = nir_bcsel(b, nir_fge(b, nir_imm_float(b, 1.0f), inner),
+   inner = nir_bcsel(b, nir_fle_imm(b, inner, 1.0f),
                         nir_imm_float(b, 2.0f), inner);
 
    nir_store_output(b, inner, nir_imm_int(b, 0),
@@ -131,5 +131,5 @@ brw_nir_apply_tcs_quads_workaround(nir_shader *nir)
       emit_quads_workaround(&b, end_preds[i]);
    }
 
-   nir_metadata_preserve(impl, 0);
+   nir_metadata_preserve(impl, nir_metadata_none);
 }

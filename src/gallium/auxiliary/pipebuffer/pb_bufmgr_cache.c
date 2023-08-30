@@ -36,7 +36,7 @@
 
 #include "pipe/p_compiler.h"
 #include "util/u_debug.h"
-#include "os/os_thread.h"
+#include "util/u_thread.h"
 #include "util/u_memory.h"
 #include "util/list.h"
 
@@ -94,7 +94,7 @@ pb_cache_manager_remove_buffer(struct pb_buffer *pb_buf)
  * Actually destroy the buffer.
  */
 static void
-_pb_cache_buffer_destroy(struct pb_buffer *pb_buf)
+_pb_cache_buffer_destroy(void *winsys, struct pb_buffer *pb_buf)
 {
    struct pb_cache_buffer *buf = pb_cache_buffer(pb_buf);
 
@@ -105,7 +105,7 @@ _pb_cache_buffer_destroy(struct pb_buffer *pb_buf)
 
 
 static void
-pb_cache_buffer_destroy(struct pb_buffer *_buf)
+pb_cache_buffer_destroy(void *winsys, struct pb_buffer *_buf)
 {
    struct pb_cache_buffer *buf = pb_cache_buffer(_buf);   
    struct pb_cache_manager *mgr = buf->mgr;
@@ -178,7 +178,7 @@ pb_cache_buffer_vtbl = {
 
 
 static bool
-pb_cache_can_reclaim_buffer(struct pb_buffer *_buf)
+pb_cache_can_reclaim_buffer(void *winsys, struct pb_buffer *_buf)
 {
    struct pb_cache_buffer *buf = pb_cache_buffer(_buf);
 
@@ -206,9 +206,11 @@ pb_cache_manager_create_buffer(struct pb_manager *_mgr,
    struct pb_cache_manager *mgr = pb_cache_manager(_mgr);
    struct pb_cache_buffer *buf;
 
+   pb_size aligned_size = align64(size, desc->alignment);
+
    /* get a buffer from the cache */
    buf = (struct pb_cache_buffer *)
-         pb_cache_reclaim_buffer(&mgr->cache, size, desc->alignment,
+         pb_cache_reclaim_buffer(&mgr->cache, aligned_size, desc->alignment,
                                  desc->usage, 0);
    if (buf)
       return &buf->base;
@@ -218,12 +220,12 @@ pb_cache_manager_create_buffer(struct pb_manager *_mgr,
    if (!buf)
       return NULL;
    
-   buf->buffer = mgr->provider->create_buffer(mgr->provider, size, desc);
+   buf->buffer = mgr->provider->create_buffer(mgr->provider, aligned_size, desc);
 
    /* Empty the cache and try again. */
    if (!buf->buffer) {
       pb_cache_release_all_buffers(&mgr->cache);
-      buf->buffer = mgr->provider->create_buffer(mgr->provider, size, desc);
+      buf->buffer = mgr->provider->create_buffer(mgr->provider, aligned_size, desc);
    }
 
    if(!buf->buffer) {
@@ -232,11 +234,11 @@ pb_cache_manager_create_buffer(struct pb_manager *_mgr,
    }
    
    assert(pipe_is_referenced(&buf->buffer->reference));
-   assert(pb_check_alignment(desc->alignment, buf->buffer->alignment));
-   assert(buf->buffer->size >= size);
+   assert(pb_check_alignment(desc->alignment, 1u << buf->buffer->alignment_log2));
+   assert(buf->buffer->size >= aligned_size);
    
    pipe_reference_init(&buf->base.reference, 1);
-   buf->base.alignment = buf->buffer->alignment;
+   buf->base.alignment_log2 = buf->buffer->alignment_log2;
    buf->base.usage = buf->buffer->usage;
    buf->base.size = buf->buffer->size;
    
@@ -305,7 +307,7 @@ pb_cache_manager_create(struct pb_manager *provider,
    mgr->base.flush = pb_cache_manager_flush;
    mgr->provider = provider;
    pb_cache_init(&mgr->cache, 1, usecs, size_factor, bypass_usage,
-                 maximum_cache_size,
+                 maximum_cache_size, NULL,
                  _pb_cache_buffer_destroy,
                  pb_cache_can_reclaim_buffer);
    return &mgr->base;

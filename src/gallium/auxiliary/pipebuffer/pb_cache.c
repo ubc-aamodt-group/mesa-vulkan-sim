@@ -47,7 +47,7 @@ destroy_buffer_locked(struct pb_cache_entry *entry)
       --mgr->num_buffers;
       mgr->cache_size -= buf->size;
    }
-   mgr->destroy_buffer(buf);
+   mgr->destroy_buffer(mgr->winsys, buf);
 }
 
 /**
@@ -63,7 +63,7 @@ release_expired_buffers_locked(struct list_head *cache,
    curr = cache->next;
    next = curr->next;
    while (curr != cache) {
-      entry = LIST_ENTRY(struct pb_cache_entry, curr, head);
+      entry = list_entry(curr, struct pb_cache_entry, head);
 
       if (!os_time_timeout(entry->start, entry->end, current_time))
          break;
@@ -87,7 +87,7 @@ pb_cache_add_buffer(struct pb_cache_entry *entry)
    struct pb_buffer *buf = entry->buffer;
    unsigned i;
 
-   mtx_lock(&mgr->mutex);
+   simple_mtx_lock(&mgr->mutex);
    assert(!pipe_is_referenced(&buf->reference));
 
    int64_t current_time = os_time_get();
@@ -97,8 +97,8 @@ pb_cache_add_buffer(struct pb_cache_entry *entry)
 
    /* Directly release any buffer that exceeds the limit. */
    if (mgr->cache_size + buf->size > mgr->max_cache_size) {
-      mgr->destroy_buffer(buf);
-      mtx_unlock(&mgr->mutex);
+      mgr->destroy_buffer(mgr->winsys, buf);
+      simple_mtx_unlock(&mgr->mutex);
       return;
    }
 
@@ -107,7 +107,7 @@ pb_cache_add_buffer(struct pb_cache_entry *entry)
    list_addtail(&entry->head, cache);
    ++mgr->num_buffers;
    mgr->cache_size += buf->size;
-   mtx_unlock(&mgr->mutex);
+   simple_mtx_unlock(&mgr->mutex);
 }
 
 /**
@@ -133,10 +133,10 @@ pb_cache_is_buffer_compat(struct pb_cache_entry *entry,
    if (usage & mgr->bypass_usage)
       return 0;
 
-   if (!pb_check_alignment(alignment, buf->alignment))
+   if (!pb_check_alignment(alignment, 1u << buf->alignment_log2))
       return 0;
 
-   return mgr->can_reclaim(buf) ? 1 : -1;
+   return mgr->can_reclaim(mgr->winsys, buf) ? 1 : -1;
 }
 
 /**
@@ -157,7 +157,7 @@ pb_cache_reclaim_buffer(struct pb_cache *mgr, pb_size size,
    assert(bucket_index < mgr->num_heaps);
    struct list_head *cache = &mgr->buckets[bucket_index];
 
-   mtx_lock(&mgr->mutex);
+   simple_mtx_lock(&mgr->mutex);
 
    entry = NULL;
    cur = cache->next;
@@ -166,7 +166,7 @@ pb_cache_reclaim_buffer(struct pb_cache *mgr, pb_size size,
    /* search in the expired buffers, freeing them in the process */
    now = os_time_get();
    while (cur != cache) {
-      cur_entry = LIST_ENTRY(struct pb_cache_entry, cur, head);
+      cur_entry = list_entry(cur, struct pb_cache_entry, head);
 
       if (!entry && (ret = pb_cache_is_buffer_compat(cur_entry, size,
                                                      alignment, usage)) > 0)
@@ -188,7 +188,7 @@ pb_cache_reclaim_buffer(struct pb_cache *mgr, pb_size size,
    /* keep searching in the hot buffers */
    if (!entry && ret != -1) {
       while (cur != cache) {
-         cur_entry = LIST_ENTRY(struct pb_cache_entry, cur, head);
+         cur_entry = list_entry(cur, struct pb_cache_entry, head);
          ret = pb_cache_is_buffer_compat(cur_entry, size, alignment, usage);
 
          if (ret > 0) {
@@ -210,40 +210,43 @@ pb_cache_reclaim_buffer(struct pb_cache *mgr, pb_size size,
       mgr->cache_size -= buf->size;
       list_del(&entry->head);
       --mgr->num_buffers;
-      mtx_unlock(&mgr->mutex);
+      simple_mtx_unlock(&mgr->mutex);
       /* Increase refcount */
       pipe_reference_init(&buf->reference, 1);
       return buf;
    }
 
-   mtx_unlock(&mgr->mutex);
+   simple_mtx_unlock(&mgr->mutex);
    return NULL;
 }
 
 /**
  * Empty the cache. Useful when there is not enough memory.
  */
-void
+unsigned
 pb_cache_release_all_buffers(struct pb_cache *mgr)
 {
    struct list_head *curr, *next;
    struct pb_cache_entry *buf;
+   unsigned num_reclaims = 0;
    unsigned i;
 
-   mtx_lock(&mgr->mutex);
+   simple_mtx_lock(&mgr->mutex);
    for (i = 0; i < mgr->num_heaps; i++) {
       struct list_head *cache = &mgr->buckets[i];
 
       curr = cache->next;
       next = curr->next;
       while (curr != cache) {
-         buf = LIST_ENTRY(struct pb_cache_entry, curr, head);
+         buf = list_entry(curr, struct pb_cache_entry, head);
          destroy_buffer_locked(buf);
+         num_reclaims++;
          curr = next;
          next = curr->next;
       }
    }
-   mtx_unlock(&mgr->mutex);
+   simple_mtx_unlock(&mgr->mutex);
+   return num_reclaims;
 }
 
 void
@@ -280,8 +283,9 @@ void
 pb_cache_init(struct pb_cache *mgr, uint num_heaps,
               uint usecs, float size_factor,
               unsigned bypass_usage, uint64_t maximum_cache_size,
-              void (*destroy_buffer)(struct pb_buffer *buf),
-              bool (*can_reclaim)(struct pb_buffer *buf))
+              void *winsys,
+              void (*destroy_buffer)(void *winsys, struct pb_buffer *buf),
+              bool (*can_reclaim)(void *winsys, struct pb_buffer *buf))
 {
    unsigned i;
 
@@ -292,7 +296,8 @@ pb_cache_init(struct pb_cache *mgr, uint num_heaps,
    for (i = 0; i < num_heaps; i++)
       list_inithead(&mgr->buckets[i]);
 
-   (void) mtx_init(&mgr->mutex, mtx_plain);
+   (void) simple_mtx_init(&mgr->mutex, mtx_plain);
+   mgr->winsys = winsys;
    mgr->cache_size = 0;
    mgr->max_cache_size = maximum_cache_size;
    mgr->num_heaps = num_heaps;
@@ -311,7 +316,7 @@ void
 pb_cache_deinit(struct pb_cache *mgr)
 {
    pb_cache_release_all_buffers(mgr);
-   mtx_destroy(&mgr->mutex);
+   simple_mtx_destroy(&mgr->mutex);
    FREE(mgr->buckets);
    mgr->buckets = NULL;
 }

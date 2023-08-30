@@ -86,6 +86,8 @@ struct rc_reader {
 };
 
 struct rc_reader_data {
+	struct radeon_compiler * C;
+
 	unsigned int Abort;
 	unsigned int AbortOnRead;
 	unsigned int AbortOnWrite;
@@ -97,7 +99,7 @@ struct rc_reader_data {
 	unsigned int ReadersReserved;
 	struct rc_reader * Readers;
 
-	/* If this flag is enabled, rc_get_readers will exit as soon possbile
+	/* If this flag is enabled, rc_get_readers will exit as soon possible
 	 * after the Abort flag is set.*/
 	unsigned int ExitOnAbort;
 	void * CbData;

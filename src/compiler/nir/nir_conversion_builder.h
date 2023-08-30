@@ -93,7 +93,7 @@ nir_round_float_to_float(nir_builder *b, nir_ssa_def *src,
       return nir_bcsel(b, cmp, nir_nextafter(b, lower_prec, neg_inf), lower_prec);
    }
    case nir_rounding_mode_rtz:
-      return nir_bcsel(b, nir_flt(b, src, nir_imm_zero(b, 1, src->bit_size)),
+      return nir_bcsel(b, nir_flt_imm(b, src, 1),
                           nir_round_float_to_float(b, src, dest_bit_size,
                                                    nir_rounding_mode_ru),
                           nir_round_float_to_float(b, src, dest_bit_size,
@@ -133,7 +133,7 @@ nir_round_int_to_float(nir_builder *b, nir_ssa_def *src,
 
    if (src_type == nir_type_int) {
       nir_ssa_def *sign =
-         nir_i2b1(b, nir_ishr(b, src, nir_imm_int(b, src->bit_size - 1)));
+         nir_i2b(b, nir_ishr(b, src, nir_imm_int(b, src->bit_size - 1)));
       nir_ssa_def *abs = nir_iabs(b, src);
       nir_ssa_def *positive_rounded =
          nir_round_int_to_float(b, abs, nir_type_uint, dest_bit_size, round);
@@ -480,10 +480,9 @@ nir_convert_with_rounding(nir_builder *b,
    } else {
       trivial_convert = false;
    }
-   if (trivial_convert) {
-      nir_op op = nir_type_conversion_op(src_type, dest_type, round);
-      return nir_build_alu(b, op, src, NULL, NULL, NULL);
-   }
+
+   if (trivial_convert)
+      return nir_type_convert(b, src, src_type, dest_type, round);
 
    nir_ssa_def *dest = src;
 

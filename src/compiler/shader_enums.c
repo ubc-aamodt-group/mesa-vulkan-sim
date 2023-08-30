@@ -28,7 +28,6 @@
 
 #include "shader_enums.h"
 #include "util/macros.h"
-#include "mesa/main/config.h"
 
 #define ENUM(x) [x] = #x
 #define NAME(val) ((((val) < ARRAY_SIZE(names)) && names[(val)]) ? names[(val)] : "UNKNOWN")
@@ -123,7 +122,6 @@ gl_vert_attrib_name(gl_vert_attrib attrib)
       ENUM(VERT_ATTRIB_COLOR1),
       ENUM(VERT_ATTRIB_FOG),
       ENUM(VERT_ATTRIB_COLOR_INDEX),
-      ENUM(VERT_ATTRIB_EDGEFLAG),
       ENUM(VERT_ATTRIB_TEX0),
       ENUM(VERT_ATTRIB_TEX1),
       ENUM(VERT_ATTRIB_TEX2),
@@ -149,14 +147,43 @@ gl_vert_attrib_name(gl_vert_attrib attrib)
       ENUM(VERT_ATTRIB_GENERIC13),
       ENUM(VERT_ATTRIB_GENERIC14),
       ENUM(VERT_ATTRIB_GENERIC15),
+      ENUM(VERT_ATTRIB_EDGEFLAG),
    };
    STATIC_ASSERT(ARRAY_SIZE(names) == VERT_ATTRIB_MAX);
    return NAME(attrib);
 }
 
 const char *
-gl_varying_slot_name(gl_varying_slot slot)
+gl_varying_slot_name_for_stage(gl_varying_slot slot, gl_shader_stage stage)
 {
+   if (stage != MESA_SHADER_FRAGMENT && slot == VARYING_SLOT_PRIMITIVE_SHADING_RATE)
+      return "VARYING_SLOT_PRIMITIVE_SHADING_RATE";
+
+   switch (stage) {
+   case MESA_SHADER_MESH:
+      switch (slot) {
+      case VARYING_SLOT_PRIMITIVE_COUNT: return "VARYING_SLOT_PRIMITIVE_COUNT";
+      case VARYING_SLOT_PRIMITIVE_INDICES: return "VARYING_SLOT_PRIMITIVE_INDICES";
+      case VARYING_SLOT_CULL_PRIMITIVE: return "VARYING_SLOT_CULL_PRIMITIVE";
+      default:
+         /* Not an overlapping value. */
+         break;
+      }
+      break;
+
+   case MESA_SHADER_TASK:
+      switch (slot) {
+      case VARYING_SLOT_TASK_COUNT: return "VARYING_SLOT_TASK_COUNT";
+      default:
+         /* Not an overlapping value. */
+         break;
+      }
+      break;
+
+   default:
+      break;
+   }
+
    static const char *names[] = {
       ENUM(VARYING_SLOT_POS),
       ENUM(VARYING_SLOT_COL0),
@@ -222,17 +249,57 @@ gl_varying_slot_name(gl_varying_slot slot)
       ENUM(VARYING_SLOT_VAR29),
       ENUM(VARYING_SLOT_VAR30),
       ENUM(VARYING_SLOT_VAR31),
+      ENUM(VARYING_SLOT_PATCH0),
+      ENUM(VARYING_SLOT_PATCH1),
+      ENUM(VARYING_SLOT_PATCH2),
+      ENUM(VARYING_SLOT_PATCH3),
+      ENUM(VARYING_SLOT_PATCH4),
+      ENUM(VARYING_SLOT_PATCH5),
+      ENUM(VARYING_SLOT_PATCH6),
+      ENUM(VARYING_SLOT_PATCH7),
+      ENUM(VARYING_SLOT_PATCH8),
+      ENUM(VARYING_SLOT_PATCH9),
+      ENUM(VARYING_SLOT_PATCH10),
+      ENUM(VARYING_SLOT_PATCH11),
+      ENUM(VARYING_SLOT_PATCH12),
+      ENUM(VARYING_SLOT_PATCH13),
+      ENUM(VARYING_SLOT_PATCH14),
+      ENUM(VARYING_SLOT_PATCH15),
+      ENUM(VARYING_SLOT_PATCH16),
+      ENUM(VARYING_SLOT_PATCH17),
+      ENUM(VARYING_SLOT_PATCH18),
+      ENUM(VARYING_SLOT_PATCH19),
+      ENUM(VARYING_SLOT_PATCH20),
+      ENUM(VARYING_SLOT_PATCH21),
+      ENUM(VARYING_SLOT_PATCH22),
+      ENUM(VARYING_SLOT_PATCH23),
+      ENUM(VARYING_SLOT_PATCH24),
+      ENUM(VARYING_SLOT_PATCH25),
+      ENUM(VARYING_SLOT_PATCH26),
+      ENUM(VARYING_SLOT_PATCH27),
+      ENUM(VARYING_SLOT_PATCH28),
+      ENUM(VARYING_SLOT_PATCH29),
+      ENUM(VARYING_SLOT_PATCH30),
+      ENUM(VARYING_SLOT_PATCH31),
+      ENUM(VARYING_SLOT_VAR0_16BIT),
+      ENUM(VARYING_SLOT_VAR1_16BIT),
+      ENUM(VARYING_SLOT_VAR2_16BIT),
+      ENUM(VARYING_SLOT_VAR3_16BIT),
+      ENUM(VARYING_SLOT_VAR4_16BIT),
+      ENUM(VARYING_SLOT_VAR5_16BIT),
+      ENUM(VARYING_SLOT_VAR6_16BIT),
+      ENUM(VARYING_SLOT_VAR7_16BIT),
+      ENUM(VARYING_SLOT_VAR8_16BIT),
+      ENUM(VARYING_SLOT_VAR9_16BIT),
+      ENUM(VARYING_SLOT_VAR10_16BIT),
+      ENUM(VARYING_SLOT_VAR11_16BIT),
+      ENUM(VARYING_SLOT_VAR12_16BIT),
+      ENUM(VARYING_SLOT_VAR13_16BIT),
+      ENUM(VARYING_SLOT_VAR14_16BIT),
+      ENUM(VARYING_SLOT_VAR15_16BIT),
    };
-   STATIC_ASSERT(ARRAY_SIZE(names) == VARYING_SLOT_MAX);
+   STATIC_ASSERT(ARRAY_SIZE(names) == NUM_TOTAL_VARYING_SLOTS);
    return NAME(slot);
-}
-
-const char *
-gl_varying_slot_name_for_stage(gl_varying_slot slot, gl_shader_stage stage)
-{
-   if (stage != MESA_SHADER_FRAGMENT && slot == VARYING_SLOT_PRIMITIVE_SHADING_RATE)
-      return "VARYING_SLOT_PRIMITIVE_SHADING_RATE";
-   return gl_varying_slot_name(slot);
 }
 
 const char *
@@ -280,9 +347,9 @@ gl_system_value_name(gl_system_value sysval)
      ENUM(SYSTEM_VALUE_GLOBAL_INVOCATION_ID),
      ENUM(SYSTEM_VALUE_BASE_GLOBAL_INVOCATION_ID),
      ENUM(SYSTEM_VALUE_GLOBAL_INVOCATION_INDEX),
-     ENUM(SYSTEM_VALUE_WORK_GROUP_ID),
-     ENUM(SYSTEM_VALUE_NUM_WORK_GROUPS),
-     ENUM(SYSTEM_VALUE_LOCAL_GROUP_SIZE),
+     ENUM(SYSTEM_VALUE_WORKGROUP_ID),
+     ENUM(SYSTEM_VALUE_NUM_WORKGROUPS),
+     ENUM(SYSTEM_VALUE_WORKGROUP_SIZE),
      ENUM(SYSTEM_VALUE_GLOBAL_GROUP_SIZE),
      ENUM(SYSTEM_VALUE_USER_DATA_AMD),
      ENUM(SYSTEM_VALUE_WORK_DIM),
@@ -292,13 +359,14 @@ gl_system_value_name(gl_system_value sysval)
      ENUM(SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL),
      ENUM(SYSTEM_VALUE_BARYCENTRIC_PERSP_SAMPLE),
      ENUM(SYSTEM_VALUE_BARYCENTRIC_PERSP_CENTROID),
-     ENUM(SYSTEM_VALUE_BARYCENTRIC_PERSP_SIZE),
+     ENUM(SYSTEM_VALUE_BARYCENTRIC_PERSP_CENTER_RHW),
      ENUM(SYSTEM_VALUE_BARYCENTRIC_LINEAR_PIXEL),
      ENUM(SYSTEM_VALUE_BARYCENTRIC_LINEAR_CENTROID),
      ENUM(SYSTEM_VALUE_BARYCENTRIC_LINEAR_SAMPLE),
      ENUM(SYSTEM_VALUE_BARYCENTRIC_PULL_MODEL),
      ENUM(SYSTEM_VALUE_RAY_LAUNCH_ID),
      ENUM(SYSTEM_VALUE_RAY_LAUNCH_SIZE),
+     ENUM(SYSTEM_VALUE_RAY_LAUNCH_SIZE_ADDR_AMD),
      ENUM(SYSTEM_VALUE_RAY_WORLD_ORIGIN),
      ENUM(SYSTEM_VALUE_RAY_WORLD_DIRECTION),
      ENUM(SYSTEM_VALUE_RAY_OBJECT_ORIGIN),
@@ -310,9 +378,17 @@ gl_system_value_name(gl_system_value sysval)
      ENUM(SYSTEM_VALUE_RAY_HIT_KIND),
      ENUM(SYSTEM_VALUE_RAY_FLAGS),
      ENUM(SYSTEM_VALUE_RAY_GEOMETRY_INDEX),
+     ENUM(SYSTEM_VALUE_CULL_MASK),
+     ENUM(SYSTEM_VALUE_RAY_TRIANGLE_VERTEX_POSITIONS),
+     ENUM(SYSTEM_VALUE_MESH_VIEW_COUNT),
+     ENUM(SYSTEM_VALUE_MESH_VIEW_INDICES),
      ENUM(SYSTEM_VALUE_GS_HEADER_IR3),
      ENUM(SYSTEM_VALUE_TCS_HEADER_IR3),
+     ENUM(SYSTEM_VALUE_REL_PATCH_ID_IR3),
      ENUM(SYSTEM_VALUE_FRAG_SHADING_RATE),
+     ENUM(SYSTEM_VALUE_FULLY_COVERED),
+     ENUM(SYSTEM_VALUE_FRAG_SIZE),
+     ENUM(SYSTEM_VALUE_FRAG_INVOCATION_COUNT),
    };
    STATIC_ASSERT(ARRAY_SIZE(names) == SYSTEM_VALUE_MAX);
    return NAME(sysval);
@@ -352,4 +428,34 @@ gl_frag_result_name(gl_frag_result result)
    };
    STATIC_ASSERT(ARRAY_SIZE(names) == FRAG_RESULT_MAX);
    return NAME(result);
+}
+
+unsigned
+num_mesh_vertices_per_primitive(unsigned prim)
+{
+   switch (prim) {
+      case MESA_PRIM_POINTS:
+         return 1;
+      case MESA_PRIM_LINES:
+         return 2;
+      case MESA_PRIM_TRIANGLES:
+         return 3;
+      default:
+         unreachable("invalid mesh shader primitive type");
+   }
+}
+
+const char *
+mesa_scope_name(mesa_scope scope)
+{
+   static const char *names[] = {
+      ENUM(SCOPE_NONE),
+      ENUM(SCOPE_INVOCATION),
+      ENUM(SCOPE_SUBGROUP),
+      ENUM(SCOPE_SHADER_CALL),
+      ENUM(SCOPE_WORKGROUP),
+      ENUM(SCOPE_QUEUE_FAMILY),
+      ENUM(SCOPE_DEVICE),
+   };
+   return NAME(scope);
 }

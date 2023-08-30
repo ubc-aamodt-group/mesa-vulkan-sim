@@ -45,12 +45,14 @@
 
 #include "radeon_program_pair.h"
 
+#include "util/compiler.h"
+
 #define PROG_CODE \
 	struct r500_fragment_program_code *code = &c->code->code.r500
 
 #define error(fmt, args...) do {			\
 		rc_error(&c->Base, "%s::%s(): " fmt "\n",	\
-			__FILE__, __FUNCTION__, ##args);	\
+			__FILE__, __func__, ##args);	\
 	} while(0)
 
 
@@ -101,9 +103,9 @@ static unsigned int translate_rgb_op(struct r300_fragment_program_compiler *c, r
 	case RC_OPCODE_FRC: return R500_ALU_RGBA_OP_FRC;
 	default:
 		error("translate_rgb_op: unknown opcode %s\n", rc_get_opcode_info(opcode)->Name);
-		/* fall through */
+		FALLTHROUGH;
 	case RC_OPCODE_NOP:
-		/* fall through */
+		FALLTHROUGH;
 	case RC_OPCODE_MAD: return R500_ALU_RGBA_OP_MAD;
 	case RC_OPCODE_MAX: return R500_ALU_RGBA_OP_MAX;
 	case RC_OPCODE_MIN: return R500_ALU_RGBA_OP_MIN;
@@ -126,9 +128,9 @@ static unsigned int translate_alpha_op(struct r300_fragment_program_compiler *c,
 	case RC_OPCODE_LG2: return R500_ALPHA_OP_LN2;
 	default:
 		error("translate_alpha_op: unknown opcode %s\n", rc_get_opcode_info(opcode)->Name);
-		/* fall through */
+		FALLTHROUGH;
 	case RC_OPCODE_NOP:
-		/* fall through */
+		FALLTHROUGH;
 	case RC_OPCODE_MAD: return R500_ALPHA_OP_MAD;
 	case RC_OPCODE_MAX: return R500_ALPHA_OP_MAX;
 	case RC_OPCODE_MIN: return R500_ALPHA_OP_MIN;
@@ -186,7 +188,7 @@ static uint32_t translate_alu_result_op(struct r300_fragment_program_compiler * 
 	case RC_COMPARE_FUNC_GEQUAL: return R500_INST_ALU_RESULT_OP_GE;
 	case RC_COMPARE_FUNC_NOTEQUAL: return R500_INST_ALU_RESULT_OP_NE;
 	default:
-		rc_error(&c->Base, "%s: unsupported compare func %i\n", __FUNCTION__, func);
+		rc_error(&c->Base, "%s: unsupported compare func %i\n", __func__, func);
 		return 0;
 	}
 }
@@ -458,6 +460,7 @@ static void emit_flowcontrol(struct emit_state * s, struct rc_instruction * inst
 		s->Code->int_constant_count = 1;
 	}
 	s->Code->inst[newip].inst0 = R500_INST_TYPE_FC | R500_INST_ALU_WAIT;
+	s->Code->inst[newip].inst0 |= (inst->U.I.TexSemWait << R500_INST_TEX_SEM_WAIT_SHIFT);
 
 	switch(inst->U.I.Opcode){
 	struct branch_info * branch;
@@ -559,7 +562,7 @@ static void emit_flowcontrol(struct emit_state * s, struct rc_instruction * inst
 	
 	case RC_OPCODE_ELSE:
 		if (!s->CurrentBranchDepth) {
-			rc_error(s->C, "%s: got ELSE outside a branch", __FUNCTION__);
+			rc_error(s->C, "%s: got ELSE outside a branch", __func__);
 			return;
 		}
 
@@ -571,7 +574,7 @@ static void emit_flowcontrol(struct emit_state * s, struct rc_instruction * inst
 
 	case RC_OPCODE_ENDIF:
 		if (!s->CurrentBranchDepth) {
-			rc_error(s->C, "%s: got ELSE outside a branch", __FUNCTION__);
+			rc_error(s->C, "%s: got ELSE outside a branch", __func__);
 			return;
 		}
 
@@ -616,7 +619,7 @@ static void emit_flowcontrol(struct emit_state * s, struct rc_instruction * inst
 		s->CurrentBranchDepth--;
 		break;
 	default:
-		rc_error(s->C, "%s: unknown opcode %s\n", __FUNCTION__, rc_get_opcode_info(inst->U.I.Opcode)->Name);
+		rc_error(s->C, "%s: unknown opcode %s\n", __func__, rc_get_opcode_info(inst->U.I.Opcode)->Name);
 	}
 }
 
@@ -653,7 +656,7 @@ void r500BuildFragmentProgramHwCode(struct radeon_compiler *c, void *user)
 	}
 
 	if (code->max_temp_idx >= compiler->Base.max_temp_regs)
-		rc_error(&compiler->Base, "Too many hardware temporaries used");
+		rc_error(&compiler->Base, "Too many hardware temporaries used\n");
 
 	if (compiler->Base.Error)
 		return;

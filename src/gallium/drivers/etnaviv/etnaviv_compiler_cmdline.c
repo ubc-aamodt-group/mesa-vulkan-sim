@@ -31,9 +31,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "tgsi/tgsi_dump.h"
 #include "tgsi/tgsi_parse.h"
 #include "tgsi/tgsi_text.h"
+
+#include "nir/tgsi_to_nir.h"
 
 #include "etnaviv_compiler.h"
 #include "etnaviv_debug.h"
@@ -102,18 +103,11 @@ main(int argc, char **argv)
    const char *filename;
    struct tgsi_token toks[65536];
    struct tgsi_parse_context parse;
-   struct etna_shader s = {};
    struct etna_shader_key key = {};
    void *ptr;
    size_t size;
 
-   struct etna_shader_variant *v = CALLOC_STRUCT(etna_shader_variant);
-   if (!v) {
-      fprintf(stderr, "malloc failed!\n");
-      return 1;
-   }
-
-   etna_mesa_debug = ETNA_DBG_MSGS;
+   etna_mesa_debug = ETNA_DBG_MSGS | ETNA_DBG_NOCACHE;
 
    while (n < argc) {
       if (!strcmp(argv[n], "--verbose")) {
@@ -152,11 +146,19 @@ main(int argc, char **argv)
 
    tgsi_parse_init(&parse, toks);
 
-   s.specs = &specs_gc2000;
-   s.tokens = toks;
+   struct etna_compiler *compiler = etna_compiler_create(NULL, &specs_gc2000);
 
-   v->shader = &s;
-   v->key = key;
+   struct etna_shader shader = {};
+   shader.nir = tgsi_to_nir_noscreen(toks, &compiler->options);
+   shader.specs = &specs_gc2000;
+   shader.compiler = compiler;
+
+   struct util_debug_callback debug = {}; // TODO: proper debug callback
+   struct etna_shader_variant *v = etna_shader_variant(&shader, &key, &debug, false);
+   if (!v) {
+      fprintf(stderr, "shader variant creation failed!\n");
+      return 1;
+   }
 
    if (!etna_compile_shader(v)) {
       fprintf(stderr, "compiler failed!\n");

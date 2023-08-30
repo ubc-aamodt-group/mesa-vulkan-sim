@@ -50,9 +50,11 @@ struct pipe_context;
 /* deinterlace allgorithem */
 enum vl_compositor_deinterlace
 {
+   VL_COMPOSITOR_NONE,
    VL_COMPOSITOR_WEAVE,
    VL_COMPOSITOR_BOB_TOP,
-   VL_COMPOSITOR_BOB_BOTTOM
+   VL_COMPOSITOR_BOB_BOTTOM,
+   VL_COMPOSITOR_MOTION_ADAPTIVE
 };
 
 /* clockwise degree */
@@ -125,6 +127,8 @@ struct vl_compositor
    bool pipe_cs_composit_supported;
    bool pipe_gfx_supported;
 
+   enum vl_compositor_deinterlace deinterlace;
+
    struct {
       struct {
          void *y;
@@ -145,6 +149,10 @@ struct vl_compositor
          void *y;
          void *uv;
       } bob;
+      struct {
+         void *y;
+         void *uv;
+      } progressive;
    } cs_yuv;
 
    struct {

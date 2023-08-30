@@ -49,7 +49,8 @@ get_complex_used_vars(nir_shader *shader, void *mem_ctx)
              * nir_deref_instr_has_complex_use is recursive.
              */
             if (deref->deref_type == nir_deref_type_var &&
-                nir_deref_instr_has_complex_use(deref))
+                nir_deref_instr_has_complex_use(deref,
+                                                nir_deref_instr_has_complex_use_allow_atomics))
                _mesa_set_add(complex_vars, deref->var);
          }
       }
@@ -75,21 +76,11 @@ struct field {
    unsigned num_fields;
    struct field *fields;
 
+   /* The field currently being recursed */
+   unsigned current_index;
+
    nir_variable *var;
 };
-
-static const struct glsl_type *
-wrap_type_in_array(const struct glsl_type *type,
-                   const struct glsl_type *array_type)
-{
-   if (!glsl_type_is_array(array_type))
-      return type;
-
-   const struct glsl_type *elem_type =
-      wrap_type_in_array(type, glsl_get_array_element(array_type));
-   assert(glsl_get_explicit_stride(array_type) == 0);
-   return glsl_array_type(elem_type, glsl_get_length(array_type), 0);
-}
 
 static int
 num_array_levels_in_array_of_vector_type(const struct glsl_type *type)
@@ -105,6 +96,33 @@ num_array_levels_in_array_of_vector_type(const struct glsl_type *type)
          /* Not an array of vectors */
          return -1;
       }
+   }
+}
+
+static nir_constant *
+gather_constant_initializers(nir_constant *src,
+                             nir_variable *var,
+                             const struct glsl_type *type,
+                             struct field *field,
+                             struct split_var_state *state)
+{
+   if (!src)
+      return NULL;
+   if (glsl_type_is_array(type)) {
+      const struct glsl_type *element = glsl_get_array_element(type);
+      assert(src->num_elements == glsl_get_length(type));
+      nir_constant *dst = rzalloc(var, nir_constant);
+      dst->num_elements = src->num_elements;
+      dst->elements = rzalloc_array(var, nir_constant *, src->num_elements);
+      for (unsigned i = 0; i < src->num_elements; ++i) {
+         dst->elements[i] = gather_constant_initializers(src->elements[i], var, element, field, state);
+      }
+      return dst;
+   } else if (glsl_type_is_struct(type)) {
+      const struct glsl_type *element = glsl_get_struct_field(type, field->current_index);
+      return gather_constant_initializers(src->elements[field->current_index], var, element, &field->fields[field->current_index], state);
+   } else {
+      return nir_constant_clone(src, var);
    }
 }
 
@@ -134,14 +152,18 @@ init_field_for_type(struct field *field, struct field *parent,
                                          glsl_get_type_name(struct_type),
                                          glsl_get_struct_elem_name(struct_type, i));
          }
+         field->current_index = i;
          init_field_for_type(&field->fields[i], field,
                              glsl_get_struct_field(struct_type, i),
                              field_name, state);
       }
    } else {
       const struct glsl_type *var_type = type;
-      for (struct field *f = field->parent; f; f = f->parent)
-         var_type = wrap_type_in_array(var_type, f->type);
+      struct field *root = field;
+      for (struct field *f = field->parent; f; f = f->parent) {
+         var_type = glsl_type_wrap_in_arrays(var_type, f->type);
+         root = f;
+      }
 
       nir_variable_mode mode = state->base_var->data.mode;
       if (mode == nir_var_function_temp) {
@@ -149,6 +171,10 @@ init_field_for_type(struct field *field, struct field *parent,
       } else {
          field->var = nir_variable_create(state->shader, mode, var_type, name);
       }
+      field->var->data.ray_query = state->base_var->data.ray_query;
+      field->var->constant_initializer = gather_constant_initializers(state->base_var->constant_initializer,
+                                                                      field->var, state->base_var->type,
+                                                                      root, state);
    }
 }
 
@@ -291,7 +317,7 @@ split_struct_derefs_impl(nir_function_impl *impl,
 
          assert(new_deref->type == deref->type);
          nir_ssa_def_rewrite_uses(&deref->dest.ssa,
-                                  nir_src_for_ssa(&new_deref->dest.ssa));
+                                  &new_deref->dest.ssa);
          nir_deref_instr_remove_if_unused(deref);
       }
    }
@@ -311,13 +337,12 @@ nir_split_struct_vars(nir_shader *shader, nir_variable_mode modes)
       _mesa_pointer_hash_table_create(mem_ctx);
    struct set *complex_vars = NULL;
 
-   assert((modes & (nir_var_shader_temp | nir_var_function_temp)) == modes);
-
    bool has_global_splits = false;
-   if (modes & nir_var_shader_temp) {
+   nir_variable_mode global_modes = modes & ~nir_var_function_temp;
+   if (global_modes) {
       has_global_splits = split_var_list_structs(shader, NULL,
                                                  &shader->variables,
-                                                 nir_var_shader_temp,
+                                                 global_modes,
                                                  var_field_map,
                                                  &complex_vars,
                                                  mem_ctx);
@@ -538,6 +563,7 @@ create_split_array_vars(struct array_var_info *var_info,
          split->var = nir_variable_create(shader, mode,
                                           var_info->split_var_type, name);
       }
+      split->var->data.ray_query = var_info->base_var->data.ray_query;
    } else {
       assert(var_info->levels[level].split);
       split->num_splits = var_info->levels[level].array_len;
@@ -820,7 +846,7 @@ split_array_access_impl(nir_function_impl *impl,
                      nir_ssa_undef(&b, intrin->dest.ssa.num_components,
                                        intrin->dest.ssa.bit_size);
                   nir_ssa_def_rewrite_uses(&intrin->dest.ssa,
-                                           nir_src_for_ssa(u));
+                                           u);
                }
                nir_instr_remove(&intrin->instr);
                for (unsigned i = 0; i < num_derefs; i++)
@@ -875,13 +901,13 @@ nir_split_array_vars(nir_shader *shader, nir_variable_mode modes)
    struct hash_table *var_info_map = _mesa_pointer_hash_table_create(mem_ctx);
    struct set *complex_vars = NULL;
 
-   assert((modes & (nir_var_shader_temp | nir_var_function_temp)) == modes);
+   assert((modes & (nir_var_shader_temp | nir_var_ray_hit_attrib | nir_var_function_temp)) == modes);
 
    bool has_global_array = false;
-   if (modes & nir_var_shader_temp) {
+   if (modes & (nir_var_shader_temp | nir_var_ray_hit_attrib)) {
       has_global_array = init_var_list_array_infos(shader,
                                                    &shader->variables,
-                                                   nir_var_shader_temp,
+                                                   modes,
                                                    var_info_map,
                                                    &complex_vars,
                                                    mem_ctx);
@@ -916,10 +942,10 @@ nir_split_array_vars(nir_shader *shader, nir_variable_mode modes)
    }
 
    bool has_global_splits = false;
-   if (modes & nir_var_shader_temp) {
+   if (modes & (nir_var_shader_temp | nir_var_ray_hit_attrib)) {
       has_global_splits = split_var_list_arrays(shader, NULL,
                                                 &shader->variables,
-                                                nir_var_shader_temp,
+                                                modes,
                                                 var_info_map, mem_ctx);
    }
 
@@ -1055,7 +1081,7 @@ mark_deref_if_complex(nir_deref_instr *deref,
    if (!(deref->var->data.mode & modes))
       return;
 
-   if (!nir_deref_instr_has_complex_use(deref))
+   if (!nir_deref_instr_has_complex_use(deref, nir_deref_instr_has_complex_use_allow_atomics))
       return;
 
    struct vec_var_usage *usage =
@@ -1549,7 +1575,7 @@ shrink_vec_var_access_impl(nir_function_impl *impl,
                      nir_ssa_undef(&b, intrin->dest.ssa.num_components,
                                        intrin->dest.ssa.bit_size);
                   nir_ssa_def_rewrite_uses(&intrin->dest.ssa,
-                                           nir_src_for_ssa(u));
+                                           u);
                }
                nir_instr_remove(&intrin->instr);
                nir_deref_instr_remove_if_unused(deref);
@@ -1578,7 +1604,7 @@ shrink_vec_var_access_impl(nir_function_impl *impl,
                nir_ssa_def *vec = nir_vec(&b, vec_srcs, intrin->num_components);
 
                nir_ssa_def_rewrite_uses_after(&intrin->dest.ssa,
-                                              nir_src_for_ssa(vec),
+                                              vec,
                                               vec->parent_instr);
 
                /* The SSA def is now only used by the swizzle.  It's safe to

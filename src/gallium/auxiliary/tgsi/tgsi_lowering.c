@@ -1188,7 +1188,6 @@ emit_twoside(struct tgsi_transform_context *tctx)
       decl.Declaration.Interpolate = true;
       decl.Interp.Interpolate = info->input_interpolate[in_idx];
       decl.Interp.Location = info->input_interpolate_loc[in_idx];
-      decl.Interp.CylindricalWrap = info->input_cylindrical_wrap[in_idx];
       tctx->emit_declaration(tctx, &decl);
    }
 
@@ -1574,11 +1573,9 @@ tgsi_transform_lowering(const struct tgsi_lowering_config *config,
    newlen += 2 * numtmp;
    newlen += 5;        /* immediate */
 
-   newtoks = tgsi_alloc_tokens(newlen);
+   newtoks = tgsi_transform_shader(tokens, newlen, &ctx.base);
    if (!newtoks)
       return NULL;
-
-   tgsi_transform_shader(tokens, newtoks, newlen, &ctx.base);
 
    tgsi_scan_shader(newtoks, info);
 

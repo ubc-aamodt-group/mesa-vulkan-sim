@@ -147,7 +147,6 @@ init_pipe_state(struct vl_compositor *c)
    sampler.mag_img_filter = PIPE_TEX_FILTER_LINEAR;
    sampler.compare_mode = PIPE_TEX_COMPARE_NONE;
    sampler.compare_func = PIPE_FUNC_ALWAYS;
-   sampler.normalized_coords = 1;
 
    c->sampler_linear = c->pipe->create_sampler_state(c->pipe, &sampler);
 
@@ -237,6 +236,7 @@ static bool
 init_buffers(struct vl_compositor *c)
 {
    struct pipe_vertex_element vertex_elems[3];
+   memset(vertex_elems, 0, sizeof(vertex_elems));
 
    assert(c);
 
@@ -363,6 +363,13 @@ set_yuv_layer(struct vl_compositor_state *s, struct vl_compositor *c,
           s->layers[layer].cs = (y) ? c->cs_yuv.bob.y : c->cs_yuv.bob.uv;
       break;
 
+   case VL_COMPOSITOR_NONE:
+      if (c->pipe_cs_composit_supported) {
+          s->layers[layer].cs = (y) ? c->cs_yuv.progressive.y : c->cs_yuv.progressive.uv;
+          break;
+      }
+      FALLTHROUGH;
+
    default:
       if (c->pipe_gfx_supported)
           s->layers[layer].fs = (y) ? c->fs_yuv.weave.y : c->fs_yuv.weave.uv;
@@ -446,6 +453,10 @@ vl_compositor_clear_layers(struct vl_compositor_state *s)
       s->layers[i].cs = NULL;
       s->layers[i].viewport.scale[2] = 1;
       s->layers[i].viewport.translate[2] = 0;
+      s->layers[i].viewport.swizzle_x = PIPE_VIEWPORT_SWIZZLE_POSITIVE_X;
+      s->layers[i].viewport.swizzle_y = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Y;
+      s->layers[i].viewport.swizzle_z = PIPE_VIEWPORT_SWIZZLE_POSITIVE_Z;
+      s->layers[i].viewport.swizzle_w = PIPE_VIEWPORT_SWIZZLE_POSITIVE_W;
       s->layers[i].rotate = VL_COMPOSITOR_ROTATE_0;
 
       for ( j = 0; j < 3; j++)
@@ -567,6 +578,8 @@ vl_compositor_set_buffer_layer(struct vl_compositor_state *s,
    if (buffer->interlaced) {
       float half_a_line = 0.5f / s->layers[layer].zw.y;
       switch(deinterlace) {
+      case VL_COMPOSITOR_NONE:
+      case VL_COMPOSITOR_MOTION_ADAPTIVE:
       case VL_COMPOSITOR_WEAVE:
          if (c->pipe_cs_composit_supported)
             s->layers[layer].cs = c->cs_weave_rgb;
@@ -772,6 +785,8 @@ vl_compositor_init(struct vl_compositor *c, struct pipe_context *pipe)
 
    c->pipe_gfx_supported = pipe->screen->get_param(pipe->screen, PIPE_CAP_GRAPHICS);
    c->pipe = pipe;
+
+   c->deinterlace = VL_COMPOSITOR_NONE;
 
    if (!init_pipe_state(c)) {
       return false;

@@ -22,6 +22,7 @@
 
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
+#include "util/u_draw.h"
 #include "util/u_inlines.h"
 #include "util/u_prim.h"
 #include "util/format/u_format.h"
@@ -92,7 +93,7 @@ nv50_vertex_state_create(struct pipe_context *pipe,
             }
             so->element[i].state = nv50_vertex_format[fmt].vtx;
             so->need_conversion = true;
-            pipe_debug_message(&nouveau_context(pipe)->debug, FALLBACK,
+            util_debug_message(&nouveau_context(pipe)->debug, FALLBACK,
                                "Converting vertex element %d, no hw format %s",
                                i, util_format_name(ve->src_format));
         }
@@ -417,7 +418,7 @@ nv50_vertex_arrays_validate(struct nv50_context *nv50)
 }
 
 #define NV50_PRIM_GL_CASE(n) \
-   case PIPE_PRIM_##n: return NV50_3D_VERTEX_BEGIN_GL_PRIMITIVE_##n
+   case MESA_PRIM_##n: return NV50_3D_VERTEX_BEGIN_GL_PRIMITIVE_##n
 
 static inline unsigned
 nv50_prim_gl(unsigned prim)
@@ -444,22 +445,22 @@ nv50_prim_gl(unsigned prim)
 }
 
 /* For pre-nva0 transform feedback. */
-static const uint8_t nv50_pipe_prim_to_prim_size[PIPE_PRIM_MAX + 1] =
+static const uint8_t nv50_pipe_prim_to_prim_size[MESA_PRIM_COUNT + 1] =
 {
-   [PIPE_PRIM_POINTS] = 1,
-   [PIPE_PRIM_LINES] = 2,
-   [PIPE_PRIM_LINE_LOOP] = 2,
-   [PIPE_PRIM_LINE_STRIP] = 2,
-   [PIPE_PRIM_TRIANGLES] = 3,
-   [PIPE_PRIM_TRIANGLE_STRIP] = 3,
-   [PIPE_PRIM_TRIANGLE_FAN] = 3,
-   [PIPE_PRIM_QUADS] = 3,
-   [PIPE_PRIM_QUAD_STRIP] = 3,
-   [PIPE_PRIM_POLYGON] = 3,
-   [PIPE_PRIM_LINES_ADJACENCY] = 2,
-   [PIPE_PRIM_LINE_STRIP_ADJACENCY] = 2,
-   [PIPE_PRIM_TRIANGLES_ADJACENCY] = 3,
-   [PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY] = 3
+   [MESA_PRIM_POINTS] = 1,
+   [MESA_PRIM_LINES] = 2,
+   [MESA_PRIM_LINE_LOOP] = 2,
+   [MESA_PRIM_LINE_STRIP] = 2,
+   [MESA_PRIM_TRIANGLES] = 3,
+   [MESA_PRIM_TRIANGLE_STRIP] = 3,
+   [MESA_PRIM_TRIANGLE_FAN] = 3,
+   [MESA_PRIM_QUADS] = 3,
+   [MESA_PRIM_QUAD_STRIP] = 3,
+   [MESA_PRIM_POLYGON] = 3,
+   [MESA_PRIM_LINES_ADJACENCY] = 2,
+   [MESA_PRIM_LINE_STRIP_ADJACENCY] = 2,
+   [MESA_PRIM_TRIANGLES_ADJACENCY] = 3,
+   [MESA_PRIM_TRIANGLE_STRIP_ADJACENCY] = 3
 };
 
 static void
@@ -623,15 +624,15 @@ nv50_draw_elements(struct nv50_context *nv50, bool shorten,
        * the not-yet-written data. Ideally this wait would only happen on
        * pushbuf submit, but it's probably not a big performance difference.
        */
-      if (buf->fence_wr && !nouveau_fence_signalled(buf->fence_wr))
+      if (buf->fence_wr)
          nouveau_fence_wait(buf->fence_wr, &nv50->base.debug);
 
       while (instance_count--) {
          BEGIN_NV04(push, NV50_3D(VERTEX_BEGIN_GL), 1);
          PUSH_DATA (push, prim);
 
-         nouveau_pushbuf_space(push, 16, 0, 1);
-         PUSH_REFN(push, buf->bo, NOUVEAU_BO_RD | buf->domain);
+         PUSH_SPACE_EX(push, 16, 0, 1);
+         PUSH_REF1(push, buf->bo, NOUVEAU_BO_RD | buf->domain);
 
          switch (index_size) {
          case 4:
@@ -736,7 +737,7 @@ nva0_draw_stream_output(struct nv50_context *nv50,
       PUSH_DATA (push, 0);
       BEGIN_NV04(push, NVA0_3D(DRAW_TFB_STRIDE), 1);
       PUSH_DATA (push, so->stride);
-      nv50_hw_query_pushbuf_submit(push, NVA0_3D_DRAW_TFB_BYTES,
+      nv50_hw_query_pushbuf_submit(nv50, NVA0_3D_DRAW_TFB_BYTES,
                                    nv50_query(so->pq), 0x4);
       BEGIN_NV04(push, NV50_3D(VERTEX_END_GL), 1);
       PUSH_DATA (push, 0);
@@ -746,34 +747,33 @@ nva0_draw_stream_output(struct nv50_context *nv50,
 }
 
 static void
-nv50_draw_vbo_kick_notify(struct nouveau_pushbuf *chan)
+nv50_draw_vbo_kick_notify(struct nouveau_context *context)
 {
-   struct nv50_screen *screen = chan->user_priv;
-
-   nouveau_fence_update(&screen->base, true);
-
-   nv50_bufctx_fence(screen->cur_ctx->bufctx_3d, true);
+   _nouveau_fence_update(context->screen, true);
 }
 
 void
 nv50_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
+              unsigned drawid_offset,
               const struct pipe_draw_indirect_info *indirect,
-              const struct pipe_draw_start_count *draws,
+              const struct pipe_draw_start_count_bias *draws,
               unsigned num_draws)
 {
    if (num_draws > 1) {
-      struct pipe_draw_info tmp_info = *info;
-
-      for (unsigned i = 0; i < num_draws; i++) {
-         nv50_draw_vbo(pipe, &tmp_info, indirect, &draws[i], 1);
-         if (tmp_info.increment_draw_id)
-            tmp_info.drawid++;
-      }
+      util_draw_multi(pipe, info, drawid_offset, indirect, draws, num_draws);
       return;
    }
 
    if (!indirect && (!draws[0].count || !info->instance_count))
       return;
+
+   /* We don't actually support indirect draws, so add a fallback for ES 3.1's
+    * benefit.
+    */
+   if (indirect && indirect->buffer) {
+      util_draw_indirect(pipe, info, indirect);
+      return;
+   }
 
    struct nv50_context *nv50 = nv50_context(pipe);
    struct nouveau_pushbuf *push = nv50->base.pushbuf;
@@ -785,7 +785,7 @@ nv50_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
 
    /* NOTE: caller must ensure that (min_index + index_bias) is >= 0 */
    if (info->index_bounds_valid) {
-      nv50->vb_elt_first = info->min_index + (info->index_size ? info->index_bias : 0);
+      nv50->vb_elt_first = info->min_index + (info->index_size ? draws->index_bias : 0);
       nv50->vb_elt_limit = info->max_index - info->min_index;
    } else {
       nv50->vb_elt_first = 0;
@@ -811,11 +811,12 @@ nv50_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
    if (unlikely(nv50->num_so_targets && !nv50->gmtyprog))
       nv50->state.prim_size = nv50_pipe_prim_to_prim_size[info->mode];
 
+   simple_mtx_lock(&nv50->screen->state_lock);
    nv50_state_validate_3d(nv50, ~0);
 
-   push->kick_notify = nv50_draw_vbo_kick_notify;
+   nv50->base.kick_notify = nv50_draw_vbo_kick_notify;
 
-   for (s = 0; s < 3 && !nv50->cb_dirty; ++s) {
+   for (s = 0; s < NV50_MAX_3D_SHADER_STAGES && !nv50->cb_dirty; ++s) {
       if (nv50->constbuf_coherent[s])
          nv50->cb_dirty = true;
    }
@@ -827,7 +828,7 @@ nv50_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
       nv50->cb_dirty = false;
    }
 
-   for (s = 0; s < 3 && !tex_dirty; ++s) {
+   for (s = 0; s < NV50_MAX_3D_SHADER_STAGES && !tex_dirty; ++s) {
       if (nv50->textures_coherent[s])
          tex_dirty = true;
    }
@@ -909,7 +910,7 @@ nv50_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
 
       nv50_draw_elements(nv50, shorten, info,
                          info->mode, draws[0].start, draws[0].count,
-                         info->instance_count, info->index_bias, info->index_size);
+                         info->instance_count, draws->index_bias, info->index_size);
    } else
    if (unlikely(indirect && indirect->count_from_stream_output)) {
       nva0_draw_stream_output(nv50, info, indirect);
@@ -920,7 +921,10 @@ nv50_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
    }
 
 cleanup:
-   push->kick_notify = nv50_default_kick_notify;
+   PUSH_KICK(push);
+   simple_mtx_unlock(&nv50->screen->state_lock);
+
+   nv50->base.kick_notify = nv50_default_kick_notify;
 
    nv50_release_user_vbufs(nv50);
 

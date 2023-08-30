@@ -1,5 +1,5 @@
 /**************************************************************************
- * 
+ *
  * Copyright 2008 Dennis Smit
  * All Rights Reserved.
  *
@@ -21,7 +21,7 @@
  * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
- * 
+ *
  **************************************************************************/
 
 /**
@@ -32,19 +32,20 @@
  * @author Based on the work of Eric Anholt <anholt@FreeBSD.org>
  */
 
-#include "pipe/p_config.h"
+#include "util/detect.h"
 #include "pipe/p_compiler.h"
 
 #include "util/u_debug.h"
 #include "u_cpu_detect.h"
 #include "u_math.h"
+#include "os_file.h"
 #include "c11/threads.h"
 
 #include <stdio.h>
 #include <inttypes.h>
 
-#if defined(PIPE_ARCH_PPC)
-#if defined(PIPE_OS_APPLE)
+#if DETECT_ARCH_PPC
+#if DETECT_OS_APPLE
 #include <sys/sysctl.h>
 #else
 #include <signal.h>
@@ -52,26 +53,26 @@
 #endif
 #endif
 
-#if defined(PIPE_OS_BSD)
+#if DETECT_OS_BSD
 #include <sys/param.h>
 #include <sys/sysctl.h>
 #include <machine/cpu.h>
 #endif
 
-#if defined(PIPE_OS_FREEBSD)
+#if DETECT_OS_FREEBSD
 #if __has_include(<sys/auxv.h>)
 #include <sys/auxv.h>
 #define HAVE_ELF_AUX_INFO
 #endif
 #endif
 
-#if defined(PIPE_OS_LINUX)
+#if DETECT_OS_LINUX
 #include <signal.h>
 #include <fcntl.h>
 #include <elf.h>
 #endif
 
-#ifdef PIPE_OS_UNIX
+#if DETECT_OS_UNIX
 #include <unistd.h>
 #endif
 
@@ -79,25 +80,37 @@
 #include <cpu-features.h>
 #endif
 
-#if defined(PIPE_OS_WINDOWS)
+#if DETECT_OS_WINDOWS
 #include <windows.h>
-#if defined(PIPE_CC_MSVC)
+#if DETECT_CC_MSVC
 #include <intrin.h>
 #endif
 #endif
 
+#if defined(HAS_SCHED_H)
+#include <sched.h>
+#endif
+
+// prevent inadvert infinite recursion
+#define util_get_cpu_caps() util_get_cpu_caps_DO_NOT_USE()
 
 DEBUG_GET_ONCE_BOOL_OPTION(dump_cpu, "GALLIUM_DUMP_CPU", false)
 
+static
+struct util_cpu_caps_t util_cpu_caps;
 
-struct util_cpu_caps util_cpu_caps;
+/* Do not try to access _util_cpu_caps_state directly, call to util_get_cpu_caps instead */
+struct _util_cpu_caps_state_t _util_cpu_caps_state = {
+   .once_flag = ONCE_FLAG_INIT,
+   .detect_done = 0,
+};
 
-#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+#if DETECT_ARCH_X86 || DETECT_ARCH_X86_64
 static int has_cpuid(void);
 #endif
 
 
-#if defined(PIPE_ARCH_PPC) && !defined(PIPE_OS_APPLE) && !defined(PIPE_OS_BSD) && !defined(PIPE_OS_LINUX)
+#if DETECT_ARCH_PPC && !DETECT_OS_APPLE && !DETECT_OS_BSD && !DETECT_OS_LINUX
 static jmp_buf  __lv_powerpc_jmpbuf;
 static volatile sig_atomic_t __lv_powerpc_canjump = 0;
 
@@ -114,7 +127,7 @@ sigill_handler(int sig)
 }
 #endif
 
-#if defined(PIPE_ARCH_PPC)
+#if DETECT_ARCH_PPC
 static void
 check_os_altivec_support(void)
 {
@@ -126,14 +139,14 @@ check_os_altivec_support(void)
 #endif
 #if defined(__ALTIVEC__) && defined(__VSX__)
 /* Do nothing */
-#elif defined(PIPE_OS_APPLE) || defined(PIPE_OS_NETBSD) || defined(PIPE_OS_OPENBSD)
+#elif DETECT_OS_APPLE || DETECT_OS_NETBSD || DETECT_OS_OPENBSD
 #ifdef HW_VECTORUNIT
    int sels[2] = {CTL_HW, HW_VECTORUNIT};
 #else
    int sels[2] = {CTL_MACHDEP, CPU_ALTIVEC};
 #endif
    int has_vu = 0;
-   int len = sizeof (has_vu);
+   size_t len = sizeof (has_vu);
    int err;
 
    err = sysctl(sels, 2, &has_vu, &len, NULL, 0);
@@ -143,7 +156,7 @@ check_os_altivec_support(void)
          util_cpu_caps.has_altivec = 1;
       }
    }
-#elif defined(PIPE_OS_FREEBSD) /* !PIPE_OS_APPLE && !PIPE_OS_NETBSD && !PIPE_OS_OPENBSD */
+#elif DETECT_OS_FREEBSD /* !DETECT_OS_APPLE && !DETECT_OS_NETBSD && !DETECT_OS_OPENBSD */
    unsigned long hwcap = 0;
 #ifdef HAVE_ELF_AUX_INFO
    elf_aux_info(AT_HWCAP, &hwcap, sizeof(hwcap));
@@ -155,8 +168,8 @@ check_os_altivec_support(void)
       util_cpu_caps.has_altivec = 1;
    if (hwcap & PPC_FEATURE_HAS_VSX)
       util_cpu_caps.has_vsx = 1;
-#elif defined(PIPE_OS_LINUX) /* !PIPE_OS_FREEBSD */
-#if defined(PIPE_ARCH_PPC_64)
+#elif DETECT_OS_LINUX /* !DETECT_OS_FREEBSD */
+#if DETECT_ARCH_PPC_64
     Elf64_auxv_t aux;
 #else
     Elf32_auxv_t aux;
@@ -176,15 +189,15 @@ check_os_altivec_support(void)
        }
        close(fd);
     }
-#else /* !PIPE_OS_APPLE && !PIPE_OS_BSD && !PIPE_OS_LINUX */
+#else /* !DETECT_OS_APPLE && !DETECT_OS_BSD && !DETECT_OS_LINUX */
    /* not on Apple/Darwin or Linux, do it the brute-force way */
    /* this is borrowed from the libmpeg2 library */
    signal(SIGILL, sigill_handler);
    if (setjmp(__lv_powerpc_jmpbuf)) {
       signal(SIGILL, SIG_DFL);
    } else {
-      boolean enable_altivec = TRUE;    /* Default: enable  if available, and if not overridden */
-      boolean enable_vsx = TRUE;
+      bool enable_altivec = true;    /* Default: enable  if available, and if not overridden */
+      bool enable_vsx = true;
 #ifdef DEBUG
       /* Disabling Altivec code generation is not the same as disabling VSX code generation,
        * which can be done simply by passing -mattr=-vsx to the LLVM compiler; cf.
@@ -193,13 +206,13 @@ check_os_altivec_support(void)
        */
       char *env_control = getenv("GALLIVM_ALTIVEC");    /* 1=enable (default); 0=disable */
       if (env_control && env_control[0] == '0') {
-         enable_altivec = FALSE;
+         enable_altivec = false;
       }
 #endif
       /* VSX instructions can be explicitly enabled/disabled via GALLIVM_VSX=1 or 0 */
       char *env_vsx = getenv("GALLIVM_VSX");
       if (env_vsx && env_vsx[0] == '0') {
-         enable_vsx = FALSE;
+         enable_vsx = false;
       }
       if (enable_altivec) {
          __lv_powerpc_canjump = 1;
@@ -221,16 +234,16 @@ check_os_altivec_support(void)
          util_cpu_caps.has_altivec = 0;
       }
    }
-#endif /* !PIPE_OS_APPLE && !PIPE_OS_LINUX */
+#endif /* !DETECT_OS_APPLE && !DETECT_OS_LINUX */
 }
-#endif /* PIPE_ARCH_PPC */
+#endif /* DETECT_ARCH_PPC */
 
 
-#if defined(PIPE_ARCH_X86) || defined (PIPE_ARCH_X86_64)
+#if DETECT_ARCH_X86 || DETECT_ARCH_X86_64
 static int has_cpuid(void)
 {
-#if defined(PIPE_ARCH_X86)
-#if defined(PIPE_OS_GCC)
+#if DETECT_ARCH_X86
+#if DETECT_OS_GCC
    int a, c;
 
    __asm __volatile
@@ -251,7 +264,7 @@ static int has_cpuid(void)
    /* FIXME */
    return 1;
 #endif
-#elif defined(PIPE_ARCH_X86_64)
+#elif DETECT_ARCH_X86_64
    return 1;
 #else
    return 0;
@@ -266,7 +279,7 @@ static int has_cpuid(void)
 static inline void
 cpuid(uint32_t ax, uint32_t *p)
 {
-#if defined(PIPE_CC_GCC) && defined(PIPE_ARCH_X86)
+#if DETECT_CC_GCC && DETECT_ARCH_X86
    __asm __volatile (
      "xchgl %%ebx, %1\n\t"
      "cpuid\n\t"
@@ -277,7 +290,7 @@ cpuid(uint32_t ax, uint32_t *p)
        "=d" (p[3])
      : "0" (ax)
    );
-#elif defined(PIPE_CC_GCC) && defined(PIPE_ARCH_X86_64)
+#elif DETECT_CC_GCC && DETECT_ARCH_X86_64
    __asm __volatile (
      "cpuid\n\t"
      : "=a" (p[0]),
@@ -286,7 +299,7 @@ cpuid(uint32_t ax, uint32_t *p)
        "=d" (p[3])
      : "0" (ax)
    );
-#elif defined(PIPE_CC_MSVC)
+#elif DETECT_CC_MSVC
    __cpuid(p, ax);
 #else
    p[0] = 0;
@@ -303,7 +316,7 @@ cpuid(uint32_t ax, uint32_t *p)
 static inline void
 cpuid_count(uint32_t ax, uint32_t cx, uint32_t *p)
 {
-#if defined(PIPE_CC_GCC) && defined(PIPE_ARCH_X86)
+#if DETECT_CC_GCC && DETECT_ARCH_X86
    __asm __volatile (
      "xchgl %%ebx, %1\n\t"
      "cpuid\n\t"
@@ -314,7 +327,7 @@ cpuid_count(uint32_t ax, uint32_t cx, uint32_t *p)
        "=d" (p[3])
      : "0" (ax), "2" (cx)
    );
-#elif defined(PIPE_CC_GCC) && defined(PIPE_ARCH_X86_64)
+#elif DETECT_CC_GCC && DETECT_ARCH_X86_64
    __asm __volatile (
      "cpuid\n\t"
      : "=a" (p[0]),
@@ -323,7 +336,7 @@ cpuid_count(uint32_t ax, uint32_t cx, uint32_t *p)
        "=d" (p[3])
      : "0" (ax), "2" (cx)
    );
-#elif defined(PIPE_CC_MSVC)
+#elif DETECT_CC_MSVC
    __cpuidex(p, ax, cx);
 #else
    p[0] = 0;
@@ -336,7 +349,7 @@ cpuid_count(uint32_t ax, uint32_t cx, uint32_t *p)
 
 static inline uint64_t xgetbv(void)
 {
-#if defined(PIPE_CC_GCC)
+#if DETECT_CC_GCC
    uint32_t eax, edx;
 
    __asm __volatile (
@@ -347,7 +360,7 @@ static inline uint64_t xgetbv(void)
    );
 
    return ((uint64_t)edx << 32) | eax;
-#elif defined(PIPE_CC_MSVC) && defined(_MSC_FULL_VER) && defined(_XCR_XFEATURE_ENABLED_MASK)
+#elif DETECT_CC_MSVC && defined(_MSC_FULL_VER) && defined(_XCR_XFEATURE_ENABLED_MASK)
    return _xgetbv(_XCR_XFEATURE_ENABLED_MASK);
 #else
    return 0;
@@ -355,19 +368,21 @@ static inline uint64_t xgetbv(void)
 }
 
 
-#if defined(PIPE_ARCH_X86)
-PIPE_ALIGN_STACK static inline boolean sse2_has_daz(void)
+#if DETECT_ARCH_X86
+UTIL_ALIGN_STACK
+static inline bool
+sse2_has_daz(void)
 {
-   struct {
+   alignas(16) struct {
       uint32_t pad1[7];
       uint32_t mxcsr_mask;
       uint32_t pad2[128-8];
-   } PIPE_ALIGN_VAR(16) fxarea;
+   } fxarea;
 
    fxarea.mxcsr_mask = 0;
-#if defined(PIPE_CC_GCC)
+#if DETECT_CC_GCC
    __asm __volatile ("fxsave %0" : "+m" (fxarea));
-#elif defined(PIPE_CC_MSVC) || defined(PIPE_CC_ICL)
+#elif DETECT_CC_MSVC || DETECT_CC_ICL
    _fxsave(&fxarea);
 #else
    fxarea.mxcsr_mask = 0;
@@ -378,7 +393,7 @@ PIPE_ALIGN_STACK static inline boolean sse2_has_daz(void)
 
 #endif /* X86 or X86_64 */
 
-#if defined(PIPE_ARCH_ARM)
+#if DETECT_ARCH_ARM
 static void
 check_os_arm_support(void)
 {
@@ -386,12 +401,12 @@ check_os_arm_support(void)
     * On Android, the cpufeatures library is preferred way of checking
     * CPU capabilities. However, it is not available for standalone Mesa
     * builds, i.e. when Android build system (Android.mk-based) is not
-    * used. Because of this we cannot use PIPE_OS_ANDROID here, but rather
+    * used. Because of this we cannot use DETECT_OS_ANDROID here, but rather
     * have a separate macro that only gets enabled from respective Android.mk.
     */
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
    util_cpu_caps.has_neon = 1;
-#elif defined(PIPE_OS_FREEBSD) && defined(HAVE_ELF_AUX_INFO)
+#elif DETECT_OS_FREEBSD && defined(HAVE_ELF_AUX_INFO)
    unsigned long hwcap = 0;
    elf_aux_info(AT_HWCAP, &hwcap, sizeof(hwcap));
    if (hwcap & HWCAP_NEON)
@@ -404,7 +419,7 @@ check_os_arm_support(void)
       if (cpu_features & ANDROID_CPU_ARM_FEATURE_NEON)
          util_cpu_caps.has_neon = 1;
    }
-#elif defined(PIPE_OS_LINUX)
+#elif DETECT_OS_LINUX
     Elf32_auxv_t aux;
     int fd;
 
@@ -420,43 +435,97 @@ check_os_arm_support(void)
        }
        close (fd);
     }
-#endif /* PIPE_OS_LINUX */
+#endif /* DETECT_OS_LINUX */
 }
 
-#elif defined(PIPE_ARCH_AARCH64)
+#elif DETECT_ARCH_AARCH64
 static void
 check_os_arm_support(void)
 {
     util_cpu_caps.has_neon = true;
 }
-#endif /* PIPE_ARCH_ARM || PIPE_ARCH_AARCH64 */
+#endif /* DETECT_ARCH_ARM || DETECT_ARCH_AARCH64 */
+
+#if DETECT_ARCH_MIPS64
+static void
+check_os_mips64_support(void)
+{
+#if DETECT_OS_LINUX
+    Elf64_auxv_t aux;
+    int fd;
+
+    fd = open("/proc/self/auxv", O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) {
+       while (read(fd, &aux, sizeof(Elf64_auxv_t)) == sizeof(Elf64_auxv_t)) {
+          if (aux.a_type == AT_HWCAP) {
+             uint64_t hwcap = aux.a_un.a_val;
+
+             util_cpu_caps.has_msa = (hwcap >> 1) & 1;
+             break;
+          }
+       }
+       close (fd);
+    }
+#endif /* DETECT_OS_LINUX */
+}
+#endif /* DETECT_ARCH_MIPS64 */
+
 
 static void
 get_cpu_topology(void)
 {
    /* Default. This is OK if L3 is not present or there is only one. */
-   util_cpu_caps.cores_per_L3 = util_cpu_caps.nr_cpus;
    util_cpu_caps.num_L3_caches = 1;
 
-#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+   memset(util_cpu_caps.cpu_to_L3, 0xff, sizeof(util_cpu_caps.cpu_to_L3));
+
+#if DETECT_OS_LINUX
+   uint64_t big_cap = 0;
+   unsigned num_big_cpus = 0;
+   uint64_t *caps = malloc(sizeof(uint64_t) * util_cpu_caps.max_cpus);
+   bool fail = false;
+   for (unsigned i = 0; caps && i < util_cpu_caps.max_cpus; i++) {
+      char name[PATH_MAX];
+      snprintf(name, sizeof(name), "/sys/devices/system/cpu/cpu%u/cpu_capacity", i);
+      size_t size = 0;
+      char *cap = os_read_file(name, &size);
+      if (!cap) {
+         num_big_cpus = 0;
+         fail = true;
+         break;
+      }
+      errno = 0;
+      caps[i] = strtoull(cap, NULL, 10);
+      free(cap);
+      if (errno) {
+         fail = true;
+         break;
+      }
+      big_cap = MAX2(caps[i], big_cap);
+   }
+   if (!fail) {
+      for (unsigned i = 0; caps && i < util_cpu_caps.max_cpus; i++) {
+         if (caps[i] >= big_cap / 2)
+            num_big_cpus++;
+      }
+   }
+   free(caps);
+   util_cpu_caps.nr_big_cpus = num_big_cpus;
+#endif
+
+#if DETECT_ARCH_X86 || DETECT_ARCH_X86_64
    /* AMD Zen */
    if (util_cpu_caps.family >= CPU_AMD_ZEN1_ZEN2 &&
        util_cpu_caps.family < CPU_AMD_LAST) {
       uint32_t regs[4];
 
-      /* Query the L3 cache count. */
-      cpuid_count(0x8000001D, 3, regs);
-      unsigned cache_level = (regs[0] >> 5) & 0x7;
-      unsigned cores_per_L3 = ((regs[0] >> 14) & 0xfff) + 1;
-
-      if (cache_level != 3 || cores_per_L3 == util_cpu_caps.nr_cpus)
-         return;
-
       uint32_t saved_mask[UTIL_MAX_CPUS / 32] = {0};
       uint32_t mask[UTIL_MAX_CPUS / 32] = {0};
-      uint32_t allowed_mask[UTIL_MAX_CPUS / 32] = {0};
-      uint32_t apic_id[UTIL_MAX_CPUS];
       bool saved = false;
+
+      uint32_t L3_found[UTIL_MAX_CPUS] = {0};
+      uint32_t num_L3_caches = 0;
+      util_affinity_mask *L3_affinity_masks = NULL;
 
       /* Query APIC IDs from each CPU core.
        *
@@ -473,55 +542,78 @@ get_cpu_topology(void)
        *
        * Querying the APIC ID can only be done by pinning the current thread
        * to each core. The original affinity mask is saved.
+       *
+       * Loop over all possible CPUs even though some may be offline.
        */
-      for (unsigned i = 0; i < util_cpu_caps.nr_cpus && i < UTIL_MAX_CPUS;
-           i++) {
+      for (int16_t i = 0; i < util_cpu_caps.max_cpus && i < UTIL_MAX_CPUS; i++) {
          uint32_t cpu_bit = 1u << (i % 32);
 
          mask[i / 32] = cpu_bit;
 
+         /* The assumption is that trying to bind the thread to a CPU that is
+          * offline will fail.
+          */
          if (util_set_current_thread_affinity(mask,
                                               !saved ? saved_mask : NULL,
                                               util_cpu_caps.num_cpu_mask_bits)) {
             saved = true;
-            allowed_mask[i / 32] |= cpu_bit;
 
             /* Query the APIC ID of the current core. */
             cpuid(0x00000001, regs);
-            apic_id[i] = regs[1] >> 24;
+            unsigned apic_id = regs[1] >> 24;
+
+            /* Query the total core count for the CPU */
+            uint32_t core_count = 1;
+            if (regs[3] & (1 << 28))
+               core_count = (regs[1] >> 16) & 0xff;
+
+            core_count = util_next_power_of_two(core_count);
+
+            /* Query the L3 cache count. */
+            cpuid_count(0x8000001D, 3, regs);
+            unsigned cache_level = (regs[0] >> 5) & 0x7;
+            unsigned cores_per_L3 = ((regs[0] >> 14) & 0xfff) + 1;
+
+            if (cache_level != 3)
+               continue;
+
+            unsigned local_core_id = apic_id & (core_count - 1);
+            unsigned phys_id = (apic_id & ~(core_count - 1)) >> util_logbase2(core_count);
+            unsigned local_l3_cache_index = local_core_id / util_next_power_of_two(cores_per_L3);
+#define L3_ID(p, i) (p << 16 | i << 1 | 1);
+
+            unsigned l3_id = L3_ID(phys_id, local_l3_cache_index);
+            int idx = -1;
+            for (unsigned c = 0; c < num_L3_caches; c++) {
+               if (L3_found[c] == l3_id) {
+                  idx = c;
+                  break;
+               }
+            }
+            if (idx == -1) {
+               idx = num_L3_caches;
+               L3_found[num_L3_caches++] = l3_id;
+               L3_affinity_masks = realloc(L3_affinity_masks, sizeof(util_affinity_mask) * num_L3_caches);
+               if (!L3_affinity_masks)
+                  return;
+               memset(&L3_affinity_masks[num_L3_caches - 1], 0, sizeof(util_affinity_mask));
+            }
+            util_cpu_caps.cpu_to_L3[i] = idx;
+            L3_affinity_masks[idx][i / 32] |= cpu_bit;
+
          }
          mask[i / 32] = 0;
       }
 
+      util_cpu_caps.num_L3_caches = num_L3_caches;
+      util_cpu_caps.L3_affinity_mask = L3_affinity_masks;
+
       if (saved) {
-
-         /* We succeeded in using at least one CPU. */
-         util_cpu_caps.num_L3_caches = util_cpu_caps.nr_cpus / cores_per_L3;
-         util_cpu_caps.cores_per_L3 = cores_per_L3;
-         util_cpu_caps.L3_affinity_mask = calloc(sizeof(util_affinity_mask),
-                                                 util_cpu_caps.num_L3_caches);
-
-         for (unsigned i = 0; i < util_cpu_caps.nr_cpus && i < UTIL_MAX_CPUS;
-              i++) {
-            uint32_t cpu_bit = 1u << (i % 32);
-
-            if (allowed_mask[i / 32] & cpu_bit) {
-               /* Each APIC ID bit represents a topology level, so we need
-                * to round up to the next power of two.
-                */
-               unsigned L3_index = apic_id[i] /
-                                   util_next_power_of_two(cores_per_L3);
-
-               util_cpu_caps.L3_affinity_mask[L3_index][i / 32] |= cpu_bit;
-               util_cpu_caps.cpu_to_L3[i] = L3_index;
-            }
-         }
-
          if (debug_get_option_dump_cpu()) {
             fprintf(stderr, "CPU <-> L3 cache mapping:\n");
             for (unsigned i = 0; i < util_cpu_caps.num_L3_caches; i++) {
                fprintf(stderr, "  - L3 %u mask = ", i);
-               for (int j = util_cpu_caps.nr_cpus - 1; j >= 0; j -= 32)
+               for (int j = util_cpu_caps.max_cpus - 1; j >= 0; j -= 32)
                   fprintf(stderr, "%08x ", util_cpu_caps.L3_affinity_mask[i][j / 32]);
                fprintf(stderr, "\n");
             }
@@ -538,46 +630,194 @@ get_cpu_topology(void)
 #endif
 }
 
-static void
-util_cpu_detect_once(void)
+static
+void check_cpu_caps_override(void)
 {
+   const char *override_cpu_caps = debug_get_option("GALLIUM_OVERRIDE_CPU_CAPS", NULL);
+#if DETECT_ARCH_X86 || DETECT_ARCH_X86_64
+   if (debug_get_bool_option("GALLIUM_NOSSE", false)) {
+      util_cpu_caps.has_sse = 0;
+   }
+#ifdef DEBUG
+   /* For simulating less capable machines */
+   if (debug_get_bool_option("LP_FORCE_SSE2", false)) {
+      util_cpu_caps.has_sse3 = 0;
+   }
+#endif
+#endif /* DETECT_ARCH_X86 || DETECT_ARCH_X86_64 */
+
+   if (override_cpu_caps != NULL) {
+#if DETECT_ARCH_X86 || DETECT_ARCH_X86_64
+      if (!strcmp(override_cpu_caps, "nosse")) {
+         util_cpu_caps.has_sse = 0;
+      } else if (!strcmp(override_cpu_caps, "sse")) {
+         util_cpu_caps.has_sse2 = 0;
+      } else if (!strcmp(override_cpu_caps, "sse2")) {
+         util_cpu_caps.has_sse3 = 0;
+      } else if (!strcmp(override_cpu_caps, "sse3")) {
+         util_cpu_caps.has_ssse3 = 0;
+      } else if (!strcmp(override_cpu_caps, "ssse3")) {
+         util_cpu_caps.has_sse4_1 = 0;
+      } else if (!strcmp(override_cpu_caps, "sse4.1")) {
+         util_cpu_caps.has_avx = 0;
+      } else if (!strcmp(override_cpu_caps, "avx")) {
+         util_cpu_caps.has_avx512f = 0;
+      }
+#endif /* DETECT_ARCH_X86 || DETECT_ARCH_X86_64 */
+   }
+
+#if DETECT_ARCH_X86 || DETECT_ARCH_X86_64
+   if (!util_cpu_caps.has_sse) {
+      util_cpu_caps.has_sse2 = 0;
+   }
+   if (!util_cpu_caps.has_sse2) {
+      util_cpu_caps.has_sse3 = 0;
+   }
+   if (!util_cpu_caps.has_sse3) {
+      util_cpu_caps.has_ssse3 = 0;
+   }
+   if (!util_cpu_caps.has_ssse3) {
+      util_cpu_caps.has_sse4_1 = 0;
+   }
+   if (!util_cpu_caps.has_sse4_1) {
+      util_cpu_caps.has_sse4_2 = 0;
+      util_cpu_caps.has_avx = 0;
+   }
+   if (!util_cpu_caps.has_avx) {
+      util_cpu_caps.has_avx2 = 0;
+      util_cpu_caps.has_f16c = 0;
+      util_cpu_caps.has_fma = 0;
+      util_cpu_caps.has_avx512f = 0;
+   }
+   if (!util_cpu_caps.has_avx512f) {
+      /* avx512 are cleared */
+      util_cpu_caps.has_avx512dq   = 0;
+      util_cpu_caps.has_avx512ifma = 0;
+      util_cpu_caps.has_avx512pf   = 0;
+      util_cpu_caps.has_avx512er   = 0;
+      util_cpu_caps.has_avx512cd   = 0;
+      util_cpu_caps.has_avx512bw   = 0;
+      util_cpu_caps.has_avx512vl   = 0;
+      util_cpu_caps.has_avx512vbmi = 0;
+   }
+#endif /* DETECT_ARCH_X86 || DETECT_ARCH_X86_64 */
+}
+
+static
+void check_max_vector_bits(void)
+{
+   /* Leave it at 128, even when no SIMD extensions are available.
+    * Really needs to be a multiple of 128 so can fit 4 floats.
+    */
+   util_cpu_caps.max_vector_bits = 128;
+#if DETECT_ARCH_X86 || DETECT_ARCH_X86_64
+   if (util_cpu_caps.has_avx512f) {
+      util_cpu_caps.max_vector_bits = 512;
+   } else if (util_cpu_caps.has_avx) {
+      util_cpu_caps.max_vector_bits = 256;
+   }
+#endif
+}
+
+void _util_cpu_detect_once(void);
+
+void
+_util_cpu_detect_once(void)
+{
+   int available_cpus = 0;
+   int total_cpus = 0;
+
    memset(&util_cpu_caps, 0, sizeof util_cpu_caps);
 
    /* Count the number of CPUs in system */
-#if defined(PIPE_OS_WINDOWS)
+#if DETECT_OS_WINDOWS
    {
       SYSTEM_INFO system_info;
       GetSystemInfo(&system_info);
-      util_cpu_caps.nr_cpus = system_info.dwNumberOfProcessors;
+      available_cpus = MAX2(1, system_info.dwNumberOfProcessors);
    }
-#elif defined(PIPE_OS_UNIX) && defined(_SC_NPROCESSORS_ONLN)
-   util_cpu_caps.nr_cpus = sysconf(_SC_NPROCESSORS_ONLN);
-   if (util_cpu_caps.nr_cpus == ~0)
-      util_cpu_caps.nr_cpus = 1;
-#elif defined(PIPE_OS_BSD)
+#elif DETECT_OS_UNIX
+#  if defined(HAS_SCHED_GETAFFINITY)
    {
-      int mib[2], ncpu;
-      int len;
-
-      mib[0] = CTL_HW;
-      mib[1] = HW_NCPU;
-
-      len = sizeof (ncpu);
-      sysctl(mib, 2, &ncpu, &len, NULL, 0);
-      util_cpu_caps.nr_cpus = ncpu;
+      /* sched_setaffinity() can be used to further restrict the number of
+       * CPUs on which the process can run.  Use sched_getaffinity() to
+       * determine the true number of available CPUs.
+       *
+       * FIXME: The Linux manual page for sched_getaffinity describes how this
+       * simple implementation will fail with > 1024 CPUs, and we'll fall back
+       * to the _SC_NPROCESSORS_ONLN path.  Support for > 1024 CPUs can be
+       * added to this path once someone has such a system for testing.
+       */
+      cpu_set_t affin;
+      if (sched_getaffinity(getpid(), sizeof(affin), &affin) == 0)
+         available_cpus = CPU_COUNT(&affin);
    }
-#else
-   util_cpu_caps.nr_cpus = 1;
-#endif
+#  endif
 
-   util_cpu_caps.num_cpu_mask_bits = align(util_cpu_caps.nr_cpus, 32);
+   /* Linux, FreeBSD, DragonFly, and Mac OS X should have
+    * _SC_NOPROCESSORS_ONLN.  NetBSD and OpenBSD should have HW_NCPUONLINE.
+    * This is what FFmpeg uses on those platforms.
+    */
+#  if DETECT_OS_BSD && defined(HW_NCPUONLINE)
+   if (available_cpus == 0) {
+      const int mib[] = { CTL_HW, HW_NCPUONLINE };
+      int ncpu;
+      size_t len = sizeof(ncpu);
+
+      sysctl(mib, 2, &ncpu, &len, NULL, 0);
+      available_cpus = ncpu;
+   }
+#  elif defined(_SC_NPROCESSORS_ONLN)
+   if (available_cpus == 0) {
+      available_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+      if (available_cpus == ~0)
+         available_cpus = 1;
+   }
+#  elif DETECT_OS_BSD
+   if (available_cpus == 0) {
+      const int mib[] = { CTL_HW, HW_NCPU };
+      int ncpu;
+      int len = sizeof(ncpu);
+
+      sysctl(mib, 2, &ncpu, &len, NULL, 0);
+      available_cpus = ncpu;
+   }
+#  endif /* DETECT_OS_BSD */
+
+   /* Determine the maximum number of CPUs configured in the system.  This is
+    * used to properly set num_cpu_mask_bits below.  On BSDs that don't have
+    * HW_NCPUONLINE, it was not clear whether HW_NCPU is the number of
+    * configured or the number of online CPUs.  For that reason, prefer the
+    * _SC_NPROCESSORS_CONF path on all BSDs.
+    */
+#  if defined(_SC_NPROCESSORS_CONF)
+   total_cpus = sysconf(_SC_NPROCESSORS_CONF);
+   if (total_cpus == ~0)
+      total_cpus = 1;
+#  elif DETECT_OS_BSD
+   {
+      const int mib[] = { CTL_HW, HW_NCPU };
+      int ncpu;
+      int len = sizeof(ncpu);
+
+      sysctl(mib, 2, &ncpu, &len, NULL, 0);
+      total_cpus = ncpu;
+   }
+#  endif /* DETECT_OS_BSD */
+#endif /* DETECT_OS_UNIX */
+
+   util_cpu_caps.nr_cpus = MAX2(1, available_cpus);
+   total_cpus = MAX2(total_cpus, util_cpu_caps.nr_cpus);
+
+   util_cpu_caps.max_cpus = total_cpus;
+   util_cpu_caps.num_cpu_mask_bits = align(total_cpus, 32);
 
    /* Make the fallback cacheline size nonzero so that it can be
     * safely passed to align().
     */
    util_cpu_caps.cacheline = sizeof(void *);
 
-#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+#if DETECT_ARCH_X86 || DETECT_ARCH_X86_64
    if (has_cpuid()) {
       uint32_t regs[4];
       uint32_t regs2[4];
@@ -607,6 +847,9 @@ util_cpu_detect_once(void)
          case 0x19:
             util_cpu_caps.family = CPU_AMD_ZEN3;
             break;
+         default:
+            if (util_cpu_caps.x86_cpu_type > 0x19)
+               util_cpu_caps.family = CPU_AMD_ZEN_NEXT;
          }
 
          /* general feature flags */
@@ -625,7 +868,7 @@ util_cpu_detect_once(void)
          util_cpu_caps.has_f16c   = ((regs2[2] >> 29) & 1) && util_cpu_caps.has_avx;
          util_cpu_caps.has_fma    = ((regs2[2] >> 12) & 1) && util_cpu_caps.has_avx;
          util_cpu_caps.has_mmx2   = util_cpu_caps.has_sse; /* SSE cpus supports mmxext too */
-#if defined(PIPE_ARCH_X86_64)
+#if DETECT_ARCH_X86_64
          util_cpu_caps.has_daz = 1;
 #else
          util_cpu_caps.has_daz = util_cpu_caps.has_sse3 ||
@@ -640,23 +883,19 @@ util_cpu_detect_once(void)
          uint32_t regs7[4];
          cpuid_count(0x00000007, 0x00000000, regs7);
          util_cpu_caps.has_avx2 = (regs7[1] >> 5) & 1;
-      }
 
-      // check for avx512
-      if (((regs2[2] >> 27) & 1) && // OSXSAVE
-          (xgetbv() & (0x7 << 5)) && // OPMASK: upper-256 enabled by OS
-          ((xgetbv() & 6) == 6)) { // XMM/YMM enabled by OS
-         uint32_t regs3[4];
-         cpuid_count(0x00000007, 0x00000000, regs3);
-         util_cpu_caps.has_avx512f    = (regs3[1] >> 16) & 1;
-         util_cpu_caps.has_avx512dq   = (regs3[1] >> 17) & 1;
-         util_cpu_caps.has_avx512ifma = (regs3[1] >> 21) & 1;
-         util_cpu_caps.has_avx512pf   = (regs3[1] >> 26) & 1;
-         util_cpu_caps.has_avx512er   = (regs3[1] >> 27) & 1;
-         util_cpu_caps.has_avx512cd   = (regs3[1] >> 28) & 1;
-         util_cpu_caps.has_avx512bw   = (regs3[1] >> 30) & 1;
-         util_cpu_caps.has_avx512vl   = (regs3[1] >> 31) & 1;
-         util_cpu_caps.has_avx512vbmi = (regs3[2] >>  1) & 1;
+         // check for avx512
+         if (xgetbv() & (0x7 << 5)) { // OPMASK: upper-256 enabled by OS
+            util_cpu_caps.has_avx512f    = (regs7[1] >> 16) & 1;
+            util_cpu_caps.has_avx512dq   = (regs7[1] >> 17) & 1;
+            util_cpu_caps.has_avx512ifma = (regs7[1] >> 21) & 1;
+            util_cpu_caps.has_avx512pf   = (regs7[1] >> 26) & 1;
+            util_cpu_caps.has_avx512er   = (regs7[1] >> 27) & 1;
+            util_cpu_caps.has_avx512cd   = (regs7[1] >> 28) & 1;
+            util_cpu_caps.has_avx512bw   = (regs7[1] >> 30) & 1;
+            util_cpu_caps.has_avx512vl   = (regs7[1] >> 31) & 1;
+            util_cpu_caps.has_avx512vbmi = (regs7[2] >>  1) & 1;
+         }
       }
 
       if (regs[1] == 0x756e6547 && regs[2] == 0x6c65746e && regs[3] == 0x49656e69) {
@@ -687,68 +926,73 @@ util_cpu_detect_once(void)
          if (cacheline > 0)
             util_cpu_caps.cacheline = cacheline;
       }
-
-      if (!util_cpu_caps.has_sse) {
-         util_cpu_caps.has_sse2 = 0;
-         util_cpu_caps.has_sse3 = 0;
-         util_cpu_caps.has_ssse3 = 0;
-         util_cpu_caps.has_sse4_1 = 0;
-      }
    }
-#endif /* PIPE_ARCH_X86 || PIPE_ARCH_X86_64 */
+#endif /* DETECT_ARCH_X86 || DETECT_ARCH_X86_64 */
 
-#if defined(PIPE_ARCH_ARM) || defined(PIPE_ARCH_AARCH64)
+#if DETECT_ARCH_ARM || DETECT_ARCH_AARCH64
    check_os_arm_support();
 #endif
 
-#if defined(PIPE_ARCH_PPC)
+#if DETECT_ARCH_PPC
    check_os_altivec_support();
-#endif /* PIPE_ARCH_PPC */
+#endif /* DETECT_ARCH_PPC */
+
+#if DETECT_ARCH_MIPS64
+   check_os_mips64_support();
+#endif /* DETECT_ARCH_MIPS64 */
+
+#if DETECT_ARCH_S390
+   util_cpu_caps.family = CPU_S390X;
+#endif
+
+   check_cpu_caps_override();
+
+   /* max_vector_bits should be checked after cpu caps override */
+   check_max_vector_bits();
 
    get_cpu_topology();
 
    if (debug_get_option_dump_cpu()) {
-      debug_printf("util_cpu_caps.nr_cpus = %u\n", util_cpu_caps.nr_cpus);
+      printf("util_cpu_caps.nr_cpus = %u\n", util_cpu_caps.nr_cpus);
 
-      debug_printf("util_cpu_caps.x86_cpu_type = %u\n", util_cpu_caps.x86_cpu_type);
-      debug_printf("util_cpu_caps.cacheline = %u\n", util_cpu_caps.cacheline);
+      printf("util_cpu_caps.x86_cpu_type = %u\n", util_cpu_caps.x86_cpu_type);
+      printf("util_cpu_caps.cacheline = %u\n", util_cpu_caps.cacheline);
 
-      debug_printf("util_cpu_caps.has_tsc = %u\n", util_cpu_caps.has_tsc);
-      debug_printf("util_cpu_caps.has_mmx = %u\n", util_cpu_caps.has_mmx);
-      debug_printf("util_cpu_caps.has_mmx2 = %u\n", util_cpu_caps.has_mmx2);
-      debug_printf("util_cpu_caps.has_sse = %u\n", util_cpu_caps.has_sse);
-      debug_printf("util_cpu_caps.has_sse2 = %u\n", util_cpu_caps.has_sse2);
-      debug_printf("util_cpu_caps.has_sse3 = %u\n", util_cpu_caps.has_sse3);
-      debug_printf("util_cpu_caps.has_ssse3 = %u\n", util_cpu_caps.has_ssse3);
-      debug_printf("util_cpu_caps.has_sse4_1 = %u\n", util_cpu_caps.has_sse4_1);
-      debug_printf("util_cpu_caps.has_sse4_2 = %u\n", util_cpu_caps.has_sse4_2);
-      debug_printf("util_cpu_caps.has_avx = %u\n", util_cpu_caps.has_avx);
-      debug_printf("util_cpu_caps.has_avx2 = %u\n", util_cpu_caps.has_avx2);
-      debug_printf("util_cpu_caps.has_f16c = %u\n", util_cpu_caps.has_f16c);
-      debug_printf("util_cpu_caps.has_popcnt = %u\n", util_cpu_caps.has_popcnt);
-      debug_printf("util_cpu_caps.has_3dnow = %u\n", util_cpu_caps.has_3dnow);
-      debug_printf("util_cpu_caps.has_3dnow_ext = %u\n", util_cpu_caps.has_3dnow_ext);
-      debug_printf("util_cpu_caps.has_xop = %u\n", util_cpu_caps.has_xop);
-      debug_printf("util_cpu_caps.has_altivec = %u\n", util_cpu_caps.has_altivec);
-      debug_printf("util_cpu_caps.has_vsx = %u\n", util_cpu_caps.has_vsx);
-      debug_printf("util_cpu_caps.has_neon = %u\n", util_cpu_caps.has_neon);
-      debug_printf("util_cpu_caps.has_daz = %u\n", util_cpu_caps.has_daz);
-      debug_printf("util_cpu_caps.has_avx512f = %u\n", util_cpu_caps.has_avx512f);
-      debug_printf("util_cpu_caps.has_avx512dq = %u\n", util_cpu_caps.has_avx512dq);
-      debug_printf("util_cpu_caps.has_avx512ifma = %u\n", util_cpu_caps.has_avx512ifma);
-      debug_printf("util_cpu_caps.has_avx512pf = %u\n", util_cpu_caps.has_avx512pf);
-      debug_printf("util_cpu_caps.has_avx512er = %u\n", util_cpu_caps.has_avx512er);
-      debug_printf("util_cpu_caps.has_avx512cd = %u\n", util_cpu_caps.has_avx512cd);
-      debug_printf("util_cpu_caps.has_avx512bw = %u\n", util_cpu_caps.has_avx512bw);
-      debug_printf("util_cpu_caps.has_avx512vl = %u\n", util_cpu_caps.has_avx512vl);
-      debug_printf("util_cpu_caps.has_avx512vbmi = %u\n", util_cpu_caps.has_avx512vbmi);
+      printf("util_cpu_caps.has_tsc = %u\n", util_cpu_caps.has_tsc);
+      printf("util_cpu_caps.has_mmx = %u\n", util_cpu_caps.has_mmx);
+      printf("util_cpu_caps.has_mmx2 = %u\n", util_cpu_caps.has_mmx2);
+      printf("util_cpu_caps.has_sse = %u\n", util_cpu_caps.has_sse);
+      printf("util_cpu_caps.has_sse2 = %u\n", util_cpu_caps.has_sse2);
+      printf("util_cpu_caps.has_sse3 = %u\n", util_cpu_caps.has_sse3);
+      printf("util_cpu_caps.has_ssse3 = %u\n", util_cpu_caps.has_ssse3);
+      printf("util_cpu_caps.has_sse4_1 = %u\n", util_cpu_caps.has_sse4_1);
+      printf("util_cpu_caps.has_sse4_2 = %u\n", util_cpu_caps.has_sse4_2);
+      printf("util_cpu_caps.has_avx = %u\n", util_cpu_caps.has_avx);
+      printf("util_cpu_caps.has_avx2 = %u\n", util_cpu_caps.has_avx2);
+      printf("util_cpu_caps.has_f16c = %u\n", util_cpu_caps.has_f16c);
+      printf("util_cpu_caps.has_popcnt = %u\n", util_cpu_caps.has_popcnt);
+      printf("util_cpu_caps.has_3dnow = %u\n", util_cpu_caps.has_3dnow);
+      printf("util_cpu_caps.has_3dnow_ext = %u\n", util_cpu_caps.has_3dnow_ext);
+      printf("util_cpu_caps.has_xop = %u\n", util_cpu_caps.has_xop);
+      printf("util_cpu_caps.has_altivec = %u\n", util_cpu_caps.has_altivec);
+      printf("util_cpu_caps.has_vsx = %u\n", util_cpu_caps.has_vsx);
+      printf("util_cpu_caps.has_neon = %u\n", util_cpu_caps.has_neon);
+      printf("util_cpu_caps.has_msa = %u\n", util_cpu_caps.has_msa);
+      printf("util_cpu_caps.has_daz = %u\n", util_cpu_caps.has_daz);
+      printf("util_cpu_caps.has_avx512f = %u\n", util_cpu_caps.has_avx512f);
+      printf("util_cpu_caps.has_avx512dq = %u\n", util_cpu_caps.has_avx512dq);
+      printf("util_cpu_caps.has_avx512ifma = %u\n", util_cpu_caps.has_avx512ifma);
+      printf("util_cpu_caps.has_avx512pf = %u\n", util_cpu_caps.has_avx512pf);
+      printf("util_cpu_caps.has_avx512er = %u\n", util_cpu_caps.has_avx512er);
+      printf("util_cpu_caps.has_avx512cd = %u\n", util_cpu_caps.has_avx512cd);
+      printf("util_cpu_caps.has_avx512bw = %u\n", util_cpu_caps.has_avx512bw);
+      printf("util_cpu_caps.has_avx512vl = %u\n", util_cpu_caps.has_avx512vl);
+      printf("util_cpu_caps.has_avx512vbmi = %u\n", util_cpu_caps.has_avx512vbmi);
+      printf("util_cpu_caps.num_L3_caches = %u\n", util_cpu_caps.num_L3_caches);
+      printf("util_cpu_caps.num_cpu_mask_bits = %u\n", util_cpu_caps.num_cpu_mask_bits);
    }
-}
+   _util_cpu_caps_state.caps = util_cpu_caps;
 
-static once_flag cpu_once_flag = ONCE_FLAG_INIT;
-
-void
-util_cpu_detect(void)
-{
-   call_once(&cpu_once_flag, util_cpu_detect_once);
+   /* This must happen at the end as it's used to guard everything else */
+   p_atomic_set(&_util_cpu_caps_state.detect_done, 1);
 }

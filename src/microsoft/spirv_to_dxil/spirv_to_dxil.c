@@ -21,29 +21,60 @@
  * IN THE SOFTWARE.
  */
 
+#include "dxil_spirv_nir.h"
 #include "spirv_to_dxil.h"
+#include "dxil_nir.h"
 #include "nir_to_dxil.h"
 #include "shader_enums.h"
 #include "spirv/nir_spirv.h"
 #include "util/blob.h"
 
+#include "git_sha1.h"
+#include "vulkan/vulkan.h"
+
+static_assert(DXIL_SPIRV_SHADER_NONE == (int)MESA_SHADER_NONE, "must match");
+static_assert(DXIL_SPIRV_SHADER_VERTEX == (int)MESA_SHADER_VERTEX, "must match");
+static_assert(DXIL_SPIRV_SHADER_TESS_CTRL == (int)MESA_SHADER_TESS_CTRL, "must match");
+static_assert(DXIL_SPIRV_SHADER_TESS_EVAL == (int)MESA_SHADER_TESS_EVAL, "must match");
+static_assert(DXIL_SPIRV_SHADER_GEOMETRY == (int)MESA_SHADER_GEOMETRY, "must match");
+static_assert(DXIL_SPIRV_SHADER_FRAGMENT == (int)MESA_SHADER_FRAGMENT, "must match");
+static_assert(DXIL_SPIRV_SHADER_COMPUTE == (int)MESA_SHADER_COMPUTE, "must match");
+static_assert(DXIL_SPIRV_SHADER_KERNEL == (int)MESA_SHADER_KERNEL, "must match");
+
 bool
 spirv_to_dxil(const uint32_t *words, size_t word_count,
               struct dxil_spirv_specialization *specializations,
               unsigned int num_specializations, dxil_spirv_shader_stage stage,
-              const char *entry_point_name, void **buffer, size_t *size)
+              const char *entry_point_name,
+              enum dxil_validator_version validator_version_max,
+              const struct dxil_spirv_debug_options *dgb_opts,
+              const struct dxil_spirv_runtime_conf *conf,
+              const struct dxil_spirv_logger *logger,
+              struct dxil_spirv_object *out_dxil)
 {
-   if (stage == MESA_SHADER_NONE || stage == MESA_SHADER_KERNEL)
+   if (stage == DXIL_SPIRV_SHADER_NONE || stage == DXIL_SPIRV_SHADER_KERNEL)
       return false;
 
-   struct spirv_to_nir_options spirv_opts = {0};
-
    glsl_type_singleton_init_or_ref();
+
+   struct nir_to_dxil_options opts = {
+      .environment = DXIL_ENVIRONMENT_VULKAN,
+      .shader_model_max = conf->shader_model_max,
+      .validator_version_max = validator_version_max,
+   };
+
+   const struct spirv_to_nir_options *spirv_opts = dxil_spirv_nir_get_spirv_options();
+   nir_shader_compiler_options nir_options;
+   const unsigned supported_bit_sizes = 16 | 32 | 64;
+   dxil_get_nir_compiler_options(&nir_options, conf->shader_model_max, supported_bit_sizes, supported_bit_sizes);
+   // We will manually handle base_vertex when vertex_id and instance_id have
+   // have been already converted to zero-base.
+   nir_options.lower_base_vertex = !conf->zero_based_vertex_instance_id;
 
    nir_shader *nir = spirv_to_nir(
       words, word_count, (struct nir_spirv_specialization *)specializations,
       num_specializations, (gl_shader_stage)stage, entry_point_name,
-      &spirv_opts, dxil_get_nir_compiler_options());
+      spirv_opts, &nir_options);
    if (!nir) {
       glsl_type_singleton_decref();
       return false;
@@ -52,27 +83,48 @@ spirv_to_dxil(const uint32_t *words, size_t word_count,
    nir_validate_shader(nir,
                        "Validate before feeding NIR to the DXIL compiler");
 
-   NIR_PASS_V(nir, nir_lower_returns);
-   NIR_PASS_V(nir, nir_inline_functions);
+   dxil_spirv_nir_prep(nir);
 
-   struct nir_to_dxil_options opts = {0};
+   bool requires_runtime_data;
+   dxil_spirv_nir_passes(nir, conf, &requires_runtime_data);
+
+   if (dgb_opts->dump_nir)
+      nir_print_shader(nir, stderr);
+
+   struct dxil_logger logger_inner = {.priv = logger->priv,
+                                      .log = logger->log};
 
    struct blob dxil_blob;
-   if (!nir_to_dxil(nir, &opts, &dxil_blob)) {
+   if (!nir_to_dxil(nir, &opts, &logger_inner, &dxil_blob)) {
       if (dxil_blob.allocated)
          blob_finish(&dxil_blob);
+      ralloc_free(nir);
       glsl_type_singleton_decref();
       return false;
    }
 
-   blob_finish_get_buffer(&dxil_blob, buffer, size);
+   ralloc_free(nir);
+   out_dxil->metadata.requires_runtime_data = requires_runtime_data;
+   blob_finish_get_buffer(&dxil_blob, &out_dxil->binary.buffer,
+                          &out_dxil->binary.size);
 
    glsl_type_singleton_decref();
    return true;
 }
 
 void
-spirv_to_dxil_free(void* buffer)
+spirv_to_dxil_free(struct dxil_spirv_object *dxil)
 {
-   free(buffer);
+   free(dxil->binary.buffer);
+}
+
+uint64_t
+spirv_to_dxil_get_version()
+{
+   const char sha1[] = MESA_GIT_SHA1;
+   const char* dash = strchr(sha1, '-');
+   if (dash) {
+      return strtoull(dash + 1, NULL, 16);
+   }
+   return 0;
 }

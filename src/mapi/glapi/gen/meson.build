@@ -22,7 +22,6 @@ glapi_gen_gl_xml = files('../registry/gl.xml')
 glapi_gen_mapi_deps = [
   glapi_gen_gl_xml,
   genCommon_py,
-  glapi_gen_gl_xml,
 ]
 
 gl_and_es_api_files = files('gl_and_es_API.xml')
@@ -82,6 +81,7 @@ api_xml_files = files(
   'ARB_shader_subroutine.xml',
   'ARB_shader_storage_buffer_object.xml',
   'ARB_sparse_buffer.xml',
+  'ARB_sparse_texture.xml',
   'ARB_spirv_extensions.xml',
   'ARB_sync.xml',
   'ARB_tessellation_shader.xml',
@@ -114,6 +114,7 @@ api_xml_files = files(
   'EXT_draw_buffers2.xml',
   'EXT_external_objects.xml',
   'EXT_external_objects_fd.xml',
+  'EXT_external_objects_win32.xml',
   'EXT_framebuffer_object.xml',
   'EXT_gpu_shader4.xml',
   'EXT_multisampled_render_to_texture.xml',
@@ -216,11 +217,65 @@ main_enums_c = custom_target(
 )
 
 main_api_exec_c = custom_target(
-  'api_exec.c',
-  input : ['gl_genexec.py', 'gl_and_es_API.xml'],
-  output : 'api_exec.c',
+  'api_exec_init.c',
+  input : ['api_exec_init.py', 'gl_and_es_API.xml'],
+  output : 'api_exec_init.c',
   command : [prog_python, '@INPUT0@', '-f', '@INPUT1@'],
   depend_files : files('apiexec.py') + glapi_gen_depends,
+  capture : true,
+)
+
+main_api_exec_decl_h = custom_target(
+  'api_exec_decl.h',
+  input : ['api_exec_decl_h.py', 'gl_and_es_API.xml'],
+  output : 'api_exec_decl.h',
+  command : [prog_python, '@INPUT0@', '-f', '@INPUT1@'],
+  depend_files : files('apiexec.py') + glapi_gen_depends,
+  capture : true,
+)
+
+main_api_save_init_h = custom_target(
+  'api_save_init.h',
+  input : ['api_save_init_h.py', 'gl_and_es_API.xml'],
+  output : 'api_save_init.h',
+  command : [prog_python, '@INPUT0@', '-f', '@INPUT1@'],
+  depend_files : files('apiexec.py') + glapi_gen_depends,
+  capture : true,
+)
+
+main_api_save_h = custom_target(
+  'api_save.h',
+  input : ['api_save_h.py', 'gl_and_es_API.xml'],
+  output : 'api_save.h',
+  command : [prog_python, '@INPUT0@', '-f', '@INPUT1@'],
+  depend_files : files('apiexec.py') + glapi_gen_depends,
+  capture : true,
+)
+
+main_api_beginend_init_h = custom_target(
+  'api_beginend_init.h',
+  input : ['api_beginend_init_h.py', 'gl_and_es_API.xml'],
+  output : 'api_beginend_init.h',
+  command : [prog_python, '@INPUT0@', '-f', '@INPUT1@'],
+  depend_files : files('apiexec.py') + glapi_gen_depends,
+  capture : true,
+)
+
+main_api_hw_select_init_h = custom_target(
+  'api_hw_select_init.h',
+  input : ['api_hw_select_init_h.py', 'gl_API.xml'],
+  output : 'api_hw_select_init.h',
+  command : [prog_python, '@INPUT0@', '-f', '@INPUT1@'],
+  depend_files : files('apiexec.py') + glapi_gen_depends,
+  capture : true,
+)
+
+main_unmarshal_table_c = custom_target(
+  'unmarshal_table.c',
+  input : ['gl_unmarshal_table.py', 'gl_and_es_API.xml'],
+  output : 'unmarshal_table.c',
+  command : [prog_python, '@INPUT0@', '@INPUT1@'],
+  depend_files : files('marshal_XML.py') + glapi_gen_depends,
   capture : true,
 )
 
@@ -230,7 +285,7 @@ foreach x : ['0', '1', '2', '3', '4', '5', '6', '7']
     'marshal_generated' + x + '.c',
     input : ['gl_marshal.py', 'gl_and_es_API.xml'],
     output : 'marshal_generated' + x + '.c',
-    command : [prog_python, '@INPUT0@', '-f', '@INPUT1@', '-i', x, '-n', '8'],
+    command : [prog_python, '@INPUT0@', '@INPUT1@', x, '8'],
     depend_files : files('marshal_XML.py') + glapi_gen_depends,
     capture : true,
   )

@@ -47,7 +47,7 @@ lower_ubo_load_instr(nir_builder *b, nir_instr *instr, UNUSED void *_data)
    unsigned byte_size = bit_size / 8;
 
    nir_ssa_def *val;
-   if (nir_src_is_const(load->src[1])) {
+   if (!nir_src_is_divergent(load->src[0]) && nir_src_is_const(load->src[1])) {
       uint32_t offset = nir_src_as_uint(load->src[1]);
 
       /* Things should be component-aligned. */
@@ -63,8 +63,7 @@ lower_ubo_load_instr(nir_builder *b, nir_instr *instr, UNUSED void *_data)
       for (unsigned i = 0; i < 2; i++) {
          nir_ssa_def *pred;
          if (bound) {
-            nir_ssa_def *bound = load->src[2].ssa;
-            pred = nir_ilt(b, nir_imm_int(b, aligned_offset + 63), bound);
+            pred = nir_igt_imm(b, bound, aligned_offset + i * 64 + 63);
          } else {
             pred = nir_imm_true(b);
          }
@@ -82,7 +81,6 @@ lower_ubo_load_instr(nir_builder *b, nir_instr *instr, UNUSED void *_data)
       nir_ssa_def *addr = nir_iadd(b, base_addr, nir_u2u64(b, offset));
 
       if (bound) {
-         nir_ssa_def *bound = load->src[2].ssa;
          nir_ssa_def *zero = nir_imm_zero(b, load->num_components, bit_size);
 
          unsigned load_size = byte_size * load->num_components;
@@ -110,7 +108,7 @@ lower_ubo_load_instr(nir_builder *b, nir_instr *instr, UNUSED void *_data)
       }
    }
 
-   nir_ssa_def_rewrite_uses(&load->dest.ssa, nir_src_for_ssa(val));
+   nir_ssa_def_rewrite_uses(&load->dest.ssa, val);
    nir_instr_remove(&load->instr);
 
    return true;
@@ -120,7 +118,6 @@ bool
 anv_nir_lower_ubo_loads(nir_shader *shader)
 {
    return nir_shader_instructions_pass(shader, lower_ubo_load_instr,
-                                       nir_metadata_block_index |
-                                       nir_metadata_dominance,
+                                       nir_metadata_none,
                                        NULL);
 }

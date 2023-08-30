@@ -1,10 +1,17 @@
 #!/bin/bash
+# shellcheck disable=SC1091
+# shellcheck disable=SC2034
+# shellcheck disable=SC2059
+# shellcheck disable=SC2086 # we want word splitting
+
+. "$SCRIPTS_DIR"/setup-test-env.sh
 
 # Boot script for devices attached to a PoE switch, using NFS for the root
 # filesystem.
 
 # We're run from the root of the repo, make a helper var for our paths
 BM=$CI_PROJECT_DIR/install/bare-metal
+CI_COMMON=$CI_PROJECT_DIR/install/common
 
 # Runner config checks
 if [ -z "$BM_SERIAL" ]; then
@@ -16,18 +23,6 @@ fi
 if [ -z "$BM_POE_ADDRESS" ]; then
   echo "Must set BM_POE_ADDRESS in your gitlab-runner config.toml [[runners]] environment"
   echo "This is the PoE switch address to connect for powering up/down devices."
-  exit 1
-fi
-
-if [ -z "$BM_POE_USERNAME" ]; then
-  echo "Must set BM_POE_USERNAME in your gitlab-runner config.toml [[runners]] environment"
-  echo "This is the PoE switch username."
-  exit 1
-fi
-
-if [ -z "$BM_POE_PASSWORD" ]; then
-  echo "Must set BM_POE_PASSWORD in your gitlab-runner config.toml [[runners]] environment"
-  echo "This is the PoE switch password."
   exit 1
 fi
 
@@ -75,7 +70,14 @@ if [ -z "$BM_CMDLINE" ]; then
   exit 1
 fi
 
+if [ -z "$BM_BOOTCONFIG" ]; then
+  echo "Must set BM_BOOTCONFIG to your board's required boot configuration arguments"
+  exit 1
+fi
+
 set -ex
+
+date +'%F %T'
 
 # Clear out any previous run's artifacts.
 rm -rf results/
@@ -85,22 +87,85 @@ mkdir -p results
 # state, since it's volume-mounted on the host.
 rsync -a --delete $BM_ROOTFS/ /nfs/
 
-[ -z $BM_ROOTFS_EXTRA ] || rsync -a $BM_ROOTFS_EXTRA/ /nfs/
+date +'%F %T'
 
+# If BM_BOOTFS is an URL, download it
+if echo $BM_BOOTFS | grep -q http; then
+  apt-get install -y curl
+  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
+    "${FDO_HTTP_CACHE_URI:-}$BM_BOOTFS" -o /tmp/bootfs.tar
+  BM_BOOTFS=/tmp/bootfs.tar
+fi
+
+date +'%F %T'
+
+# If BM_BOOTFS is a file, assume it is a tarball and uncompress it
+if [ -f $BM_BOOTFS ]; then
+  mkdir -p /tmp/bootfs
+  tar xf $BM_BOOTFS -C /tmp/bootfs
+  BM_BOOTFS=/tmp/bootfs
+fi
+
+date +'%F %T'
+
+# Install kernel modules (it could be either in /lib/modules or
+# /usr/lib/modules, but we want to install in the latter)
+[ -d $BM_BOOTFS/usr/lib/modules ] && rsync -a $BM_BOOTFS/usr/lib/modules/ /nfs/usr/lib/modules/
+[ -d $BM_BOOTFS/lib/modules ] && rsync -a $BM_BOOTFS/lib/modules/ /nfs/lib/modules/
+
+date +'%F %T'
+
+# Install kernel image + bootloader files
+rsync -aL --delete $BM_BOOTFS/boot/ /tftp/
+
+date +'%F %T'
+
+# Set up the pxelinux config for Jetson Nano
+mkdir -p /tftp/pxelinux.cfg
+cat <<EOF >/tftp/pxelinux.cfg/default-arm-tegra210-p3450-0000
+PROMPT 0
+TIMEOUT 30
+DEFAULT primary
+MENU TITLE jetson nano boot options
+LABEL primary
+      MENU LABEL CI kernel on TFTP
+      LINUX Image
+      FDT tegra210-p3450-0000.dtb
+      APPEND \${cbootargs} $BM_CMDLINE
+EOF
+
+# Set up the pxelinux config for Jetson TK1
+cat <<EOF >/tftp/pxelinux.cfg/default-arm-tegra124-jetson-tk1
+PROMPT 0
+TIMEOUT 30
+DEFAULT primary
+MENU TITLE jetson TK1 boot options
+LABEL primary
+      MENU LABEL CI kernel on TFTP
+      LINUX zImage
+      FDT tegra124-jetson-tk1.dtb
+      APPEND \${cbootargs} $BM_CMDLINE
+EOF
+
+# Create the rootfs in the NFS directory
 mkdir -p /nfs/results
 . $BM/rootfs-setup.sh /nfs
 
-rsync -a --delete $BM_BOOTFS/ /tftp/
+date +'%F %T'
 
 echo "$BM_CMDLINE" > /tftp/cmdline.txt
 
+# Add some required options in config.txt
+printf "$BM_BOOTCONFIG" >> /tftp/config.txt
+
 set +e
-ATTEMPTS=2
+ATTEMPTS=10
 while [ $((ATTEMPTS--)) -gt 0 ]; do
   python3 $BM/poe_run.py \
           --dev="$BM_SERIAL" \
           --powerup="$BM_POWERUP" \
-          --powerdown="$BM_POWERDOWN"
+          --powerdown="$BM_POWERDOWN" \
+          --test-timeout ${TEST_PHASE_TIMEOUT:-20}
   ret=$?
 
   if [ $ret -eq 2 ]; then
@@ -111,8 +176,12 @@ while [ $((ATTEMPTS--)) -gt 0 ]; do
 done
 set -e
 
+date +'%F %T'
+
 # Bring artifacts back from the NFS dir to the build dir where gitlab-runner
 # will look for them.
 cp -Rp /nfs/results/. results/
+
+date +'%F %T'
 
 exit $ret

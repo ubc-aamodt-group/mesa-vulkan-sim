@@ -40,8 +40,13 @@
 #define LOWER_MUL_HIGH (1 << 0)
 
 static bool
-lower_alu_instr(nir_alu_instr *instr, nir_builder *b)
+lower_alu_instr(nir_builder *b, nir_instr *instr_, UNUSED void *cb_data)
 {
+   if (instr_->type != nir_instr_type_alu)
+      return false;
+
+   nir_alu_instr *instr = nir_instr_as_alu(instr_);
+
    nir_ssa_def *lowered = NULL;
 
    assert(instr->dest.dest.is_ssa);
@@ -138,16 +143,13 @@ lower_alu_instr(nir_alu_instr *instr, nir_builder *b)
          if (src0->bit_size < 32) {
             /* Just do the math in 32-bit space and shift the result */
             nir_alu_type base_type = nir_op_infos[instr->op].output_type;
-            nir_op upcast_op = nir_type_conversion_op(base_type | src0->bit_size, base_type | 32, nir_rounding_mode_undef);
-            nir_op downscast_op = nir_type_conversion_op(base_type | 32, base_type | src0->bit_size, nir_rounding_mode_undef);
 
-            nir_ssa_def *src0_32 = nir_build_alu(b, upcast_op, src0, NULL, NULL, NULL);
-            nir_ssa_def *src1_32 = nir_build_alu(b, upcast_op, src1, NULL, NULL, NULL);
+            nir_ssa_def *src0_32 = nir_type_convert(b, src0, base_type, base_type | 32, nir_rounding_mode_undef);
+            nir_ssa_def *src1_32 = nir_type_convert(b, src1, base_type, base_type | 32, nir_rounding_mode_undef);
             nir_ssa_def *dest_32 = nir_imul(b, src0_32, src1_32);
             nir_ssa_def *dest_shifted = nir_ishr(b, dest_32, nir_imm_int(b, src0->bit_size));
-            lowered = nir_build_alu(b, downscast_op, dest_shifted, NULL, NULL, NULL);
+            lowered = nir_type_convert(b, dest_shifted, base_type, base_type | src0->bit_size, nir_rounding_mode_undef);
          } else {
-            nir_ssa_def *c1 = nir_imm_intN_t(b, 1, src0->bit_size);
             nir_ssa_def *cshift = nir_imm_int(b, src0->bit_size / 2);
             nir_ssa_def *cmask = nir_imm_intN_t(b, (1ull << (src0->bit_size / 2)) - 1, src0->bit_size);
             nir_ssa_def *different_signs = NULL;
@@ -180,12 +182,12 @@ lower_alu_instr(nir_alu_instr *instr, nir_builder *b)
             nir_ssa_def *tmp;
 
             tmp = nir_ishl(b, m1, cshift);
-            hi = nir_iadd(b, hi, nir_iand(b, nir_uadd_carry(b, lo, tmp), c1));
+            hi = nir_iadd(b, hi, nir_uadd_carry(b, lo, tmp));
             lo = nir_iadd(b, lo, tmp);
             hi = nir_iadd(b, hi, nir_ushr(b, m1, cshift));
 
             tmp = nir_ishl(b, m2, cshift);
-            hi = nir_iadd(b, hi, nir_iand(b, nir_uadd_carry(b, lo, tmp), c1));
+            hi = nir_iadd(b, hi, nir_uadd_carry(b, lo, tmp));
             lo = nir_iadd(b, lo, tmp);
             hi = nir_iadd(b, hi, nir_ushr(b, m2, cshift));
 
@@ -195,14 +197,11 @@ lower_alu_instr(nir_alu_instr *instr, nir_builder *b)
                 * high 32-bits.  Consider -3 * 2.  The high 32-bits is 0, but the
                 * desired result is -1, not -0!  Recall -x == ~x + 1.
                 */
+               nir_ssa_def *c1 = nir_imm_intN_t(b, 1, src0->bit_size);
                hi = nir_bcsel(b, different_signs,
                               nir_iadd(b,
                                        nir_inot(b, hi),
-                                       nir_iand(b,
-                                                nir_uadd_carry(b,
-                                                               nir_inot(b, lo),
-                                                               c1),
-                                                nir_imm_intN_t(b, 1, src0->bit_size))),
+                                       nir_uadd_carry(b, nir_inot(b, lo), c1)),
                               hi);
             }
 
@@ -216,7 +215,7 @@ lower_alu_instr(nir_alu_instr *instr, nir_builder *b)
    }
 
    if (lowered) {
-      nir_ssa_def_rewrite_uses(&instr->dest.dest.ssa, nir_src_for_ssa(lowered));
+      nir_ssa_def_rewrite_uses(&instr->dest.dest.ssa, lowered);
       nir_instr_remove(&instr->instr);
       return true;
    } else {
@@ -227,33 +226,12 @@ lower_alu_instr(nir_alu_instr *instr, nir_builder *b)
 bool
 nir_lower_alu(nir_shader *shader)
 {
-   bool progress = false;
-
    if (!shader->options->lower_bitfield_reverse &&
        !shader->options->lower_mul_high)
       return false;
 
-   nir_foreach_function(function, shader) {
-      if (function->impl) {
-         nir_builder builder;
-         nir_builder_init(&builder, function->impl);
-
-         nir_foreach_block(block, function->impl) {
-            nir_foreach_instr_safe(instr, block) {
-               if (instr->type == nir_instr_type_alu) {
-                  progress = lower_alu_instr(nir_instr_as_alu(instr),
-                                             &builder) || progress;
-               }
-            }
-         }
-
-         if (progress) {
-            nir_metadata_preserve(function->impl,
-                                  nir_metadata_block_index |
-                                  nir_metadata_dominance);
-         }
-      }
-   }
-
-   return progress;
+   return nir_shader_instructions_pass(shader, lower_alu_instr,
+                                       nir_metadata_block_index |
+                                       nir_metadata_dominance,
+                                       NULL);
 }

@@ -393,6 +393,7 @@ _mesa_shift_right_jam_m(uint8_t size_words, const uint32_t *a, uint32_t dist, ui
 
     word_jam = 0;
     word_dist = dist >> 5;
+    tmp = NULL;
     if (word_dist) {
         if (size_words < word_dist)
             word_dist = size_words;
@@ -428,10 +429,12 @@ _mesa_shift_right_jam_m(uint8_t size_words, const uint32_t *a, uint32_t dist, ui
         }
         tmp = m_out + index_multiword_hi(size_words, word_dist);
     }
-    do {
-        *tmp++ = 0;
-        --word_dist;
-    } while (word_dist);
+    if (tmp) {
+       do {
+           *tmp++ = 0;
+           --word_dist;
+       } while (word_dist);
+    }
     if (word_jam)
         m_out[index_word_lo(size_words)] |= 1;
 }
@@ -1449,7 +1452,12 @@ _mesa_float_to_half_rtz_slow(float val)
         if (flt_m != 0) {
             /* 'val' is a NaN, return NaN */
             e = 0x1f;
-            m = 0x1;
+            /* Retain the top bits of a NaN to make sure that the quiet/signaling
+            * status stays the same.
+            */
+            m = flt_m >> 13;
+            if (!m)
+               m = 1;
             return (s << 15) + (e << 10) + m;
         }
 

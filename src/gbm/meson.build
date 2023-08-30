@@ -28,7 +28,9 @@ files_gbm = files(
   'main/gbmint.h',
 )
 deps_gbm = []
-args_gbm = []
+args_gbm = [
+  '-DDEFAULT_BACKENDS_PATH="@0@"'.format(gbm_backends_path),
+]
 deps_gbm = []
 incs_gbm = [
   include_directories('main'), inc_include, inc_src, inc_loader,
@@ -43,8 +45,14 @@ if with_platform_wayland
   incs_gbm += inc_wayland_drm
 endif
 
+libgbm_name = 'gbm'
+
+if with_platform_android and get_option('platform-sdk-version') >= 30
+  libgbm_name = 'gbm_mesa'
+endif
+
 libgbm = shared_library(
-  'gbm',
+  libgbm_name,
   files_gbm,
   include_directories : incs_gbm,
   c_args : [args_gbm],
@@ -56,6 +64,11 @@ libgbm = shared_library(
   install : true,
 )
 
+if with_tests
+  abi_check = executable('gbm_abi_check', 'main/gbm_abi_check.c')
+  test('gbm-abi-check', abi_check, suite : ['gbm'])
+endif
+
 install_headers('main/gbm.h')
 
 pkg.generate(
@@ -65,6 +78,7 @@ pkg.generate(
   version : meson.project_version(),
   libraries : libgbm,
   libraries_private : gbm_priv_libs,
+  variables : ['gbmbackendspath=' + gbm_backends_path],
 )
 
 if with_symbols_check

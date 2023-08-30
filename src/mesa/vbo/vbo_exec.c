@@ -26,10 +26,9 @@
  */
 
 
-#include "main/glheader.h"
+#include "util/glheader.h"
 #include "main/arrayobj.h"
 #include "main/api_arrayelt.h"
-#include "main/vtxfmt.h"
 #include "vbo_private.h"
 
 const GLubyte
@@ -42,7 +41,6 @@ _vbo_attribute_alias_map[VP_MODE_MAX][VERT_ATTRIB_MAX] = {
       VBO_ATTRIB_COLOR1,              /* VERT_ATTRIB_COLOR1 */
       VBO_ATTRIB_FOG,                 /* VERT_ATTRIB_FOG */
       VBO_ATTRIB_COLOR_INDEX,         /* VERT_ATTRIB_COLOR_INDEX */
-      VBO_ATTRIB_EDGEFLAG,            /* VERT_ATTRIB_EDGEFLAG */
       VBO_ATTRIB_TEX0,                /* VERT_ATTRIB_TEX0 */
       VBO_ATTRIB_TEX1,                /* VERT_ATTRIB_TEX1 */
       VBO_ATTRIB_TEX2,                /* VERT_ATTRIB_TEX2 */
@@ -55,7 +53,7 @@ _vbo_attribute_alias_map[VP_MODE_MAX][VERT_ATTRIB_MAX] = {
       VBO_ATTRIB_GENERIC0,            /* VERT_ATTRIB_GENERIC0 */
       VBO_ATTRIB_GENERIC1,            /* VERT_ATTRIB_GENERIC1 */
       VBO_ATTRIB_GENERIC2,            /* VERT_ATTRIB_GENERIC2 */
-      VBO_ATTRIB_GENERIC3,            /* VERT_ATTRIB_GENERIC3 */
+      VBO_ATTRIB_SELECT_RESULT_OFFSET,/* VERT_ATTRIB_GENERIC3 */
       VBO_ATTRIB_MAT_FRONT_AMBIENT,   /* VERT_ATTRIB_GENERIC4 */
       VBO_ATTRIB_MAT_BACK_AMBIENT,    /* VERT_ATTRIB_GENERIC5 */
       VBO_ATTRIB_MAT_FRONT_DIFFUSE,   /* VERT_ATTRIB_GENERIC6 */
@@ -67,7 +65,8 @@ _vbo_attribute_alias_map[VP_MODE_MAX][VERT_ATTRIB_MAX] = {
       VBO_ATTRIB_MAT_FRONT_SHININESS, /* VERT_ATTRIB_GENERIC12 */
       VBO_ATTRIB_MAT_BACK_SHININESS,  /* VERT_ATTRIB_GENERIC13 */
       VBO_ATTRIB_MAT_FRONT_INDEXES,   /* VERT_ATTRIB_GENERIC14 */
-      VBO_ATTRIB_MAT_BACK_INDEXES     /* VERT_ATTRIB_GENERIC15 */
+      VBO_ATTRIB_MAT_BACK_INDEXES,    /* VERT_ATTRIB_GENERIC15 */
+      VBO_ATTRIB_EDGEFLAG,            /* VERT_ATTRIB_EDGEFLAG */
    },
 
    /* VP_MODE_SHADER: */
@@ -78,7 +77,6 @@ _vbo_attribute_alias_map[VP_MODE_MAX][VERT_ATTRIB_MAX] = {
       VBO_ATTRIB_COLOR1,              /* VERT_ATTRIB_COLOR1 */
       VBO_ATTRIB_FOG,                 /* VERT_ATTRIB_FOG */
       VBO_ATTRIB_COLOR_INDEX,         /* VERT_ATTRIB_COLOR_INDEX */
-      VBO_ATTRIB_EDGEFLAG,            /* VERT_ATTRIB_EDGEFLAG */
       VBO_ATTRIB_TEX0,                /* VERT_ATTRIB_TEX0 */
       VBO_ATTRIB_TEX1,                /* VERT_ATTRIB_TEX1 */
       VBO_ATTRIB_TEX2,                /* VERT_ATTRIB_TEX2 */
@@ -103,17 +101,18 @@ _vbo_attribute_alias_map[VP_MODE_MAX][VERT_ATTRIB_MAX] = {
       VBO_ATTRIB_GENERIC12,           /* VERT_ATTRIB_GENERIC12 */
       VBO_ATTRIB_GENERIC13,           /* VERT_ATTRIB_GENERIC13 */
       VBO_ATTRIB_GENERIC14,           /* VERT_ATTRIB_GENERIC14 */
-      VBO_ATTRIB_GENERIC15            /* VERT_ATTRIB_GENERIC15 */
+      VBO_ATTRIB_GENERIC15,           /* VERT_ATTRIB_GENERIC15 */
+      VBO_ATTRIB_EDGEFLAG,            /* VERT_ATTRIB_EDGEFLAG */
    }
 };
 
 
 void
-vbo_exec_init(struct gl_context *ctx, bool use_buffer_objects)
+vbo_exec_init(struct gl_context *ctx)
 {
    struct vbo_exec_context *exec = &vbo_context(ctx)->exec;
 
-   vbo_exec_vtx_init(exec, use_buffer_objects);
+   vbo_exec_vtx_init(exec);
 
    ctx->Driver.NeedFlush = 0;
    ctx->Driver.CurrentExecPrimitive = PRIM_OUTSIDE_BEGIN_END;
@@ -186,12 +185,13 @@ vbo_merge_draws(struct gl_context *ctx, bool in_dlist,
 
    /* This checks whether mode is equal to any line primitive type, taking
     * advantage of the fact that primitives types go from 0 to 14.
+    *
+    * Lines and lines with adjacency reset the line stipple pattern for every
+    * primitive, so draws can be merged even if line stippling is enabled.
     */
    if ((1 << mode0) &
-       ((1 << GL_LINES) |
-        (1 << GL_LINE_LOOP) |
+       ((1 << GL_LINE_LOOP) |
         (1 << GL_LINE_STRIP) |
-        (1 << GL_LINES_ADJACENCY) |
         (1 << GL_LINE_STRIP_ADJACENCY))) {
       /* "begin" resets the line stipple pattern during line stipple emulation
        * in tnl.
@@ -204,7 +204,7 @@ vbo_merge_draws(struct gl_context *ctx, bool in_dlist,
       if (begin1 == 1 && (in_dlist || ctx->Line.StippleFlag))
          return false;
 
-      /* _mesa_prim::end is irrelevant at this point and is only used
+      /* end is irrelevant at this point and is only used
        * before this function is called.
        */
    }

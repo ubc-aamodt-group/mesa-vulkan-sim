@@ -1,10 +1,14 @@
 #!/bin/bash
+# shellcheck disable=SC1091 # The relative paths in this file only become valid at runtime.
+# shellcheck disable=SC2034
+# shellcheck disable=SC2086 # we want word splitting
 
 # Boot script for Chrome OS devices attached to a servo debug connector, using
 # NFS and TFTP to boot.
 
 # We're run from the root of the repo, make a helper var for our paths
 BM=$CI_PROJECT_DIR/install/bare-metal
+CI_COMMON=$CI_PROJECT_DIR/install/common
 
 # Runner config checks
 if [ -z "$BM_SERIAL" ]; then
@@ -79,8 +83,9 @@ mkdir -p /nfs/results
 
 rm -rf /tftp/*
 if echo "$BM_KERNEL" | grep -q http; then
-  apt install -y wget
-  wget $BM_KERNEL -O /tftp/vmlinuz
+  apt-get install -y curl
+  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
+      $BM_KERNEL -o /tftp/vmlinuz
 else
   cp $BM_KERNEL /tftp/vmlinuz
 fi
@@ -89,7 +94,8 @@ echo "$BM_CMDLINE" > /tftp/cmdline
 set +e
 python3 $BM/cros_servo_run.py \
         --cpu $BM_SERIAL \
-        --ec $BM_SERIAL_EC
+        --ec $BM_SERIAL_EC \
+        --test-timeout ${TEST_PHASE_TIMEOUT:-20}
 ret=$?
 set -e
 

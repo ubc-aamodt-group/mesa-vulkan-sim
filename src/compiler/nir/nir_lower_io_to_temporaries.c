@@ -209,7 +209,7 @@ emit_interp(nir_builder *b, nir_deref_instr **old_interp_deref,
    new_interp->num_components = interp->num_components;
    nir_ssa_dest_init(&new_interp->instr, &new_interp->dest,
                      interp->dest.ssa.num_components,
-                     interp->dest.ssa.bit_size, NULL);
+                     interp->dest.ssa.bit_size);
 
    nir_builder_instr_insert(b, &new_interp->instr);
    nir_store_deref(b, temp_deref, &new_interp->dest.ssa,
@@ -246,7 +246,7 @@ fixup_interpolation_instr(struct lower_io_state *state,
     * correct part of the temporary.
     */
    nir_ssa_def *load = nir_load_deref(b, nir_src_as_deref(interp->src[0]));
-   nir_ssa_def_rewrite_uses(&interp->dest.ssa, nir_src_for_ssa(load));
+   nir_ssa_def_rewrite_uses(&interp->dest.ssa, load);
    nir_instr_remove(&interp->instr);
 
    nir_deref_path_finish(&interp_path);
@@ -328,7 +328,9 @@ nir_lower_io_to_temporaries(nir_shader *shader, nir_function_impl *entrypoint,
 {
    struct lower_io_state state;
 
-   if (shader->info.stage == MESA_SHADER_TESS_CTRL)
+   if (shader->info.stage == MESA_SHADER_TESS_CTRL ||
+       shader->info.stage == MESA_SHADER_TASK ||
+       shader->info.stage == MESA_SHADER_MESH)
       return;
 
    state.shader = shader;

@@ -34,6 +34,8 @@ public:
       this->scr = num;
       this->visuals = 0;
       this->configs = 0;
+      this->force_direct_context = false;
+      this->allow_invalid_glx_destroy_window = false;
 
       this->display = glx_dpy;
       this->dpy = (glx_dpy != NULL) ? glx_dpy->dpy : NULL;
@@ -72,7 +74,6 @@ public:
 
       this->vtable = &fake_glx_context::vt;
       this->majorOpcode = 123;
-      this->screen = psc->scr;
       this->psc = psc;
       this->config = mode;
       this->isDirect = false;

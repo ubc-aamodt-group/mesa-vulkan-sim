@@ -29,18 +29,21 @@
  */
 
 
-#include "main/glheader.h"
+#include "util/glheader.h"
 #include "main/context.h"
+#include "main/draw_validate.h"
 #include "main/hash.h"
 
 #include "main/macros.h"
 #include "main/mtypes.h"
-#include "main/arbprogram.h"
 #include "main/shaderapi.h"
 #include "main/state.h"
 #include "program/arbprogparse.h"
 #include "program/program.h"
 #include "program/prog_print.h"
+#include "api_exec_decl.h"
+
+#include "state_tracker/st_program.h"
 
 static void
 flush_vertices_for_program_constants(struct gl_context *ctx, GLenum target)
@@ -55,7 +58,7 @@ flush_vertices_for_program_constants(struct gl_context *ctx, GLenum target)
          ctx->DriverFlags.NewShaderConstants[MESA_SHADER_VERTEX];
    }
 
-   FLUSH_VERTICES(ctx, new_driver_state ? 0 : _NEW_PROGRAM_CONSTANTS);
+   FLUSH_VERTICES(ctx, new_driver_state ? 0 : _NEW_PROGRAM_CONSTANTS, 0);
    ctx->NewDriverState |= new_driver_state;
 }
 
@@ -136,7 +139,7 @@ _mesa_BindProgramARB(GLenum target, GLuint id)
    }
 
    /* signal new program (and its new constants) */
-   FLUSH_VERTICES(ctx, _NEW_PROGRAM);
+   FLUSH_VERTICES(ctx, _NEW_PROGRAM, 0);
    flush_vertices_for_program_constants(ctx, target);
 
    /* bind newProg */
@@ -148,6 +151,7 @@ _mesa_BindProgramARB(GLenum target, GLuint id)
    }
 
    _mesa_update_vertex_processing_mode(ctx);
+   _mesa_update_valid_to_render_state(ctx);
 
    /* Never null pointers */
    assert(ctx->VertexProgram.Current);
@@ -166,7 +170,7 @@ _mesa_DeleteProgramsARB(GLsizei n, const GLuint *ids)
    GLint i;
    GET_CURRENT_CONTEXT(ctx);
 
-   FLUSH_VERTICES(ctx, 0);
+   FLUSH_VERTICES(ctx, 0, 0);
 
    if (n < 0) {
       _mesa_error( ctx, GL_INVALID_VALUE, "glDeleteProgramsNV" );
@@ -359,7 +363,7 @@ set_program_string(struct gl_program *prog, GLenum target, GLenum format, GLsize
    bool failed;
    GET_CURRENT_CONTEXT(ctx);
 
-   FLUSH_VERTICES(ctx, _NEW_PROGRAM);
+   FLUSH_VERTICES(ctx, _NEW_PROGRAM, 0);
 
    if (!ctx->Extensions.ARB_vertex_program
        && !ctx->Extensions.ARB_fragment_program) {
@@ -377,12 +381,15 @@ set_program_string(struct gl_program *prog, GLenum target, GLenum format, GLsize
 
    gl_shader_stage stage = _mesa_program_enum_to_shader_stage(target);
 
+   uint8_t sha1[SHA1_DIGEST_LENGTH];
+   _mesa_sha1_compute(string, len, sha1);
+
    /* Dump original shader source to MESA_SHADER_DUMP_PATH and replace
     * if corresponding entry found from MESA_SHADER_READ_PATH.
     */
-   _mesa_dump_shader_source(stage, string);
+   _mesa_dump_shader_source(stage, string, sha1);
 
-   replacement = _mesa_read_shader_source(stage, string);
+   replacement = _mesa_read_shader_source(stage, string, sha1);
    if (replacement)
       string = replacement;
 #endif /* ENABLE_SHADER_CACHE */
@@ -403,7 +410,7 @@ set_program_string(struct gl_program *prog, GLenum target, GLenum format, GLsize
 
    if (!failed) {
       /* finally, give the program to the driver for translation/checking */
-      if (!ctx->Driver.ProgramStringNotify(ctx, target, prog)) {
+      if (!st_program_string_notify(ctx, target, prog)) {
          failed = true;
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "glProgramStringARB(rejected by driver");
@@ -411,6 +418,7 @@ set_program_string(struct gl_program *prog, GLenum target, GLenum format, GLsize
    }
 
    _mesa_update_vertex_processing_mode(ctx);
+   _mesa_update_valid_to_render_state(ctx);
 
    if (ctx->_Shader->Flags & GLSL_DUMP) {
       const char *shader_type =
@@ -957,10 +965,6 @@ get_program_iv(struct gl_program *prog, GLenum target, GLenum pname,
          if (prog->Id == 0) {
             /* default/null program */
             *params = GL_FALSE;
-         }
-	 else if (ctx->Driver.IsProgramNative) {
-            /* ask the driver */
-	    *params = ctx->Driver.IsProgramNative( ctx, target, prog );
          }
 	 else {
             /* probably running in software */
